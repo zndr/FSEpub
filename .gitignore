@@ -1,0 +1,8 @@
+settings.env
+*.env
+downloads/
+logs/
+browser_data/
+__pycache__/
+*.pyc
+.venv/
