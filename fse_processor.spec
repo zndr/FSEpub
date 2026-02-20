@@ -25,7 +25,6 @@ a = Analysis(
         "playwright._impl._driver",
         "playwright._impl._transport",
         "dotenv",
-        "imaplib",
         "email",
         "email.header",
         "email.utils",
