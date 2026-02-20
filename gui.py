@@ -10,12 +10,13 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from app_paths import paths
 from config import Config
 from email_client import EmailClient
 from logger_module import ProcessingLogger
 from main import run_processing
 
-ENV_FILE = "settings.env"
+ENV_FILE = str(paths.settings_file)
 
 # Ordered list of settings: (env_key, label, default, kind)
 # kind: "text", "password", "dir", "exe", "bool", "int", "pdf_reader"
@@ -24,7 +25,8 @@ SETTINGS_SPEC = [
     ("EMAIL_PASS", "Email password", "", "password"),
     ("IMAP_HOST", "IMAP Host", "mail-crs-lombardia.fastweb360.it", "text"),
     ("IMAP_PORT", "IMAP Port", "993", "int"),
-    ("DOWNLOAD_DIR", "Directory download", "./downloads", "dir"),
+    ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
+    ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
     ("PDF_READER", "Lettore PDF", "default", "pdf_reader"),
     ("HEADLESS", "Headless browser", "false", "bool"),
     ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "60", "int"),
@@ -110,6 +112,75 @@ def _detect_pdf_readers() -> list[tuple[str, str]]:
         [(raw_paths[k], v) for k, v in readers.items()],
         key=lambda item: item[1].lower(),
     )
+
+
+def _detect_browsers() -> list[tuple[str, str]]:
+    """Detect browsers installed on Windows.
+
+    Returns a list of (channel_or_path, display_name) tuples.
+    Known channels are returned as channel names; unknown browsers as exe paths.
+    """
+    KNOWN_BROWSERS = {
+        "msedge.exe": ("msedge", "Microsoft Edge"),
+        "chrome.exe": ("chrome", "Google Chrome"),
+        "firefox.exe": ("firefox", "Mozilla Firefox"),
+        "brave.exe": (None, "Brave"),  # channel=None means use exe path
+    }
+
+    browsers: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for exe_name, (channel, display) in KNOWN_BROWSERS.items():
+        # Try App Paths registry
+        exe_path = None
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(
+                    hive,
+                    rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}",
+                ) as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    if val and Path(val).exists():
+                        exe_path = str(Path(val))
+                        break
+            except OSError:
+                pass
+
+        # Fallback: well-known install paths
+        if not exe_path:
+            fallback_dirs = [
+                Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")),
+                Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")),
+                Path(os.environ.get("LOCALAPPDATA", "")),
+            ]
+            subpaths = {
+                "msedge.exe": [r"Microsoft\Edge\Application\msedge.exe"],
+                "chrome.exe": [r"Google\Chrome\Application\chrome.exe"],
+                "firefox.exe": [r"Mozilla Firefox\firefox.exe"],
+                "brave.exe": [r"BraveSoftware\Brave-Browser\Application\brave.exe"],
+            }
+            for base in fallback_dirs:
+                if not base or not base.exists():
+                    continue
+                for sub in subpaths.get(exe_name, []):
+                    candidate = base / sub
+                    if candidate.exists():
+                        exe_path = str(candidate)
+                        break
+                if exe_path:
+                    break
+
+        if exe_path and _norm(exe_path) not in seen:
+            seen.add(_norm(exe_path))
+            value = channel if channel else exe_path
+            browsers.append((value, display))
+
+    return browsers
+
+
+# Sentinel values for browser selection
+BROWSER_CHROMIUM = "chromium"
+BROWSER_CHROMIUM_LABEL = "Chromium integrato (Playwright)"
 
 
 def _enum_value_names(hive: int, subkey: str) -> list[str]:
@@ -362,6 +433,7 @@ def _load_env_values(path: str = ENV_FILE) -> dict[str, str]:
 def _save_env_values(values: dict[str, str], path: str = ENV_FILE) -> None:
     """Write key=value pairs to an env file, preserving comments."""
     env_path = Path(path)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     written_keys: set[str] = set()
 
@@ -411,6 +483,9 @@ class FSEApp(tk.Tk):
         self.geometry("720x700")
         self.resizable(True, True)
 
+        # Ensure data directories exist (for installed mode)
+        paths.ensure_dirs()
+
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
         self._fields: dict[str, tk.Variable] = {}
@@ -425,8 +500,9 @@ class FSEApp(tk.Tk):
         settings_frame = tk.LabelFrame(self, text="Impostazioni", padx=8, pady=8)
         settings_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
 
-        # Detect PDF readers once at startup
+        # Detect PDF readers and browsers once at startup
         self._pdf_readers = _detect_pdf_readers()  # list of (exe_path, display_name)
+        self._browsers = _detect_browsers()  # list of (channel_or_path, display_name)
 
         for row_idx, (key, label, default, kind) in enumerate(SETTINGS_SPEC):
             tk.Label(settings_frame, text=label, anchor="w").grid(
@@ -440,6 +516,8 @@ class FSEApp(tk.Tk):
                 self._fields[key] = var
             elif kind == "pdf_reader":
                 self._build_pdf_reader_row(settings_frame, row_idx, key, default)
+            elif kind == "browser_selector":
+                self._build_browser_selector_row(settings_frame, row_idx, key, default)
             else:
                 var = tk.StringVar(value=default)
                 show = "*" if kind == "password" else ""
@@ -504,6 +582,47 @@ class FSEApp(tk.Tk):
         self._pdf_combo.grid(row=0, column=0, sticky="ew")
         self._set_pdf_combo_from_value(default)
         self._pdf_combo.bind("<<ComboboxSelected>>", self._on_pdf_reader_changed)
+
+    def _build_browser_selector_row(self, parent: tk.Widget, row: int, key: str, default: str) -> None:
+        """Build the browser selection row with combobox."""
+        var = tk.StringVar(value=default)
+        self._fields[key] = var
+
+        # Build maps: display_label -> channel_or_path
+        self._browser_map: dict[str, str] = {}
+        self._browser_revmap: dict[str, str] = {}  # channel_or_path -> display_label
+
+        for channel_or_path, display_name in self._browsers:
+            self._browser_map[display_name] = channel_or_path
+            self._browser_revmap[channel_or_path] = display_name
+
+        # Always add Chromium integrato as last option
+        self._browser_map[BROWSER_CHROMIUM_LABEL] = BROWSER_CHROMIUM
+        self._browser_revmap[BROWSER_CHROMIUM] = BROWSER_CHROMIUM_LABEL
+
+        frame = tk.Frame(parent)
+        frame.grid(row=row, column=1, columnspan=2, sticky="ew", pady=2)
+        frame.columnconfigure(0, weight=1)
+
+        self._browser_combo = ttk.Combobox(
+            frame, values=list(self._browser_map.keys()), state="readonly", width=49,
+        )
+        self._browser_combo.grid(row=0, column=0, sticky="ew")
+
+        # Set initial value from stored channel
+        label = self._browser_revmap.get(default)
+        if label:
+            self._browser_combo.set(label)
+        elif self._browser_map:
+            self._browser_combo.set(list(self._browser_map.keys())[0])
+
+        self._browser_combo.bind("<<ComboboxSelected>>", self._on_browser_changed)
+
+    def _on_browser_changed(self, _event: tk.Event) -> None:
+        """Handle browser combobox selection change."""
+        selected_label = self._browser_combo.get()
+        channel = self._browser_map.get(selected_label, "msedge")
+        self._fields["BROWSER_CHANNEL"].set(channel)
 
     def _rebuild_pdf_combo_values(self, extra_exe: str | None = None) -> None:
         """Rebuild the combobox value maps from scratch (prevents duplicates)."""
@@ -689,6 +808,11 @@ class FSEApp(tk.Tk):
             elif kind == "pdf_reader":
                 var.set(val)
                 self._set_pdf_combo_from_value(val)
+            elif kind == "browser_selector":
+                var.set(val)
+                label = self._browser_revmap.get(val)
+                if label:
+                    self._browser_combo.set(label)
             else:
                 var.set(val)
 

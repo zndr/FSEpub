@@ -5,5 +5,9 @@ logs/
 browser_data/
 __pycache__/
 *.pyc
-settings.env
 .venv/
+
+# Build artifacts
+dist/
+build/
+installer_output/

@@ -37,15 +37,57 @@ class FSEBrowser:
 
     def start(self) -> None:
         self._playwright = sync_playwright().start()
-        self._context = self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self._config.browser_data_dir),
-            headless=self._config.headless,
-            accept_downloads=True,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        channel = self._config.browser_channel
+
+        if channel == "firefox":
+            self._context = self._playwright.firefox.launch_persistent_context(
+                user_data_dir=str(self._config.browser_data_dir),
+                headless=self._config.headless,
+                accept_downloads=True,
+            )
+        elif channel == "chromium":
+            # Bundled Chromium (no channel) - auto-download if needed
+            try:
+                self._context = self._playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(self._config.browser_data_dir),
+                    headless=self._config.headless,
+                    accept_downloads=True,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+            except Exception as e:
+                if "Executable doesn't exist" in str(e):
+                    self._logger.info("Chromium non trovato, avvio download automatico...")
+                    import subprocess, sys
+                    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+                    self._context = self._playwright.chromium.launch_persistent_context(
+                        user_data_dir=str(self._config.browser_data_dir),
+                        headless=self._config.headless,
+                        accept_downloads=True,
+                        args=["--disable-blink-features=AutomationControlled"],
+                    )
+                else:
+                    raise
+        elif channel in ("chrome", "msedge"):
+            self._context = self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(self._config.browser_data_dir),
+                headless=self._config.headless,
+                accept_downloads=True,
+                channel=channel,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+        else:
+            # Custom executable path (e.g. Brave)
+            self._context = self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(self._config.browser_data_dir),
+                headless=self._config.headless,
+                accept_downloads=True,
+                executable_path=channel,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
         self._page.set_default_timeout(self._config.page_timeout)
-        self._logger.info(f"Browser avviato (headless={self._config.headless})")
+        self._logger.info(f"Browser avviato (channel={channel}, headless={self._config.headless})")
 
     def _restart(self) -> None:
         """Restart browser after a crash, preserving the persistent session."""

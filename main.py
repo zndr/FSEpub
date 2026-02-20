@@ -3,6 +3,12 @@ import subprocess
 import sys
 import threading
 
+from app_paths import paths
+
+# Set Playwright browsers path for frozen/installed mode
+if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(paths.app_dir / "playwright_browsers")
+
 from config import Config
 from logger_module import ProcessingLogger
 from email_client import EmailClient
