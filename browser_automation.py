@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -156,7 +157,13 @@ class FSEBrowser:
         self._page.locator("span", has_text="Referti").click()
         self._page.wait_for_load_state("networkidle")
 
-    def process_patient(self, fse_link: str, patient_name: str, codice_fiscale: str) -> list[DocumentResult]:
+    def process_patient(self, fse_link: str, patient_name: str, codice_fiscale: str,
+                        stop_event: threading.Event | None = None) -> list[DocumentResult]:
+        # Check stop request
+        if stop_event is not None and stop_event.is_set():
+            self._logger.info(f"Processamento interrotto prima di {patient_name}")
+            return []
+
         # Restart browser if it crashed
         if not self._is_alive():
             self._restart()

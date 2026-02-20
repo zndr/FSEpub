@@ -23,6 +23,7 @@ class Config:
     headless: bool
     download_timeout: int  # milliseconds (for Playwright)
     page_timeout: int      # milliseconds (for Playwright)
+    pdf_reader: str
 
     @classmethod
     def load(cls, env_path: str = "settings.env") -> "Config":
@@ -48,6 +49,7 @@ class Config:
         headless = os.getenv("HEADLESS", "false").lower() == "true"
         download_timeout = int(os.getenv("DOWNLOAD_TIMEOUT", "60")) * 1000
         page_timeout = int(os.getenv("PAGE_TIMEOUT", "30")) * 1000
+        pdf_reader = os.getenv("PDF_READER", r"C:\Program Files\SumatraPDF\SumatraPDF.exe")
 
         config = cls(
             email_user=email_user,
@@ -61,6 +63,7 @@ class Config:
             headless=headless,
             download_timeout=download_timeout,
             page_timeout=page_timeout,
+            pdf_reader=pdf_reader,
         )
         config._create_directories()
         return config

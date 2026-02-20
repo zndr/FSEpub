@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import threading
 
 from config import Config
 from logger_module import ProcessingLogger
@@ -8,15 +9,12 @@ from browser_automation import FSEBrowser
 from file_manager import FileManager
 
 
-def main() -> None:
-    # Load configuration
-    try:
-        config = Config.load()
-    except (FileNotFoundError, ValueError) as e:
-        print(f"[ERRORE] Configurazione: {e}")
-        sys.exit(1)
+def run_processing(config: Config, logger: ProcessingLogger, stop_event: threading.Event | None = None) -> None:
+    """Core processing logic, reusable from CLI and GUI."""
 
-    logger = ProcessingLogger(config.log_dir)
+    def stopped() -> bool:
+        return stop_event is not None and stop_event.is_set()
+
     logger.info("=== Avvio processamento FSE ===")
 
     # Connect to IMAP
@@ -25,7 +23,12 @@ def main() -> None:
         email_client.connect()
     except Exception as e:
         logger.error(f"Connessione IMAP fallita: {e}")
-        sys.exit(1)
+        return
+
+    if stopped():
+        email_client.disconnect()
+        logger.info("Processamento interrotto dall'utente")
+        return
 
     # Fetch unread emails
     try:
@@ -33,13 +36,18 @@ def main() -> None:
     except Exception as e:
         logger.error(f"Errore fetch email: {e}")
         email_client.disconnect()
-        sys.exit(1)
+        return
 
     logger.emails_found = len(emails)
     if not emails:
         logger.info("Nessuna email da processare")
         email_client.disconnect()
         logger.save_summary()
+        return
+
+    if stopped():
+        email_client.disconnect()
+        logger.info("Processamento interrotto dall'utente")
         return
 
     # Start browser and perform manual login
@@ -51,19 +59,26 @@ def main() -> None:
     except Exception as e:
         logger.error(f"Avvio browser fallito: {e}")
         email_client.disconnect()
-        sys.exit(1)
+        return
 
     # Process each email
     session_pdfs: list[str] = []
     try:
         for email_data in emails:
+            if stopped():
+                logger.info("Processamento interrotto dall'utente")
+                break
+
             logger.info(
                 f"--- Processo email: {email_data.patient_name} "
                 f"(CF: {email_data.codice_fiscale}) ---"
             )
 
             # Navigate FSE and get documents
-            doc_results = browser.process_patient(email_data.fse_link, email_data.patient_name, email_data.codice_fiscale)
+            doc_results = browser.process_patient(
+                email_data.fse_link, email_data.patient_name,
+                email_data.codice_fiscale, stop_event=stop_event,
+            )
 
             all_ok = True
             for result in doc_results:
@@ -110,12 +125,23 @@ def main() -> None:
     file_manager.save_mappings()
     logger.save_summary()
 
-    # Open only session PDFs in SumatraPDF
-    if session_pdfs:
-        logger.info(f"Apertura di {len(session_pdfs)} PDF in SumatraPDF...")
-        subprocess.Popen([r"C:\Program Files\SumatraPDF\SumatraPDF.exe"] + session_pdfs)
+    # Open only session PDFs in PDF reader
+    if session_pdfs and not stopped():
+        logger.info(f"Apertura di {len(session_pdfs)} PDF in {config.pdf_reader}...")
+        subprocess.Popen([config.pdf_reader] + session_pdfs)
 
     logger.info("=== Processamento completato ===")
+
+
+def main() -> None:
+    try:
+        config = Config.load()
+    except (FileNotFoundError, ValueError) as e:
+        print(f"[ERRORE] Configurazione: {e}")
+        sys.exit(1)
+
+    logger = ProcessingLogger(config.log_dir)
+    run_processing(config, logger)
 
 
 if __name__ == "__main__":
