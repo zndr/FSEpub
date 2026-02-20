@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import threading
@@ -127,8 +128,13 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
 
     # Open only session PDFs in PDF reader
     if session_pdfs and not stopped():
-        logger.info(f"Apertura di {len(session_pdfs)} PDF in {config.pdf_reader}...")
-        subprocess.Popen([config.pdf_reader] + session_pdfs)
+        if config.pdf_reader == "default" or not config.pdf_reader:
+            logger.info(f"Apertura di {len(session_pdfs)} PDF con il lettore predefinito...")
+            for pdf in session_pdfs:
+                os.startfile(pdf)
+        else:
+            logger.info(f"Apertura di {len(session_pdfs)} PDF in {config.pdf_reader}...")
+            subprocess.Popen([config.pdf_reader] + session_pdfs)
 
     logger.info("=== Processamento completato ===")
 

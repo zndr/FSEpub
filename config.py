@@ -49,7 +49,7 @@ class Config:
         headless = os.getenv("HEADLESS", "false").lower() == "true"
         download_timeout = int(os.getenv("DOWNLOAD_TIMEOUT", "60")) * 1000
         page_timeout = int(os.getenv("PAGE_TIMEOUT", "30")) * 1000
-        pdf_reader = os.getenv("PDF_READER", r"C:\Program Files\SumatraPDF\SumatraPDF.exe")
+        pdf_reader = os.getenv("PDF_READER", "default")
 
         config = cls(
             email_user=email_user,
