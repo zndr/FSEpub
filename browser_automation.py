@@ -1,8 +1,14 @@
+import os
+import re
+import socket
+import subprocess
 import threading
+import time
+import winreg
 from dataclasses import dataclass
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright, BrowserContext, Page, Playwright
+from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, Playwright
 
 from config import Config
 from logger_module import ProcessingLogger
@@ -11,12 +17,233 @@ FSE_BASE_URL = "https://operatorisiss.servizirl.it/opefseie/"
 
 TIPOLOGIA_VALIDE_ESATTE = {"LETTERA DI DIMISSIONE", "VERBALE PRONTO SOCCORSO"}
 
+# ProgId → (channel for Playwright, process name for tasklist)
+PROGID_TO_BROWSER: dict[str, tuple[str, str]] = {
+    "MSEdgeHTM":      ("msedge",  "msedge.exe"),
+    "ChromeHTML":     ("chrome",  "chrome.exe"),
+    "BraveHTML":      (None,      "brave.exe"),    # channel=None → use exe path
+    "FirefoxURL-308046B0AF4A39CB": ("firefox", "firefox.exe"),
+    "FirefoxHTML-308046B0AF4A39CB": ("firefox", "firefox.exe"),
+}
+
+CDP_CONNECT_TIMEOUT = 15  # seconds to wait for CDP port to become available
+CDP_CONNECT_POLL = 0.5    # poll interval in seconds
+
 
 def _is_tipologia_valida(tipologia: str) -> bool:
     upper = tipologia.strip().upper()
     if upper.startswith("REFERTO"):
         return True
     return upper in TIPOLOGIA_VALIDE_ESATTE
+
+
+def detect_default_browser() -> dict | None:
+    """Detect the system default browser from Windows registry.
+
+    Returns a dict with keys: progid, channel, process_name, exe_path
+    or None if detection fails.
+    """
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+        ) as key:
+            progid, _ = winreg.QueryValueEx(key, "ProgId")
+    except OSError:
+        return None
+
+    if not progid:
+        return None
+
+    # Try known ProgId mapping first
+    for known_progid, (channel, process_name) in PROGID_TO_BROWSER.items():
+        if progid.startswith(known_progid.split("-")[0]) or progid == known_progid:
+            exe_path = _resolve_progid_exe_path(progid)
+            return {
+                "progid": progid,
+                "channel": channel,
+                "process_name": process_name,
+                "exe_path": exe_path,
+            }
+
+    # Unknown ProgId — try to resolve the exe anyway
+    exe_path = _resolve_progid_exe_path(progid)
+    if exe_path:
+        process_name = Path(exe_path).name.lower()
+        return {
+            "progid": progid,
+            "channel": None,
+            "process_name": process_name,
+            "exe_path": exe_path,
+        }
+
+    return None
+
+
+def _resolve_progid_exe_path(progid: str) -> str | None:
+    """Resolve a ProgId to an executable path via the registry."""
+    search_paths = [
+        (winreg.HKEY_CURRENT_USER, rf"SOFTWARE\Classes\{progid}\shell\open\command"),
+        (winreg.HKEY_CLASSES_ROOT, rf"{progid}\shell\open\command"),
+        (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Classes\{progid}\shell\open\command"),
+    ]
+    for hive, subkey in search_paths:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                cmd, _ = winreg.QueryValueEx(key, "")
+                if isinstance(cmd, str):
+                    exe = _exe_from_command(cmd)
+                    if exe and Path(exe).exists():
+                        return str(Path(exe))
+        except OSError:
+            pass
+    return None
+
+
+def _exe_from_command(cmd: str) -> str | None:
+    """Extract the exe path from a shell open command string (without checking existence)."""
+    cmd = cmd.strip()
+    if cmd.startswith('"'):
+        end = cmd.find('"', 1)
+        if end > 0:
+            return cmd[1:end]
+    else:
+        # Take everything up to the first space or argument
+        parts = cmd.split()
+        if parts:
+            return parts[0]
+    return None
+
+
+def _read_original_open_command(progid: str) -> str | None:
+    """Read the original shell\\open\\command from HKCR (machine-level default)."""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CLASSES_ROOT,
+            rf"{progid}\shell\open\command",
+        ) as key:
+            cmd, _ = winreg.QueryValueEx(key, "")
+            if isinstance(cmd, str):
+                return cmd
+    except OSError:
+        pass
+    return None
+
+
+def get_cdp_registry_status(progid: str, port: int) -> bool:
+    """Check if the CDP --remote-debugging-port flag is present in the HKCU override."""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            rf"SOFTWARE\Classes\{progid}\shell\open\command",
+        ) as key:
+            cmd, _ = winreg.QueryValueEx(key, "")
+            if isinstance(cmd, str) and f"--remote-debugging-port={port}" in cmd:
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def enable_cdp_in_registry(progid: str, port: int) -> None:
+    """Add --remote-debugging-port to the browser open command in HKCU.
+
+    Reads the original command from HKCR, appends the CDP flag,
+    and writes the result to HKCU\\SOFTWARE\\Classes\\{progid}\\shell\\open\\command.
+    """
+    # Read original command from HKCR
+    original_cmd = _read_original_open_command(progid)
+    if not original_cmd:
+        raise RuntimeError(
+            f"Impossibile leggere il comando originale per {progid} dal registro."
+        )
+
+    # Check if already has the flag
+    cdp_flag = f"--remote-debugging-port={port}"
+    if cdp_flag in original_cmd:
+        return  # Already present
+
+    # Remove any existing --remote-debugging-port with different port
+    cleaned = re.sub(r"--remote-debugging-port=\d+\s*", "", original_cmd).strip()
+
+    # Insert the flag after the exe path (before %1 or other args)
+    # Pattern: "exe_path" args... → "exe_path" --remote-debugging-port=PORT args...
+    if cleaned.startswith('"'):
+        end_quote = cleaned.find('"', 1)
+        if end_quote > 0:
+            exe_part = cleaned[:end_quote + 1]
+            rest = cleaned[end_quote + 1:].strip()
+            new_cmd = f'{exe_part} {cdp_flag} {rest}'.strip()
+        else:
+            new_cmd = f'{cleaned} {cdp_flag}'
+    else:
+        parts = cleaned.split(None, 1)
+        exe_part = parts[0]
+        rest = parts[1] if len(parts) > 1 else ""
+        new_cmd = f'{exe_part} {cdp_flag} {rest}'.strip()
+
+    # Write to HKCU
+    key_path = rf"SOFTWARE\Classes\{progid}\shell\open\command"
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE) as key:
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, new_cmd)
+
+
+def disable_cdp_in_registry(progid: str) -> None:
+    """Remove the HKCU override, restoring the original HKCR command."""
+    try:
+        # Delete the override key tree under HKCU
+        _delete_registry_tree(
+            winreg.HKEY_CURRENT_USER,
+            rf"SOFTWARE\Classes\{progid}\shell\open\command",
+        )
+        # Also try to clean up parent keys if empty
+        for suffix in [r"shell\open", r"shell", ""]:
+            parent = rf"SOFTWARE\Classes\{progid}\{suffix}".rstrip("\\")
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, parent)
+            except OSError:
+                break  # Key not empty or doesn't exist
+    except OSError:
+        pass  # Key doesn't exist, nothing to do
+
+
+def _delete_registry_tree(hive: int, subkey: str) -> None:
+    """Delete a registry key and all its values (non-recursive, leaf key only)."""
+    try:
+        winreg.DeleteKey(hive, subkey)
+    except OSError:
+        pass
+
+
+def _is_cdp_port_available(port: int) -> bool:
+    """Check if a CDP endpoint is responding on localhost:port."""
+    try:
+        with socket.create_connection(("localhost", port), timeout=1):
+            return True
+    except (ConnectionRefusedError, TimeoutError, OSError):
+        return False
+
+
+def _is_browser_process_running(process_name: str) -> bool:
+    """Check if a browser process is currently running via tasklist."""
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/NH"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return process_name.lower() in result.stdout.lower()
+    except Exception:
+        return False
+
+
+def _launch_browser_with_cdp(exe_path: str, port: int) -> None:
+    """Launch a browser with --remote-debugging-port as a detached process."""
+    subprocess.Popen(
+        [exe_path, f"--remote-debugging-port={port}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
 
 
 @dataclass
@@ -32,11 +259,20 @@ class FSEBrowser:
         self._config = config
         self._logger = logger
         self._playwright: Playwright | None = None
+        self._browser: Browser | None = None  # Only used in CDP mode
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._attached = False  # True when connected to existing browser via CDP
 
     def start(self) -> None:
         self._playwright = sync_playwright().start()
+
+        # --- CDP mode: connect to an already-running browser ---
+        if self._config.use_existing_browser:
+            self._start_cdp()
+            return
+
+        # --- Standard mode: launch a new browser instance ---
         channel = self._config.browser_channel
 
         if channel == "firefox":
@@ -89,6 +325,123 @@ class FSEBrowser:
         self._page.set_default_timeout(self._config.page_timeout)
         self._logger.info(f"Browser avviato (channel={channel}, headless={self._config.headless})")
 
+    def _start_cdp(self) -> None:
+        """Smart CDP connection: attach to existing browser, or launch one if needed."""
+        port = self._config.cdp_port
+        endpoint = f"http://localhost:{port}"
+        channel = self._config.browser_channel
+
+        # 1. CDP port already available → connect directly
+        if _is_cdp_port_available(port):
+            self._logger.info(f"Porta CDP {port} disponibile, connessione diretta...")
+            self._connect_cdp(endpoint, port)
+            return
+
+        # 2. Detect browser info for further logic
+        browser_info = detect_default_browser()
+        process_name = None
+        exe_path = None
+
+        if browser_info:
+            process_name = browser_info["process_name"]
+            exe_path = browser_info["exe_path"]
+
+        # Also try to resolve from configured channel
+        if not exe_path:
+            exe_path = self._resolve_exe_from_channel(channel)
+        if not process_name and channel in ("msedge", "chrome"):
+            process_name = "msedge.exe" if channel == "msedge" else "chrome.exe"
+
+        # 3. Browser running without CDP → error with instructions
+        if process_name and _is_browser_process_running(process_name):
+            browser_display = browser_info["progid"] if browser_info else channel
+            raise ConnectionError(
+                f"Il browser ({browser_display}) e' in esecuzione ma la porta CDP {port} non risponde.\n"
+                f"Opzioni:\n"
+                f"  1. Chiudi tutte le finestre del browser e riprova (l'app lo lancera' con CDP)\n"
+                f"  2. Abilita 'CDP nel registro' nelle impostazioni, poi riavvia il browser\n"
+                f"  3. Avvia manualmente il browser con: --remote-debugging-port={port}"
+            )
+
+        # 4. Browser not running → launch it with CDP
+        if exe_path and Path(exe_path).exists():
+            self._logger.info(f"Browser non in esecuzione, lancio con CDP: {exe_path}")
+            _launch_browser_with_cdp(exe_path, port)
+
+            # Wait for CDP port to become available
+            elapsed = 0.0
+            while elapsed < CDP_CONNECT_TIMEOUT:
+                if _is_cdp_port_available(port):
+                    self._logger.info(f"Porta CDP {port} disponibile dopo {elapsed:.1f}s")
+                    self._connect_cdp(endpoint, port)
+                    return
+                time.sleep(CDP_CONNECT_POLL)
+                elapsed += CDP_CONNECT_POLL
+
+            raise ConnectionError(
+                f"Browser lanciato ma la porta CDP {port} non ha risposto "
+                f"entro {CDP_CONNECT_TIMEOUT} secondi."
+            )
+
+        # 5. Cannot determine browser to launch
+        raise ConnectionError(
+            f"Impossibile connettersi via CDP alla porta {port}.\n"
+            f"Nessun browser rilevato. Avvia manualmente il browser con:\n"
+            f"  --remote-debugging-port={port}"
+        )
+
+    def _connect_cdp(self, endpoint: str, port: int) -> None:
+        """Connect to a browser via CDP and set up context/page."""
+        try:
+            self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+        except Exception as e:
+            raise ConnectionError(
+                f"Impossibile connettersi al browser su {endpoint}. "
+                f"Assicurati che il browser sia avviato con --remote-debugging-port={port}\n"
+                f"Errore: {e}"
+            )
+
+        # Use the default context (carries existing cookies/session)
+        contexts = self._browser.contexts
+        if not contexts:
+            raise ConnectionError(
+                "Browser connesso via CDP ma nessun contesto trovato. "
+                "Apri almeno una finestra nel browser."
+            )
+        self._context = contexts[0]
+        self._attached = True
+
+        # Open a new tab for our automation
+        self._page = self._context.new_page()
+        self._page.set_default_timeout(self._config.page_timeout)
+        self._logger.info(
+            f"Connesso a browser esistente (CDP porta {port}, "
+            f"{len(self._context.pages)} tab totali)"
+        )
+
+    def _resolve_exe_from_channel(self, channel: str) -> str | None:
+        """Resolve a Playwright channel name to an exe path via App Paths registry."""
+        channel_to_exe = {
+            "msedge": "msedge.exe",
+            "chrome": "chrome.exe",
+        }
+        exe_name = channel_to_exe.get(channel)
+        if not exe_name:
+            return None
+
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(
+                    hive,
+                    rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}",
+                ) as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    if val and Path(val).exists():
+                        return str(Path(val))
+            except OSError:
+                pass
+        return None
+
     def _restart(self) -> None:
         """Restart browser after a crash, preserving the persistent session."""
         self._logger.info("Riavvio browser...")
@@ -104,19 +457,35 @@ class FSEBrowser:
             return False
 
     def stop(self) -> None:
-        if self._context:
-            try:
-                self._context.close()
-            except Exception:
-                pass
+        if self._attached:
+            # CDP mode: close only our tab, leave the browser running
+            if self._page:
+                try:
+                    self._page.close()
+                except Exception:
+                    pass
+            if self._browser:
+                try:
+                    self._browser.close()  # Disconnects CDP, does NOT close the browser
+                except Exception:
+                    pass
+        else:
+            # Standard mode: close context (closes the browser we launched)
+            if self._context:
+                try:
+                    self._context.close()
+                except Exception:
+                    pass
         if self._playwright:
             try:
                 self._playwright.stop()
             except Exception:
                 pass
+        self._browser = None
         self._context = None
         self._playwright = None
         self._page = None
+        self._attached = False
         self._logger.info("Browser chiuso")
 
     def wait_for_manual_login(self) -> None:

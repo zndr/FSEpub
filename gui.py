@@ -12,6 +12,12 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from app_paths import paths
+from browser_automation import (
+    detect_default_browser,
+    get_cdp_registry_status,
+    enable_cdp_in_registry,
+    disable_cdp_in_registry,
+)
 from config import Config
 from email_client import EmailClient
 from logger_module import ProcessingLogger
@@ -29,6 +35,8 @@ SETTINGS_SPEC = [
     ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
     ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
     ("PDF_READER", "Lettore PDF", "default", "pdf_reader"),
+    ("USE_EXISTING_BROWSER", "Usa browser esistente (CDP)", "false", "bool"),
+    ("CDP_PORT", "Porta CDP", "9222", "int"),
     ("HEADLESS", "Headless browser", "false", "bool"),
     ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "60", "int"),
     ("PAGE_TIMEOUT", "Page timeout (sec)", "30", "int"),
@@ -544,6 +552,60 @@ class FSEApp(tk.Tk):
             row=len(SETTINGS_SPEC), column=0, columnspan=3, pady=(8, 0),
         )
 
+        # SISS Integration frame
+        siss_frame = tk.LabelFrame(self, text="Integrazione SISS", padx=8, pady=8)
+        siss_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # Detect default browser
+        self._default_browser_info = detect_default_browser()
+        default_name = "Non rilevato"
+        if self._default_browser_info:
+            progid = self._default_browser_info["progid"]
+            # Build a friendly name from the progid
+            friendly_names = {
+                "MSEdgeHTM": "Microsoft Edge",
+                "ChromeHTML": "Google Chrome",
+                "BraveHTML": "Brave",
+                "FirefoxURL": "Mozilla Firefox",
+                "FirefoxHTML": "Mozilla Firefox",
+            }
+            default_name = next(
+                (v for k, v in friendly_names.items() if progid.startswith(k)),
+                progid,
+            )
+
+        tk.Label(siss_frame, text=f"Browser predefinito: {default_name}").pack(anchor="w")
+
+        # Warning label for browser mismatch
+        self._mismatch_label = tk.Label(
+            siss_frame, text="", fg="orange", wraplength=600, anchor="w", justify=tk.LEFT,
+        )
+        self._mismatch_label.pack(anchor="w", fill=tk.X)
+
+        # CDP registry checkbox
+        self._cdp_registry_var = tk.BooleanVar(value=False)
+        is_firefox = (
+            self._default_browser_info
+            and self._default_browser_info.get("channel") == "firefox"
+        )
+        self._cdp_registry_cb = tk.Checkbutton(
+            siss_frame,
+            text="Abilita CDP nel registro (per Millewin/Medico2000)",
+            variable=self._cdp_registry_var,
+            command=self._on_cdp_registry_toggled,
+            state=tk.DISABLED if is_firefox or not self._default_browser_info else tk.NORMAL,
+        )
+        self._cdp_registry_cb.pack(anchor="w")
+        if is_firefox:
+            tk.Label(
+                siss_frame, text="(Firefox non supporta CDP)", fg="gray",
+            ).pack(anchor="w")
+
+        # Sync checkbox state from registry
+        self._sync_cdp_registry_checkbox()
+        # Show mismatch warning if needed
+        self._update_browser_mismatch_warning()
+
         # Controls frame
         ctrl_frame = tk.LabelFrame(self, text="Controlli", padx=8, pady=8)
         ctrl_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -625,6 +687,57 @@ class FSEApp(tk.Tk):
         selected_label = self._browser_combo.get()
         channel = self._browser_map.get(selected_label, "msedge")
         self._fields["BROWSER_CHANNEL"].set(channel)
+        self._update_browser_mismatch_warning()
+
+    def _update_browser_mismatch_warning(self) -> None:
+        """Show/hide a warning if the selected browser differs from the system default."""
+        if not self._default_browser_info:
+            self._mismatch_label.configure(text="")
+            return
+
+        default_channel = self._default_browser_info.get("channel")
+        selected_channel = self._fields["BROWSER_CHANNEL"].get()
+
+        # Normalize: both None or both equal means match
+        if default_channel == selected_channel:
+            self._mismatch_label.configure(text="")
+        else:
+            self._mismatch_label.configure(
+                text=(
+                    "Attenzione: il browser selezionato e' diverso dal browser "
+                    "predefinito di sistema. Per usare la sessione SISS di "
+                    "Millewin/Medico2000, seleziona lo stesso browser."
+                ),
+            )
+
+    def _sync_cdp_registry_checkbox(self) -> None:
+        """Read the current CDP registry status and update the checkbox."""
+        if not self._default_browser_info:
+            self._cdp_registry_var.set(False)
+            return
+        progid = self._default_browser_info["progid"]
+        port = int(self._fields.get("CDP_PORT", tk.StringVar(value="9222")).get() or "9222")
+        enabled = get_cdp_registry_status(progid, port)
+        self._cdp_registry_var.set(enabled)
+
+    def _on_cdp_registry_toggled(self) -> None:
+        """Handle CDP registry checkbox toggle."""
+        if not self._default_browser_info:
+            return
+        progid = self._default_browser_info["progid"]
+        port = int(self._fields.get("CDP_PORT", tk.StringVar(value="9222")).get() or "9222")
+
+        try:
+            if self._cdp_registry_var.get():
+                enable_cdp_in_registry(progid, port)
+                self._log(f"CDP abilitato nel registro per {progid} (porta {port})")
+            else:
+                disable_cdp_in_registry(progid)
+                self._log(f"CDP disabilitato nel registro per {progid}")
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile modificare il registro:\n{e}")
+            # Revert checkbox
+            self._sync_cdp_registry_checkbox()
 
     def _rebuild_pdf_combo_values(self, extra_exe: str | None = None) -> None:
         """Rebuild the combobox value maps from scratch (prevents duplicates)."""
