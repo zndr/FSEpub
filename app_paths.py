@@ -25,6 +25,22 @@ def is_installed_mode() -> bool:
     return "program files" in app_str
 
 
+def _get_documents_dir() -> Path:
+    """Get the real Documents folder using the Windows Shell API."""
+    try:
+        import ctypes
+        import ctypes.wintypes
+        buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+        # CSIDL_PERSONAL = 0x0005 = Documents folder
+        result = ctypes.windll.shell32.SHGetFolderPathW(None, 0x0005, None, 0, buf)
+        if result == 0 and buf.value:
+            return Path(buf.value)
+    except Exception:
+        pass
+    # Fallback
+    return Path(os.environ.get("USERPROFILE", Path.home())) / "Documents"
+
+
 class AppPaths:
     """Resolved application paths based on running mode."""
 
@@ -38,9 +54,8 @@ class AppPaths:
             # Installed mode: data goes to %APPDATA%/FSE Processor
             appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
             self._data_dir = appdata / "FSE Processor"
-            # Downloads go to user's Documents
-            docs = Path(os.environ.get("USERPROFILE", Path.home())) / "Documents"
-            self.default_download_dir = docs / "FSE Downloads"
+            # Downloads go to user's Documents (resolved via Shell API)
+            self.default_download_dir = _get_documents_dir() / "FSE Downloads"
         else:
             # Portable mode: everything relative to app directory
             self._data_dir = self.app_dir
@@ -52,8 +67,15 @@ class AppPaths:
 
     def ensure_dirs(self) -> None:
         """Create data directories if they don't exist."""
-        for d in (self._data_dir, self.log_dir, self.browser_data_dir, self.default_download_dir):
+        for d in (self._data_dir, self.log_dir, self.browser_data_dir):
             d.mkdir(parents=True, exist_ok=True)
+        # Download dir is separate — don't crash if Documents is inaccessible
+        try:
+            self.default_download_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Fall back to Downloads folder inside data dir
+            self.default_download_dir = self._data_dir / "downloads"
+            self.default_download_dir.mkdir(parents=True, exist_ok=True)
 
 
 # Singleton instance
