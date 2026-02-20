@@ -32,6 +32,7 @@ SETTINGS_SPEC = [
     ("HEADLESS", "Headless browser", "false", "bool"),
     ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "60", "int"),
     ("PAGE_TIMEOUT", "Page timeout (sec)", "30", "int"),
+    ("DELETE_AFTER_PROCESSING", "Elimina email dopo elaborazione", "false", "bool"),
 ]
 
 # Sentinel values for PDF reader selection

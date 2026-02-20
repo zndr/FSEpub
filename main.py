@@ -114,6 +114,8 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
             if all_ok:
                 try:
                     email_client.mark_as_read(email_data.uid)
+                    if config.delete_after_processing:
+                        email_client.delete_message(email_data.uid)
                     logger.emails_processed += 1
                 except Exception as e:
                     logger.error(f"Errore marcatura email UID {email_data.uid}: {e}")

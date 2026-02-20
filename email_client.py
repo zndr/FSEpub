@@ -54,6 +54,7 @@ class EmailClient:
         self._config = config
         self._logger = logger
         self._connection: poplib.POP3_SSL | poplib.POP3 | None = None
+        self._uid_to_msgnum: dict[str, int] = {}
 
     def connect(self) -> None:
         host = self._config.pop3_host
@@ -133,20 +134,8 @@ class EmailClient:
                 uid = parts[1]
                 server_msgs.append((msg_num, uid))
 
-        # Load or seed the processed UIDs tracking file
+        # Load processed UIDs tracking file
         processed = _load_processed_uids()
-        all_uids = {uid for _, uid in server_msgs}
-
-        if not _PROCESSED_UIDS_FILE.exists():
-            # First run after migration: seed all current UIDs as already processed.
-            # POP3 has no read/unread flags, so we mark everything on the server
-            # as "already seen". Only emails arriving AFTER this point will be detected.
-            _save_processed_uids(all_uids)
-            self._logger.info(
-                f"Primo avvio POP3: {len(all_uids)} email esistenti marcate come già processate. "
-                f"Da ora in poi verranno rilevate solo le nuove email."
-            )
-            return []
 
         # Filter out already-processed UIDs
         new_msgs = [(num, uid) for num, uid in server_msgs if uid not in processed]
@@ -158,10 +147,12 @@ class EmailClient:
         self._logger.info(f"Trovati {len(new_msgs)} messaggi non ancora processati, analisi in corso...")
 
         emails: list[EmailData] = []
+        self._uid_to_msgnum = {}
         for msg_num, uid in new_msgs:
             email_data = self._fetch_and_parse(msg_num, uid)
             if email_data:
                 emails.append(email_data)
+                self._uid_to_msgnum[uid] = msg_num
 
         self._logger.info(f"Trovate {len(emails)} email con referti FSE")
         return emails
@@ -172,6 +163,17 @@ class EmailClient:
         processed.add(uid)
         _save_processed_uids(processed)
         self._logger.debug(f"Email UID {uid} marcata come processata")
+
+    def delete_message(self, uid: str) -> None:
+        """Mark a message for deletion on the server (committed on QUIT/disconnect)."""
+        if not self._connection:
+            raise RuntimeError("Non connesso al server POP3")
+        msg_num = self._uid_to_msgnum.get(uid)
+        if msg_num is None:
+            self._logger.warning(f"Email UID {uid}: msg_num non trovato, impossibile eliminare")
+            return
+        self._connection.dele(msg_num)
+        self._logger.info(f"Email UID {uid} marcata per eliminazione dal server")
 
     def _fetch_and_parse(self, msg_num: int, uid: str) -> EmailData | None:
         try:

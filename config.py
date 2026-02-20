@@ -27,13 +27,14 @@ class Config:
     page_timeout: int      # milliseconds (for Playwright)
     pdf_reader: str
     browser_channel: str
+    delete_after_processing: bool
 
     @classmethod
     def load(cls, env_path: str | None = None) -> "Config":
         env_file = Path(env_path) if env_path else paths.settings_file
         if not env_file.exists():
             raise FileNotFoundError(f"File di configurazione non trovato: {env_file}")
-        load_dotenv(env_file)
+        load_dotenv(env_file, override=True)
 
         email_user = os.getenv("EMAIL_USER", "")
         email_pass = os.getenv("EMAIL_PASS", "")
@@ -54,6 +55,7 @@ class Config:
         page_timeout = int(os.getenv("PAGE_TIMEOUT", "30")) * 1000
         pdf_reader = os.getenv("PDF_READER", "default")
         browser_channel = os.getenv("BROWSER_CHANNEL", "msedge")
+        delete_after_processing = os.getenv("DELETE_AFTER_PROCESSING", "false").lower() == "true"
 
         config = cls(
             email_user=email_user,
@@ -69,6 +71,7 @@ class Config:
             page_timeout=page_timeout,
             pdf_reader=pdf_reader,
             browser_channel=browser_channel,
+            delete_after_processing=delete_after_processing,
         )
         config._create_directories()
         return config
