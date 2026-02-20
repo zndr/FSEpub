@@ -16,10 +16,21 @@ class FileManager:
         self._mappings: list[dict] = []
 
     @staticmethod
+    def _tipologia_tag(tipologia: str) -> str:
+        upper = tipologia.strip().upper()
+        if "LABORATORIO" in upper:
+            return "LAB"
+        if "PRONTO SOCCORSO" in upper:
+            return "PS"
+        if upper.startswith("REFERTO"):
+            return "SPEC"
+        return "DOC"
+
+    @staticmethod
     def build_filename(patient_name: str, codice_fiscale: str, disciplina: str) -> str:
         safe_name = re.sub(r'[<>:"/\\|?*]', "", patient_name).replace(" ", "_")
-        safe_disciplina = re.sub(r'[<>:"/\\|?*]', "", disciplina).replace(" ", "_")
-        return f"{safe_name}_{codice_fiscale}_{safe_disciplina}.pdf"
+        tag = FileManager._tipologia_tag(disciplina)
+        return f"{codice_fiscale}_{safe_name}_{tag}.pdf"
 
     def rename_download(
         self,
@@ -74,12 +85,17 @@ class FileManager:
     def _resolve_collision(path: Path) -> Path:
         if not path.exists():
             return path
-        stem = path.stem
-        suffix = path.suffix
+        # Insert counter before the tag (last _ segment before .pdf)
+        # e.g. CF_NOME_LAB.pdf -> CF_NOME_1_LAB.pdf
+        stem = path.stem          # CF_NOME_LAB
+        suffix = path.suffix      # .pdf
         parent = path.parent
+        parts = stem.rsplit("_", 1)  # ["CF_NOME", "LAB"]
+        base = parts[0]
+        tag = parts[1] if len(parts) > 1 else ""
         counter = 1
         while True:
-            candidate = parent / f"{stem}_{counter}{suffix}"
+            candidate = parent / f"{base}_{counter}_{tag}{suffix}"
             if not candidate.exists():
                 return candidate
             counter += 1

@@ -1,3 +1,4 @@
+import subprocess
 import sys
 
 from config import Config
@@ -41,17 +42,19 @@ def main() -> None:
         logger.save_summary()
         return
 
-    # Start browser
+    # Start browser and perform manual login
     file_manager = FileManager(config, logger)
     browser = FSEBrowser(config, logger)
     try:
         browser.start()
+        browser.wait_for_manual_login()
     except Exception as e:
         logger.error(f"Avvio browser fallito: {e}")
         email_client.disconnect()
         sys.exit(1)
 
     # Process each email
+    session_pdfs: list[str] = []
     try:
         for email_data in emails:
             logger.info(
@@ -60,7 +63,7 @@ def main() -> None:
             )
 
             # Navigate FSE and get documents
-            doc_results = browser.process_patient(email_data.fse_link, email_data.patient_name)
+            doc_results = browser.process_patient(email_data.fse_link, email_data.patient_name, email_data.codice_fiscale)
 
             all_ok = True
             for result in doc_results:
@@ -83,6 +86,7 @@ def main() -> None:
                 )
                 if renamed:
                     logger.documents_renamed += 1
+                    session_pdfs.append(str(renamed))
 
             # Mark email as read only if all documents processed successfully
             if all_ok:
@@ -105,6 +109,12 @@ def main() -> None:
     # Save mapping and summary
     file_manager.save_mappings()
     logger.save_summary()
+
+    # Open only session PDFs in SumatraPDF
+    if session_pdfs:
+        logger.info(f"Apertura di {len(session_pdfs)} PDF in SumatraPDF...")
+        subprocess.Popen([r"C:\Program Files\SumatraPDF\SumatraPDF.exe"] + session_pdfs)
+
     logger.info("=== Processamento completato ===")
 
 

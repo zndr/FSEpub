@@ -81,8 +81,23 @@ class EmailClient:
         self._connection.uid("store", uid, "+FLAGS", "\\Seen")
         self._logger.debug(f"Email UID {uid} marcata come letta")
 
+    def mark_all_matching_as_unread(self) -> int:
+        """Mark all matching SEEN emails as UNSEEN for re-processing."""
+        if not self._connection:
+            raise RuntimeError("Non connesso al server IMAP")
+        self._connection.select("INBOX")
+        search_criteria = '(SEEN FROM "Mail CRS Lombardia" SUBJECT "Nuovo Documento per")'
+        status, data = self._connection.uid("search", None, search_criteria)
+        if status != "OK" or not data[0]:
+            return 0
+        uids = data[0].split()
+        for uid_bytes in uids:
+            uid = uid_bytes.decode()
+            self._connection.uid("store", uid, "-FLAGS", "\\Seen")
+        return len(uids)
+
     def _fetch_and_parse(self, uid: str) -> EmailData | None:
-        status, data = self._connection.uid("fetch", uid, "(RFC822)")
+        status, data = self._connection.uid("fetch", uid, "(BODY.PEEK[])")
         if status != "OK" or not data[0]:
             return None
 
