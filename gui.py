@@ -545,22 +545,24 @@ class FSEApp(tk.Tk):
                 progid,
             )
 
-        tk.Label(parent, text=f"Browser predefinito: {default_name}").pack(anchor="w")
+        # Browser info frame
+        browser_frame = tk.LabelFrame(parent, text="Browser", padx=8, pady=6)
+        browser_frame.pack(fill=tk.X)
 
-        # Warning label for browser mismatch
+        tk.Label(browser_frame, text=f"Browser predefinito: {default_name}").pack(anchor="w")
+
         self._mismatch_label = tk.Label(
-            parent, text="", fg="orange", wraplength=600, anchor="w", justify=tk.LEFT,
+            browser_frame, text="", fg="orange", wraplength=600, anchor="w", justify=tk.LEFT,
         )
         self._mismatch_label.pack(anchor="w", fill=tk.X)
 
-        # CDP registry checkbox
         self._cdp_registry_var = tk.BooleanVar(value=False)
         is_firefox = (
             self._default_browser_info
             and self._default_browser_info.get("channel") == "firefox"
         )
         self._cdp_registry_cb = tk.Checkbutton(
-            parent,
+            browser_frame,
             text="Abilita CDP nel registro (per Millewin/Medico2000)",
             variable=self._cdp_registry_var,
             command=self._on_cdp_registry_toggled,
@@ -569,17 +571,15 @@ class FSEApp(tk.Tk):
         self._cdp_registry_cb.pack(anchor="w")
         if is_firefox:
             tk.Label(
-                parent, text="(Firefox non supporta CDP)", fg="gray",
+                browser_frame, text="(Firefox non supporta CDP)", fg="gray",
             ).pack(anchor="w")
 
-        # Sync checkbox state from registry
         self._sync_cdp_registry_checkbox()
-        # Show mismatch warning if needed
         self._update_browser_mismatch_warning()
 
         # Controls
-        ctrl_frame = tk.Frame(parent)
-        ctrl_frame.pack(fill=tk.X, pady=(12, 4))
+        ctrl_frame = tk.LabelFrame(parent, text="Controlli", padx=8, pady=6)
+        ctrl_frame.pack(fill=tk.X, pady=(8, 0))
 
         self._btn_check = tk.Button(ctrl_frame, text="Controlla Email", command=self._check_email)
         self._btn_check.pack(side=tk.LEFT, padx=(0, 8))
@@ -589,6 +589,8 @@ class FSEApp(tk.Tk):
 
         self._btn_stop = tk.Button(ctrl_frame, text="Interrompi", command=self._stop_processing, state=tk.DISABLED)
         self._btn_stop.pack(side=tk.LEFT)
+
+        tk.Button(ctrl_frame, text="Esci", command=self.destroy).pack(side=tk.RIGHT)
 
         # Console
         console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
