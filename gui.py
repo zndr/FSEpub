@@ -490,7 +490,7 @@ class FSEApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("FSE Processor")
-        self.geometry("720x700")
+        self.geometry("720x520")
         self.resizable(True, True)
 
         # Ensure data directories exist (for installed mode)
@@ -506,62 +506,33 @@ class FSEApp(tk.Tk):
     # ---- UI construction ----
 
     def _build_ui(self) -> None:
-        # Settings frame
-        settings_frame = tk.LabelFrame(self, text="Impostazioni", padx=8, pady=8)
-        settings_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
-
         # Detect PDF readers and browsers once at startup
         self._pdf_readers = _detect_pdf_readers()  # list of (exe_path, display_name)
         self._browsers = _detect_browsers()  # list of (channel_or_path, display_name)
 
-        for row_idx, (key, label, default, kind) in enumerate(SETTINGS_SPEC):
-            tk.Label(settings_frame, text=label, anchor="w").grid(
-                row=row_idx, column=0, sticky="w", padx=(0, 8), pady=2,
-            )
+        # --- Tabbed notebook ---
+        self._notebook = ttk.Notebook(self)
+        self._notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 10))
 
-            if kind == "bool":
-                var = tk.BooleanVar(value=default.lower() == "true")
-                cb = tk.Checkbutton(settings_frame, variable=var)
-                cb.grid(row=row_idx, column=1, sticky="w", pady=2)
-                self._fields[key] = var
-            elif kind == "pdf_reader":
-                self._build_pdf_reader_row(settings_frame, row_idx, key, default)
-            elif kind == "browser_selector":
-                self._build_browser_selector_row(settings_frame, row_idx, key, default)
-            else:
-                var = tk.StringVar(value=default)
-                show = "*" if kind == "password" else ""
-                entry = tk.Entry(settings_frame, textvariable=var, width=52, show=show)
-                entry.grid(row=row_idx, column=1, sticky="ew", pady=2)
-                self._fields[key] = var
+        # Tab 1: Integrazione SISS
+        siss_tab = tk.Frame(self._notebook, padx=8, pady=8)
+        self._notebook.add(siss_tab, text="Integrazione SISS")
 
-                if kind == "dir":
-                    tk.Button(
-                        settings_frame, text="Sfoglia...",
-                        command=lambda v=var: self._browse_dir(v),
-                    ).grid(row=row_idx, column=2, padx=(4, 0), pady=2)
-                elif kind == "exe":
-                    tk.Button(
-                        settings_frame, text="Sfoglia...",
-                        command=lambda v=var: self._browse_exe(v),
-                    ).grid(row=row_idx, column=2, padx=(4, 0), pady=2)
+        # Tab 2: Impostazioni (built first so fields exist for SISS tab)
+        settings_tab = tk.Frame(self._notebook, padx=8, pady=8)
+        self._notebook.add(settings_tab, text="Impostazioni")
+        self._build_settings_tab(settings_tab)
 
-        settings_frame.columnconfigure(1, weight=1)
+        # Build SISS tab after settings so _fields["BROWSER_CHANNEL"] exists
+        self._build_siss_tab(siss_tab)
 
-        tk.Button(settings_frame, text="Salva Impostazioni", command=self._save_settings).grid(
-            row=len(SETTINGS_SPEC), column=0, columnspan=3, pady=(8, 0),
-        )
-
-        # SISS Integration frame
-        siss_frame = tk.LabelFrame(self, text="Integrazione SISS", padx=8, pady=8)
-        siss_frame.pack(fill=tk.X, padx=10, pady=5)
-
+    def _build_siss_tab(self, parent: tk.Frame) -> None:
+        """Build the SISS Integration tab content."""
         # Detect default browser
         self._default_browser_info = detect_default_browser()
         default_name = "Non rilevato"
         if self._default_browser_info:
             progid = self._default_browser_info["progid"]
-            # Build a friendly name from the progid
             friendly_names = {
                 "MSEdgeHTM": "Microsoft Edge",
                 "ChromeHTML": "Google Chrome",
@@ -574,11 +545,11 @@ class FSEApp(tk.Tk):
                 progid,
             )
 
-        tk.Label(siss_frame, text=f"Browser predefinito: {default_name}").pack(anchor="w")
+        tk.Label(parent, text=f"Browser predefinito: {default_name}").pack(anchor="w")
 
         # Warning label for browser mismatch
         self._mismatch_label = tk.Label(
-            siss_frame, text="", fg="orange", wraplength=600, anchor="w", justify=tk.LEFT,
+            parent, text="", fg="orange", wraplength=600, anchor="w", justify=tk.LEFT,
         )
         self._mismatch_label.pack(anchor="w", fill=tk.X)
 
@@ -589,7 +560,7 @@ class FSEApp(tk.Tk):
             and self._default_browser_info.get("channel") == "firefox"
         )
         self._cdp_registry_cb = tk.Checkbutton(
-            siss_frame,
+            parent,
             text="Abilita CDP nel registro (per Millewin/Medico2000)",
             variable=self._cdp_registry_var,
             command=self._on_cdp_registry_toggled,
@@ -598,7 +569,7 @@ class FSEApp(tk.Tk):
         self._cdp_registry_cb.pack(anchor="w")
         if is_firefox:
             tk.Label(
-                siss_frame, text="(Firefox non supporta CDP)", fg="gray",
+                parent, text="(Firefox non supporta CDP)", fg="gray",
             ).pack(anchor="w")
 
         # Sync checkbox state from registry
@@ -606,9 +577,9 @@ class FSEApp(tk.Tk):
         # Show mismatch warning if needed
         self._update_browser_mismatch_warning()
 
-        # Controls frame
-        ctrl_frame = tk.LabelFrame(self, text="Controlli", padx=8, pady=8)
-        ctrl_frame.pack(fill=tk.X, padx=10, pady=5)
+        # Controls
+        ctrl_frame = tk.Frame(parent)
+        ctrl_frame.pack(fill=tk.X, pady=(12, 4))
 
         self._btn_check = tk.Button(ctrl_frame, text="Controlla Email", command=self._check_email)
         self._btn_check.pack(side=tk.LEFT, padx=(0, 8))
@@ -619,12 +590,52 @@ class FSEApp(tk.Tk):
         self._btn_stop = tk.Button(ctrl_frame, text="Interrompi", command=self._stop_processing, state=tk.DISABLED)
         self._btn_stop.pack(side=tk.LEFT)
 
-        # Console frame
-        console_frame = tk.LabelFrame(self, text="Console", padx=8, pady=8)
-        console_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(5, 10))
+        # Console
+        console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
+        console_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
-        self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=16)
+        self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10)
         self._console.pack(fill=tk.BOTH, expand=True)
+
+    def _build_settings_tab(self, parent: tk.Frame) -> None:
+        """Build the Settings tab content."""
+        for row_idx, (key, label, default, kind) in enumerate(SETTINGS_SPEC):
+            tk.Label(parent, text=label, anchor="w").grid(
+                row=row_idx, column=0, sticky="w", padx=(0, 8), pady=2,
+            )
+
+            if kind == "bool":
+                var = tk.BooleanVar(value=default.lower() == "true")
+                cb = tk.Checkbutton(parent, variable=var)
+                cb.grid(row=row_idx, column=1, sticky="w", pady=2)
+                self._fields[key] = var
+            elif kind == "pdf_reader":
+                self._build_pdf_reader_row(parent, row_idx, key, default)
+            elif kind == "browser_selector":
+                self._build_browser_selector_row(parent, row_idx, key, default)
+            else:
+                var = tk.StringVar(value=default)
+                show = "*" if kind == "password" else ""
+                entry = tk.Entry(parent, textvariable=var, width=52, show=show)
+                entry.grid(row=row_idx, column=1, sticky="ew", pady=2)
+                self._fields[key] = var
+
+                if kind == "dir":
+                    tk.Button(
+                        parent, text="Sfoglia...",
+                        command=lambda v=var: self._browse_dir(v),
+                    ).grid(row=row_idx, column=2, padx=(4, 0), pady=2)
+                elif kind == "exe":
+                    tk.Button(
+                        parent, text="Sfoglia...",
+                        command=lambda v=var: self._browse_exe(v),
+                    ).grid(row=row_idx, column=2, padx=(4, 0), pady=2)
+
+        parent.columnconfigure(1, weight=1)
+
+        tk.Button(parent, text="Salva Impostazioni", command=self._save_settings).grid(
+            row=len(SETTINGS_SPEC), column=0, columnspan=3, pady=(8, 0),
+        )
 
     def _build_pdf_reader_row(self, parent: tk.Widget, row: int, key: str, default: str) -> None:
         """Build the PDF reader selection row with combobox."""
