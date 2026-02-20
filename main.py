@@ -24,12 +24,12 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
 
     logger.info("=== Avvio processamento FSE ===")
 
-    # Connect to IMAP
+    # Connect to POP3
     email_client = EmailClient(config, logger)
     try:
         email_client.connect()
     except Exception as e:
-        logger.error(f"Connessione IMAP fallita: {e}")
+        logger.error(f"Connessione POP3 fallita: {e}")
         return
 
     if stopped():

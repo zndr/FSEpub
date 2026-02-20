@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import tkinter as tk
+import traceback
 import winreg
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -23,8 +24,8 @@ ENV_FILE = str(paths.settings_file)
 SETTINGS_SPEC = [
     ("EMAIL_USER", "Email utente", "", "text"),
     ("EMAIL_PASS", "Email password", "", "password"),
-    ("IMAP_HOST", "IMAP Host", "mail-crs-lombardia.fastweb360.it", "text"),
-    ("IMAP_PORT", "IMAP Port", "993", "int"),
+    ("IMAP_HOST", "POP3 Host", "mail-crs-lombardia.fastweb360.it", "text"),
+    ("IMAP_PORT", "POP3 Port", "995", "int"),
     ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
     ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
     ("PDF_READER", "Lettore PDF", "default", "pdf_reader"),
@@ -828,7 +829,7 @@ class FSEApp(tk.Tk):
 
     def _check_email(self) -> None:
         self._btn_check.configure(state=tk.DISABLED)
-        self._log("Connessione IMAP per conteggio email...")
+        self._log("Connessione POP3 per conteggio email...")
         threading.Thread(target=self._check_email_worker, daemon=True).start()
 
     def _check_email_worker(self) -> None:
@@ -845,8 +846,12 @@ class FSEApp(tk.Tk):
             self.after(0, self._log, msg)
             self.after(0, lambda: messagebox.showinfo("Conteggio Email", msg))
         except Exception as e:
-            self.after(0, self._log, f"Errore: {e}")
-            self.after(0, lambda: messagebox.showerror("Errore", str(e)))
+            err_msg = str(e) if str(e) and str(e) != "None" else (
+                f"{type(e).__name__}: {e.args}" if e.args else type(e).__name__
+            )
+            tb = traceback.format_exc()
+            self.after(0, self._log, f"Errore: {err_msg}\n{tb}")
+            self.after(0, lambda m=err_msg: messagebox.showerror("Errore", m))
         finally:
             self.after(0, lambda: self._btn_check.configure(state=tk.NORMAL))
 
