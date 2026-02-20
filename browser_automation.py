@@ -236,6 +236,24 @@ def _is_browser_process_running(process_name: str) -> bool:
         return False
 
 
+def _kill_browser_processes(process_name: str, timeout: int = 10) -> None:
+    """Kill all instances of a browser process and wait until they're gone."""
+    for _ in range(3):
+        subprocess.run(
+            ["taskkill", "/IM", process_name, "/F", "/T"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(1)
+
+    # Wait for processes to actually terminate
+    elapsed = 0
+    while elapsed < timeout:
+        if not _is_browser_process_running(process_name):
+            return
+        time.sleep(1)
+        elapsed += 1
+
+
 def _launch_browser_with_cdp(exe_path: str, port: int) -> None:
     """Launch a browser with --remote-debugging-port as a detached process."""
     subprocess.Popen(
@@ -352,8 +370,32 @@ class FSEBrowser:
         if not process_name and channel in ("msedge", "chrome"):
             process_name = "msedge.exe" if channel == "msedge" else "chrome.exe"
 
-        # 3. Browser running without CDP → error with instructions
+        # 3. Browser running without CDP
         if process_name and _is_browser_process_running(process_name):
+            # If CDP is enabled in registry, kill and relaunch
+            progid = browser_info["progid"] if browser_info else None
+            if progid and get_cdp_registry_status(progid, port) and exe_path:
+                self._logger.info(
+                    f"Browser in esecuzione senza CDP ma CDP abilitato nel registro. "
+                    f"Chiusura e rilancio..."
+                )
+                _kill_browser_processes(process_name)
+                _launch_browser_with_cdp(exe_path, port)
+
+                elapsed = 0.0
+                while elapsed < CDP_CONNECT_TIMEOUT:
+                    if _is_cdp_port_available(port):
+                        self._logger.info(f"Porta CDP {port} disponibile dopo rilancio ({elapsed:.1f}s)")
+                        self._connect_cdp(endpoint, port)
+                        return
+                    time.sleep(CDP_CONNECT_POLL)
+                    elapsed += CDP_CONNECT_POLL
+
+                raise ConnectionError(
+                    f"Browser rilanciato ma la porta CDP {port} non ha risposto "
+                    f"entro {CDP_CONNECT_TIMEOUT} secondi."
+                )
+
             browser_display = browser_info["progid"] if browser_info else channel
             raise ConnectionError(
                 f"Il browser ({browser_display}) e' in esecuzione ma la porta CDP {port} non risponde.\n"
