@@ -28,6 +28,8 @@ class Config:
     pdf_reader: str
     browser_channel: str
     delete_after_processing: bool
+    use_existing_browser: bool
+    cdp_port: int
 
     @classmethod
     def load(cls, env_path: str | None = None) -> "Config":
@@ -56,6 +58,8 @@ class Config:
         pdf_reader = os.getenv("PDF_READER", "default")
         browser_channel = os.getenv("BROWSER_CHANNEL", "msedge")
         delete_after_processing = os.getenv("DELETE_AFTER_PROCESSING", "false").lower() == "true"
+        use_existing_browser = os.getenv("USE_EXISTING_BROWSER", "false").lower() == "true"
+        cdp_port = int(os.getenv("CDP_PORT", "9222"))
 
         config = cls(
             email_user=email_user,
@@ -72,6 +76,8 @@ class Config:
             pdf_reader=pdf_reader,
             browser_channel=browser_channel,
             delete_after_processing=delete_after_processing,
+            use_existing_browser=use_existing_browser,
+            cdp_port=cdp_port,
         )
         config._create_directories()
         return config
