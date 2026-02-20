@@ -133,8 +133,22 @@ class EmailClient:
                 uid = parts[1]
                 server_msgs.append((msg_num, uid))
 
-        # Filter out already-processed UIDs
+        # Load or seed the processed UIDs tracking file
         processed = _load_processed_uids()
+        all_uids = {uid for _, uid in server_msgs}
+
+        if not _PROCESSED_UIDS_FILE.exists():
+            # First run after migration: seed all current UIDs as already processed.
+            # POP3 has no read/unread flags, so we mark everything on the server
+            # as "already seen". Only emails arriving AFTER this point will be detected.
+            _save_processed_uids(all_uids)
+            self._logger.info(
+                f"Primo avvio POP3: {len(all_uids)} email esistenti marcate come già processate. "
+                f"Da ora in poi verranno rilevate solo le nuove email."
+            )
+            return []
+
+        # Filter out already-processed UIDs
         new_msgs = [(num, uid) for num, uid in server_msgs if uid not in processed]
 
         if not new_msgs:
@@ -168,14 +182,17 @@ class EmailClient:
         raw_email = b"\r\n".join(lines)
         msg = message_from_bytes(raw_email)
 
-        # Filter by sender
-        sender = msg.get("From", "")
-        if "Mail CRS Lombardia" not in sender:
+        # Filter by sender (decode MIME-encoded From header)
+        raw_from = msg.get("From", "")
+        sender = self._decode_header(raw_from)
+        if "mail crs lombardia" not in sender.lower():
+            self._logger.debug(f"Email UID {uid}: scartata, From={sender!r}")
             return None
 
         # Decode and filter by subject
-        subject = self._decode_subject(msg.get("Subject", ""))
-        if "Nuovo Documento per" not in subject:
+        subject = self._decode_header(msg.get("Subject", ""))
+        if "nuovo documento per" not in subject.lower():
+            self._logger.debug(f"Email UID {uid}: scartata, Subject={subject!r}")
             return None
 
         self._logger.debug(f"Email UID {uid}: subject = {subject}")
@@ -199,7 +216,7 @@ class EmailClient:
         )
 
     @staticmethod
-    def _decode_subject(raw_subject: str) -> str:
+    def _decode_header(raw_subject: str) -> str:
         parts = decode_header(raw_subject)
         decoded = []
         for content, charset in parts:
