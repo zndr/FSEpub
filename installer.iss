@@ -23,6 +23,7 @@ WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+DisableDirPage=yes
 
 [Languages]
 Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
