@@ -15,7 +15,7 @@ from logger_module import ProcessingLogger
 
 FSE_BASE_URL = "https://operatorisiss.servizirl.it/opefseie/"
 
-TIPOLOGIA_VALIDE_ESATTE = {"LETTERA DI DIMISSIONE", "VERBALE PRONTO SOCCORSO"}
+TIPOLOGIA_VALIDE_ESATTE = {"LETTERA DIMISSIONE", "VERBALE PRONTO SOCCORSO"}
 
 # ProgId → (channel for Playwright, process name for tasklist)
 PROGID_TO_BROWSER: dict[str, tuple[str, str]] = {

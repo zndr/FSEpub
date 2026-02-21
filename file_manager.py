@@ -22,6 +22,8 @@ class FileManager:
             return "LAB"
         if "PRONTO SOCCORSO" in upper:
             return "PS"
+        if "DIMISSIONE" in upper:
+            return "DIMOSP"
         if upper.startswith("REFERTO"):
             return "SPEC"
         return "DOC"
