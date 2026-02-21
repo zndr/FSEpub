@@ -96,7 +96,7 @@ Write-Host "3. Aggiornamento build.bat..." -ForegroundColor $colorInfo
 $buildBatPath = Join-Path $PSScriptRoot "build.bat"
 if (Test-Path $buildBatPath) {
     $content = Get-Content $buildBatPath -Raw
-    $content = $content -replace 'FSE_Processor_Setup_[\d\.]+\.exe', "FSE_Processor_Setup_$NewVersion.exe"
+    $content = $content -replace 'FSE_Processor_Setup_[\d\.]+(_QT6)?\.exe', "FSE_Processor_Setup_${NewVersion}_QT6.exe"
     $content | Set-Content $buildBatPath -NoNewline
     Write-Host "   OK build.bat aggiornato" -ForegroundColor $colorSuccess
     $updatedCount++
