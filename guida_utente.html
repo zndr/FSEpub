@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSE Processor v1.1.0 — Guida Utente</title>
+<style>
+  :root {
+    --blue-900: #1a2744;
+    --blue-800: #1e3a5f;
+    --blue-700: #24507a;
+    --blue-600: #2b6cb0;
+    --blue-500: #3182ce;
+    --blue-100: #e8f0fe;
+    --blue-50: #f0f6ff;
+    --gray-900: #1a202c;
+    --gray-700: #4a5568;
+    --gray-600: #718096;
+    --gray-400: #cbd5e0;
+    --gray-200: #e2e8f0;
+    --gray-100: #edf2f7;
+    --gray-50: #f7fafc;
+    --green-600: #2f855a;
+    --green-100: #f0fff4;
+    --red-600: #c53030;
+    --red-100: #fff5f5;
+    --orange-600: #c05621;
+    --orange-100: #fffaf0;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; scroll-padding-top: 80px; }
+
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--gray-900);
+    line-height: 1.65;
+    margin: 0;
+    background: var(--gray-50);
+  }
+
+  /* --- Header / Hero --- */
+  .hero {
+    background: linear-gradient(135deg, var(--blue-900), var(--blue-700));
+    color: #fff;
+    padding: 3rem 2rem 2.5rem;
+    text-align: center;
+  }
+  .hero h1 { margin: 0 0 .3rem; font-size: 2rem; letter-spacing: .5px; }
+  .hero .version { opacity: .75; font-size: .95rem; }
+  .hero .subtitle { margin-top: .8rem; font-size: 1.05rem; opacity: .9; }
+
+  /* --- Sticky Nav --- */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--blue-800);
+    box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+  nav ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    gap: 0;
+  }
+  nav a {
+    display: block;
+    padding: .75rem 1.1rem;
+    color: rgba(255,255,255,.85);
+    text-decoration: none;
+    font-size: .85rem;
+    font-weight: 500;
+    transition: background .2s, color .2s;
+    border-bottom: 3px solid transparent;
+  }
+  nav a:hover, nav a:focus {
+    background: rgba(255,255,255,.1);
+    color: #fff;
+    border-bottom-color: rgba(255,255,255,.5);
+  }
+
+  /* --- Main Content --- */
+  main {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+
+  section { margin-bottom: 3rem; }
+
+  h2 {
+    font-size: 1.55rem;
+    color: var(--blue-800);
+    border-bottom: 3px solid var(--blue-500);
+    padding-bottom: .4rem;
+    margin: 2.5rem 0 1rem;
+  }
+  h3 {
+    font-size: 1.15rem;
+    color: var(--blue-700);
+    margin: 1.8rem 0 .6rem;
+  }
+  h4 {
+    font-size: 1rem;
+    color: var(--gray-700);
+    margin: 1.2rem 0 .4rem;
+  }
+
+  p { margin: .5rem 0 .8rem; }
+
+  a { color: var(--blue-600); }
+
+  ul, ol { padding-left: 1.4rem; margin: .4rem 0 1rem; }
+  li { margin-bottom: .35rem; }
+
+  /* --- Code / Mono --- */
+  code {
+    font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+    background: var(--gray-100);
+    padding: .15rem .4rem;
+    border-radius: 3px;
+    font-size: .88em;
+    color: var(--blue-800);
+  }
+  pre {
+    background: var(--gray-900);
+    color: #e2e8f0;
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: .85rem;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    color: inherit;
+    padding: 0;
+  }
+
+  /* --- Tables --- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: .8rem 0 1.2rem;
+    font-size: .92rem;
+  }
+  th, td {
+    text-align: left;
+    padding: .55rem .75rem;
+    border: 1px solid var(--gray-200);
+  }
+  th {
+    background: var(--blue-100);
+    color: var(--blue-800);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--gray-50); }
+
+  /* --- Info / Tip / Warning Boxes --- */
+  .box {
+    border-left: 4px solid;
+    border-radius: 4px;
+    padding: .8rem 1rem;
+    margin: 1rem 0;
+    font-size: .93rem;
+  }
+  .box-info  { border-color: var(--blue-500); background: var(--blue-50); }
+  .box-tip   { border-color: var(--green-600); background: var(--green-100); }
+  .box-warn  { border-color: var(--orange-600); background: var(--orange-100); }
+  .box-error { border-color: var(--red-600); background: var(--red-100); }
+  .box strong { display: block; margin-bottom: .25rem; }
+
+  /* --- Collapsible sections --- */
+  details {
+    border: 1px solid var(--gray-200);
+    border-radius: 6px;
+    margin: .6rem 0;
+    background: #fff;
+  }
+  details[open] { box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  summary {
+    cursor: pointer;
+    padding: .7rem 1rem;
+    font-weight: 600;
+    color: var(--blue-700);
+    user-select: none;
+    list-style: none;
+  }
+  summary::before {
+    content: "\25B6\FE0E";
+    display: inline-block;
+    margin-right: .5rem;
+    font-size: .75rem;
+    transition: transform .2s;
+  }
+  details[open] > summary::before { transform: rotate(90deg); }
+  summary::-webkit-details-marker { display: none; }
+  details > div { padding: .4rem 1rem 1rem; }
+
+  /* --- Numbered steps --- */
+  .steps { counter-reset: step; list-style: none; padding-left: 0; }
+  .steps > li {
+    counter-increment: step;
+    padding-left: 2.6rem;
+    position: relative;
+    margin-bottom: 1rem;
+  }
+  .steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1.8rem;
+    height: 1.8rem;
+    background: var(--blue-600);
+    color: #fff;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 1.8rem;
+    font-size: .85rem;
+    font-weight: 700;
+  }
+
+  /* --- Kbd --- */
+  kbd {
+    display: inline-block;
+    padding: .1rem .45rem;
+    border: 1px solid var(--gray-400);
+    border-radius: 3px;
+    background: var(--gray-100);
+    font-family: inherit;
+    font-size: .88em;
+    box-shadow: 0 1px 0 var(--gray-400);
+  }
+
+  /* --- Footer --- */
+  footer {
+    text-align: center;
+    padding: 1.5rem;
+    font-size: .82rem;
+    color: var(--gray-600);
+    border-top: 1px solid var(--gray-200);
+  }
+
+  /* --- Back to top --- */
+  .top-link {
+    display: inline-block;
+    margin-top: 1.2rem;
+    font-size: .82rem;
+    color: var(--blue-600);
+    text-decoration: none;
+  }
+  .top-link:hover { text-decoration: underline; }
+
+  /* --- Responsive --- */
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 1.5rem; }
+    main { padding: 1.2rem 1rem 3rem; }
+    nav a { padding: .6rem .8rem; font-size: .8rem; }
+    table { font-size: .82rem; }
+    th, td { padding: .4rem .5rem; }
+    h2 { font-size: 1.3rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ======================== HEADER ======================== -->
+<header class="hero" id="top">
+  <h1>FSE Processor</h1>
+  <div class="version">Versione 1.1.0</div>
+  <p class="subtitle">Guida Utente &mdash; Scarico e organizzazione automatica dei referti dal Fascicolo Sanitario Elettronico</p>
+</header>
+
+<!-- ======================== NAVIGATION ======================== -->
+<nav>
+  <ul>
+    <li><a href="#introduzione">Introduzione</a></li>
+    <li><a href="#configurazione">Configurazione</a></li>
+    <li><a href="#siss">Tab SISS</a></li>
+    <li><a href="#paziente">Tab Paziente</a></li>
+    <li><a href="#file">File scaricati</a></li>
+    <li><a href="#avanzate">Avanzate</a></li>
+    <li><a href="#problemi">Problemi</a></li>
+  </ul>
+</nav>
+
+<!-- ======================== MAIN ======================== -->
+<main>
+
+<!-- ====================== 1. INTRODUZIONE ====================== -->
+<section id="introduzione">
+<h2>1. Introduzione</h2>
+
+<h3>Cos'&egrave; FSE Processor</h3>
+<p>
+  FSE Processor &egrave; un'applicazione Windows che automatizza lo scarico e l'organizzazione dei
+  referti pubblicati sul <strong>Fascicolo Sanitario Elettronico</strong> (FSE) della Lombardia.
+  L'applicazione supporta due modalit&agrave; operative:
+</p>
+<ul>
+  <li><strong>Da email (Tab SISS)</strong> &mdash; legge le notifiche email di nuovi documenti e scarica automaticamente i referti corrispondenti.</li>
+  <li><strong>Per paziente (Tab Paziente)</strong> &mdash; consente di scaricare direttamente i documenti di un paziente specifico tramite codice fiscale.</li>
+</ul>
+<p>In entrambi i casi l'app pilota il browser in modo automatico, richiede un singolo accesso manuale
+  tramite SSO e si occupa di scaricare, rinominare e organizzare i file PDF.</p>
+
+<h3>Requisiti di sistema</h3>
+<table>
+  <tr><th>Requisito</th><th>Dettaglio</th></tr>
+  <tr><td>Sistema operativo</td><td>Windows 10 o successivo (64-bit)</td></tr>
+  <tr><td>Connessione internet</td><td>Necessaria per accedere al portale FSE e al server IMAP</td></tr>
+  <tr><td>Browser</td><td>Microsoft Edge, Google Chrome, Firefox o Brave installato; in alternativa il Chromium integrato</td></tr>
+  <tr><td>Credenziali email</td><td>Account IMAP per la ricezione delle notifiche CRS Lombardia (solo Tab SISS)</td></tr>
+  <tr><td>Credenziali SSO</td><td>Accesso al portale FSE (SPID, CIE o CNS)</td></tr>
+</table>
+
+<a href="#top" class="top-link">&uarr; Torna all'inizio</a>
+</section>
+
+<!-- ====================== 2. CONFIGURAZIONE ====================== -->
+<section id="configurazione">
+<h2>2. Primo avvio e configurazione</h2>
+
+<p>Al primo avvio l'applicazione mostra il <strong>Tab Impostazioni</strong>. Le impostazioni vengono
+  salvate nel file <code>settings.env</code> e persistono tra le sessioni.</p>
+
+<h3>Server Posta</h3>
+<p>Configurazione dell'accesso al server di posta per leggere le notifiche FSE.</p>
+<table>
+  <tr><th>Campo</th><th>Descrizione</th><th>Esempio / Default</th></tr>
+  <tr><td>Email</td><td>Indirizzo email dell'account IMAP</td><td>pinco.pallo@crs.lombardia.it</td></tr>
+  <tr><td>Password</td><td>Password dell'account email</td><td>&mdash;</td></tr>
+  <tr><td>Server IMAP</td><td>Indirizzo del server di posta in arrivo</td><td><code>mail-crs-lombardia.fastweb360.it</code></td></tr>
+  <tr><td>Porta IMAP</td><td>Porta del server (SSL)</td><td><code>993</code></td></tr>
+</table>
+
+<div class="box box-tip">
+  <strong>Test connessione</strong>
+  Il pulsante <strong>Test Connessione</strong> verifica che le credenziali siano corrette
+  e che il server sia raggiungibile. In caso di successo mostra server, porta e utente confermati;
+  in caso di errore indica la causa (credenziali errate, rete non disponibile, certificato SSL).
+</div>
+
+<h3>Browser e Download</h3>
+<table>
+  <tr><th>Campo</th><th>Descrizione</th></tr>
+  <tr><td>Browser</td><td>Scelta del browser per l'automazione: <strong>Edge</strong>, <strong>Chrome</strong>, <strong>Firefox</strong>, <strong>Brave</strong> o <strong>Chromium integrato</strong></td></tr>
+  <tr><td>Directory download</td><td>Cartella di destinazione per i PDF scaricati (default: <code>Documenti\FSE Downloads</code>)</td></tr>
+  <tr><td>Lettore PDF</td><td>Applicazione per aprire i referti: predefinito di sistema oppure un eseguibile personalizzato</td></tr>
+</table>
+
+<h3>Parametri</h3>
+<table>
+  <tr><th>Campo</th><th>Descrizione</th><th>Default</th></tr>
+  <tr><td>Timeout download</td><td>Secondi massimi di attesa per il completamento di un singolo download</td><td>60</td></tr>
+  <tr><td>Timeout pagina</td><td>Secondi massimi di attesa per il caricamento di una pagina</td><td>30</td></tr>
+  <tr><td>Headless</td><td>Esegui il browser in background senza finestra visibile</td><td>Disattivato</td></tr>
+  <tr><td>Dimensione font console</td><td>Dimensione in pixel del testo nella console dell'app</td><td>8</td></tr>
+</table>
+
+<h3>Salvataggio</h3>
+<p>Premere il pulsante <strong>Salva impostazioni</strong> per applicare le modifiche.
+  Le impostazioni vengono scritte nel file <code>settings.env</code> e diventano immediatamente
+  attive per le sessioni successive.</p>
+
+<a href="#top" class="top-link">&uarr; Torna all'inizio</a>
+</section>
+
+<!-- ====================== 3. TAB SISS ====================== -->
+<section id="siss">
+<h2>3. Scarica referti da email (Tab SISS)</h2>
+
+<h3>Flusso di lavoro</h3>
+<ol class="steps">
+  <li>
+    <strong>Controlla Email</strong> &mdash; L'app si collega al server IMAP e conta le email
+    non lette contenenti notifiche di nuovi documenti FSE. Utile per verificare quante email
+    sono in attesa prima di avviare lo scarico.
+  </li>
+  <li>
+    <strong>Seleziona tipologie</strong> &mdash; Scegli quali tipi di referto scaricare:
+    <ul>
+      <li><strong>Referto</strong> &mdash; Referti specialistici</li>
+      <li><strong>Lettera Dimissione</strong> &mdash; Lettere di dimissione ospedaliera</li>
+      <li><strong>Verbale Pronto Soccorso</strong> &mdash; Verbali del Pronto Soccorso</li>
+    </ul>
+    La casella <strong>Tutti</strong> seleziona tutte le tipologie.
+  </li>
+  <li>
+    <strong>Avvia</strong> &mdash; Il browser si apre sulla pagina di login del portale FSE.
+    <strong>Completare manualmente l'accesso SSO</strong> (SPID, CIE o CNS). L'app attende
+    fino a 5 minuti che il login venga completato.
+  </li>
+  <li>
+    <strong>Download automatico</strong> &mdash; Dopo il login, l'app elabora ogni email in sequenza:
+    apre il fascicolo del paziente, individua i referti della tipologia selezionata e scarica i PDF che hanno quella data.
+  </li>
+  <li>
+    <strong>Rinomina e organizzazione</strong> &mdash; I file vengono automaticamente rinominati
+    secondo lo schema <code>{CF}_{NOME}_{TAG}.pdf</code> e spostati nella directory di download configurata.
+  </li>
+</ol>
+
+<h3>Opzioni post-download</h3>
+<table>
+  <tr><th>Opzione</th><th>Comportamento</th></tr>
+  <tr>
+    <td><strong>Marca come letto</strong></td>
+    <td>Segna le email elaborate come &ldquo;lette&rdquo; sul server. Inoltre registra gli UID
+      elaborati in <code>processed_uids.json</code> come backup locale.</td>
+  </tr>
+  <tr>
+    <td><strong>Elimina</strong></td>
+    <td>Elimina definitivamente le email dal server dopo l'elaborazione.
+      Attivando questa opzione, &ldquo;Marca come letto&rdquo; viene abilitata automaticamente.</td>
+  </tr>
+</table>
+
+<div class="box box-warn">
+  <strong>Attenzione</strong>
+  L'opzione &ldquo;Elimina&rdquo; cancella le email in modo permanente dal server di posta.
+  Assicurarsi di non averne pi&ugrave; bisogno prima di attivarla.
+</div>
+
+<h3>Max email per sessione</h3>
+<p>Il campo <strong>Max email</strong> limita il numero di email elaborate in una singola sessione.
+  Impostare <code>0</code> per elaborare tutte le email disponibili.
+  Il valore predefinito &egrave; <code>3</code>.</p>
+
+<h3>Console e messaggi di stato</h3>
+<p>La console in basso mostra in tempo reale lo stato dell'elaborazione. I messaggi principali sono:</p>
+<ul>
+  <li><code>Trovate N email con referti FSE</code> &mdash; numero di email valide trovate</li>
+  <li><code>LOGIN MANUALE RICHIESTO</code> &mdash; l'utente deve completare l'accesso nel browser</li>
+  <li><code>Poll login [Ns]</code> &mdash; attesa del completamento login (ogni 2 secondi)</li>
+  <li><code>Rinominato: X &rarr; Y</code> &mdash; file rinominato con successo</li>
+  <li><code>Nessuna email da processare</code> &mdash; nessuna email non letta trovata</li>
+</ul>
+
+<a href="#top" class="top-link">&uarr; Torna all'inizio</a>
+</section>
+
+<!-- ====================== 4. TAB PAZIENTE ====================== -->
+<section id="paziente">
+<h2>4. Scarica referti per paziente (Tab Paziente)</h2>
+
+<h3>Inserimento codice fiscale</h3>
+<p>Inserire il <strong>codice fiscale</strong> del paziente (16 caratteri alfanumerici).
+  Il campo viene validato automaticamente.</p>
+
+<h3>Selezione tipologie documento</h3>
+<p>Le tipologie sono organizzate in una struttura gerarchica:</p>
+<table>
+  <tr><th>Categoria</th><th>Sottotipo</th><th>Descrizione</th></tr>
+  <tr><td rowspan="4"><strong>Referti specialistici</strong></td><td>Referto Specialistico</td><td>Referti medici generici</td></tr>
+  <tr><td>Laboratorio (Lab)</td><td>Analisi di laboratorio</td></tr>
+  <tr><td>Imaging (Radiologia)</td><td>Esami radiologici e di diagnostica per immagini</td></tr>
+  <tr><td>Anatomia Patologica</td><td>Esami istologici e citologici</td></tr>
+  <tr><td colspan="2"><strong>Lettera Dimissione</strong></td><td>Lettere di dimissione ospedaliera</td></tr>
+  <tr><td colspan="2"><strong>Verbale PS</strong></td><td>Verbali del Pronto Soccorso</td></tr>
+</table>
+<p>La casella <strong>Tutti</strong> seleziona tutte le categorie e i sottotipi.</p>
+
+<h3>Filtri: Ente/Struttura e periodo</h3>
+
+<h4>Ente / Struttura</h4>
+<p>Il menu a tendina permette di filtrare i documenti per struttura sanitaria di origine.
+  Le opzioni vengono popolate automaticamente in base ai documenti disponibili nel fascicolo del paziente.
+  Il confronto &egrave; case-insensitive e funziona per sottostringa.</p>
+
+<h4>Periodo / Date</h4>
+<table>
+  <tr><th>Opzione</th><th>Comportamento</th></tr>
+  <tr><td>Tutte</td><td>Nessun filtro temporale, scarica tutti i documenti disponibili</td></tr>
+  <tr><td>Ultima settimana</td><td>Solo documenti degli ultimi 7 giorni</td></tr>
+  <tr><td>Ultimo mese</td><td>Solo documenti degli ultimi 30 giorni</td></tr>
+  <tr><td>Ultimo anno</td><td>Solo documenti degli ultimi 365 giorni</td></tr>
+  <tr><td>Personalizzato</td><td>Intervallo date personalizzato in formato <code>GG/MM/AAAA</code></td></tr>
+</table>
+
+<h3>Avvio download</h3>
+<ol class="steps">
+  <li>Inserire il codice fiscale e selezionare tipologie e filtri desiderati.</li>
+  <li>Premere <strong>Avvia Download</strong>.</li>
+  <li>Completare il login SSO manuale nel browser che si apre.</li>
+  <li>L'app naviga automaticamente al fascicolo del paziente e scarica i documenti corrispondenti ai filtri selezionati.</li>
+</ol>
+<p>Il pulsante <strong>Interrompi</strong> permette di fermare il processo in qualsiasi momento.</p>
+
+<a href="#top" class="top-link">&uarr; Torna all'inizio</a>
+</section>
+
+<!-- ====================== 5. FILE SCARICATI ====================== -->
+<section id="file">
+<h2>5. Organizzazione file scaricati</h2>
+
+<h3>Directory di destinazione</h3>
+<p>I file vengono salvati nella cartella configurata nelle Impostazioni
+  (default: <code>Documenti\FSE Downloads</code>).</p>
+
+<h3>Schema di rinomina</h3>
+<p>Ogni file scaricato viene automaticamente rinominato secondo lo schema:</p>
+<pre><code>{CODICE_FISCALE}_{NOME_PAZIENTE}_{TAG}.pdf</code></pre>
+<p>Esempio: <code>RSSMRA80A01H501X_Mario_Rossi_LAB.pdf</code></p>
+
+<h3>Tag documento</h3>
+<table>
+  <tr><th>Tag</th><th>Tipo documento</th></tr>
+  <tr><td><code>LAB</code></td><td>Analisi di laboratorio</td></tr>
+  <tr><td><code>SPEC</code></td><td>Referti specialistici</td></tr>
+  <tr><td><code>PS</code></td><td>Verbale Pronto Soccorso</td></tr>
+  <tr><td><code>DIMOSP</code></td><td>Lettera di dimissione ospedaliera</td></tr>
+  <tr><td><code>DOC</code></td><td>Altro documento (tipologia non riconosciuta)</td></tr>
+</table>
+
+<h3>Gestione dei duplicati</h3>
+<p>Se un file con lo stesso nome esiste gi&agrave;, viene inserito un contatore progressivo:</p>
+<pre><code>RSSMRA80A01H501X_Mario_Rossi_LAB.pdf      (primo)
+RSSMRA80A01H501X_Mario_Rossi_1_LAB.pdf    (secondo)
+RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
+
+<h3>File di report generati</h3>
+<p>Al termine di ogni sessione di download vengono creati automaticamente nella directory di destinazione:</p>
+<table>
+  <tr><th>File</th><th>Contenuto</th></tr>
+  <tr>
+    <td><code>mapping_YYYYMMDD_HHMMSS.json</code></td>
+    <td>Mappa JSON con corrispondenza nome originale &rarr; nome rinominato e metadati</td>
+  </tr>
+  <tr>
+    <td><code>referti YYYYMMDD HHMMSS.txt</code></td>
+    <td>Report testuale leggibile, referti raggruppati per tipologia</td>
+  </tr>
+  <tr>
+    <td><code>processing_YYYYMMDD_HHMMSS.log</code></td>
+    <td>Log dettagliato dell'intera sessione di elaborazione</td>
+  </tr>
+  <tr>
+    <td><code>summary_YYYYMMDD_HHMMSS.json</code></td>
+    <td>Riepilogo statistico: email trovate, elaborate, documenti scaricati</td>
+  </tr>
+</table>
+
+<a href="#top" class="top-link">&uarr; Torna all'inizio</a>
+</section>
+
+<!-- ====================== 6. AVANZATE ====================== -->
+<section id="avanzate">
+<h2>6. Funzionalit&agrave; avanzate</h2>
+
+<h3>Modalit&agrave; CDP (Chrome DevTools Protocol)</h3>
+<p>La modalit&agrave; CDP consente all'app di collegarsi a un'istanza del browser gi&agrave; in
+  esecuzione, invece di aprirne una nuova. &Egrave; utile per:</p>
+<ul>
+  <li>Riutilizzare una sessione di login gi&agrave; attiva</li>
+  <li>Evitare l'apertura di pi&ugrave; finestre del browser</li>
+  <li>Gestire un'istanza browser controllata</li>
+</ul>
+
+<h4>Come attivare la modalit&agrave; CDP</h4>
+
+<details>
+  <summary>Metodo 1: Registro di sistema (consigliato)</summary>
+  <div>
+    <ol>
+      <li>Nel Tab Impostazioni, selezionare la casella <strong>Abilita CDP nel registro</strong>.</li>
+      <li>L'app modifica il registro di Windows per aggiungere il flag <code>--remote-debugging-port=9222</code>
+        all'avvio del browser selezionato.</li>
+      <li>Chiudere e riaprire il browser per rendere effettiva la modifica.</li>
+      <li>Abilitare <strong>Usa browser CDP</strong> nelle impostazioni.</li>
+    </ol>
+    <div class="box box-info">
+      <strong>Nota</strong>
+      Firefox non supporta la modifica del registro per CDP. Per Firefox utilizzare uno degli
+      altri metodi.
+    </div>
+  </div>
+</details>
+
+<details>
+  <summary>Metodo 2: Avvio manuale del browser</summary>
+  <div>
+    <ol>
+      <li>Chiudere tutte le finestre del browser.</li>
+      <li>Aprire il browser da riga di comando con il flag: <code>--remote-debugging-port=9222</code></li>
+      <li>Abilitare <strong>Usa browser CDP</strong> nelle impostazioni.</li>
+    </ol>
+  </div>
+</details>
+
+<details>
+  <summary>Metodo 3: Rilevamento automatico</summary>
+  <div>
+    <p>Abilitando la casella <strong>Usa browser CDP</strong>, l'app tenta automaticamente di:</p>
+    <ul>
+      <li>Connettersi alla porta CDP se il browser &egrave; gi&agrave; in ascolto.</li>
+      <li>Se il browser &egrave; aperto senza CDP, tentare un riavvio automatico con il flag CDP.</li>
+      <li>Se nessun browser &egrave; in esecuzione, avviarne uno nuovo con CDP abilitato.</li>
+    </ul>
+  </div>
+</details>
+
+<h3>Modalit&agrave; Headless</h3>
+<p>La modalit&agrave; <strong>Headless</strong> esegue il browser in background senza mostrare alcuna
+  finestra. Pu&ograve; essere utile per esecuzioni non presidiate, ma rende impossibile il login
+  manuale SSO. Si consiglia di utilizzarla solo dopo aver stabilito una sessione attiva
+  (ad esempio in combinazione con la modalit&agrave; CDP).</p>
+
+<h3>Chromium integrato vs browser di sistema</h3>
+<table>
+  <tr><th></th><th>Browser di sistema</th><th>Chromium integrato</th></tr>
+  <tr>
+    <td><strong>Pro</strong></td>
+    <td>Gi&agrave; installato, familiare, supporta CDP nel registro</td>
+    <td>Versione garantita compatibile con l'automazione, nessuna dipendenza esterna</td>
+  </tr>
+  <tr>
+    <td><strong>Contro</strong></td>
+    <td>Aggiornamenti automatici possono causare incompatibilit&agrave;</td>
+    <td>Download iniziale necessario (~150 MB), non supporta estensioni utente</td>
+  </tr>
+  <tr>
+    <td><strong>Quando usare</strong></td>
+    <td>Uso quotidiano, quando il browser di sistema funziona correttamente</td>
+    <td>Fallback quando il browser di sistema non &egrave; compatibile</td>
+  </tr>
+</table>
+<p>L'app effettua il download automatico di Chromium al primo utilizzo se selezionato, salvandolo in
+  <code>%APPDATA%\FSE Processor\playwright_browsers\</code> (installazione) oppure nella
+  cartella <code>playwright_browsers</code> accanto all'eseguibile (modalit&agrave; portatile).</p>
+
+<h3>Persistenza delle sessioni browser</h3>
+<p>I cookie e i dati di sessione vengono conservati tra un'esecuzione e l'altra nella cartella
+  <code>browser_data</code>. Questo permette in alcuni casi di riutilizzare una sessione SSO
+  ancora valida senza dover ripetere il login manuale.</p>
+
+<a href="#top" class="top-link">&uarr; Torna all'inizio</a>
+</section>
+
+<!-- ====================== 7. RISOLUZIONE PROBLEMI ====================== -->
+<section id="problemi">
+<h2>7. Risoluzione problemi</h2>
+
+<p>Fare clic su ciascun problema per espandere la soluzione.</p>
+
+<details>
+  <summary>Login scaduto / Timeout autenticazione</summary>
+  <div>
+    <p><strong>Messaggio:</strong> <code>Timeout attesa login manuale</code> oppure
+      <code>Timeout attesa re-login</code></p>
+    <p><strong>Causa:</strong> Il login SSO non &egrave; stato completato entro 5 minuti,
+      oppure la sessione &egrave; scaduta durante l'elaborazione.</p>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li>Ripetere l'operazione e completare il login SSO pi&ugrave; rapidamente.</li>
+      <li>Verificare che le credenziali SPID/CIE/CNS siano corrette.</li>
+      <li>Se la sessione scade frequentemente, considerare la modalit&agrave; CDP per mantenere
+        il browser aperto tra le sessioni.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary>Il browser non si apre</summary>
+  <div>
+    <p><strong>Causa:</strong> Il browser selezionato non &egrave; installato o non &egrave;
+      compatibile con la versione di automazione.</p>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li>Verificare che il browser selezionato nelle Impostazioni sia effettivamente installato.</li>
+      <li>Provare a selezionare un browser diverso.</li>
+      <li>Selezionare <strong>Chromium integrato</strong> come fallback: l'app lo scaricher&agrave;
+        automaticamente al primo utilizzo.</li>
+      <li>In modalit&agrave; CDP: assicurarsi che il browser sia gi&agrave; avviato con
+        il flag <code>--remote-debugging-port</code>.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary>Email non trovate</summary>
+  <div>
+    <p><strong>Messaggio:</strong> <code>Nessuna email da processare</code></p>
+    <p><strong>Causa:</strong> Non ci sono email non lette che corrispondono ai criteri
+      (mittente CRS Lombardia, oggetto &ldquo;Nuovo documento per&rdquo;).</p>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li>Verificare che ci siano email non lette nella casella di posta.</li>
+      <li>Controllare di non aver gi&agrave; elaborato tutte le email disponibili
+        (verificare <code>processed_uids.json</code>).</li>
+      <li>Se le email sono state elaborate ma non segnate come lette, il file
+        <code>processed_uids.json</code> ne tiene traccia. Per rielaborarle,
+        eliminare il file o rimuovere gli UID specifici.</li>
+      <li>Usare il pulsante <strong>Controlla Email</strong> per verificare quante email sono presenti.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary>Download falliti</summary>
+  <div>
+    <p><strong>Messaggio:</strong> Timeout durante il download oppure file non trovato.</p>
+    <p><strong>Causa:</strong> Il portale FSE non ha risposto in tempo, oppure il documento non
+      &egrave; disponibile.</p>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li>Aumentare il valore di <strong>Timeout download</strong> nelle Impostazioni
+        (es. da 60 a 120 secondi).</li>
+      <li>Aumentare il valore di <strong>Timeout pagina</strong> se le pagine si caricano lentamente.</li>
+      <li>Verificare la connessione internet.</li>
+      <li>Riprovare pi&ugrave; tardi: il portale FSE potrebbe essere temporaneamente sovraccarico.</li>
+      <li>Se il problema persiste solo per alcuni documenti, questi potrebbero non essere
+        effettivamente disponibili per il download.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary>Errori di connessione IMAP</summary>
+  <div>
+    <p><strong>Messaggi:</strong></p>
+    <ul>
+      <li><code>Connessione IMAP fallita</code> &mdash; impossibile raggiungere il server</li>
+      <li><code>Login IMAP fallito</code> &mdash; credenziali errate</li>
+      <li><code>Selezione INBOX fallita</code> &mdash; errore del server di posta</li>
+      <li><code>Certificato SSL del server non valido</code> &mdash; problema certificato (l'app ritenta automaticamente senza verifica)</li>
+    </ul>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li>Utilizzare il pulsante <strong>Test Connessione</strong> per diagnosticare il problema.</li>
+      <li>Verificare che server IMAP e porta siano corretti
+        (default: <code>mail-crs-lombardia.fastweb360.it</code> porta <code>993</code>).</li>
+      <li>Controllare che email e password siano corrette.</li>
+      <li>Se il problema &egrave; di rete, verificare la connessione internet e eventuali
+        firewall o proxy aziendali che bloccano la porta 993.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary>Modalit&agrave; CDP non funziona</summary>
+  <div>
+    <p><strong>Messaggio:</strong> <code>Browser rilanciato ma porta CDP non ha risposto</code>
+      oppure <code>Nessun browser rilevato</code></p>
+    <p><strong>Causa:</strong> La porta CDP non &egrave; in ascolto o il browser non &egrave;
+      stato avviato correttamente.</p>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li>Chiudere tutte le finestre del browser e riprovare.</li>
+      <li>Se si usa il metodo Registro: verificare che la modifica sia stata applicata e
+        che il browser sia stato riavviato.</li>
+      <li>Come ultima risorsa, disabilitare la modalit&agrave; CDP e usare la modalit&agrave; standard.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary>Conflitto sulla porta CDP (9222 gi&agrave; occupata)</summary>
+  <div>
+    <p><strong>Quando si verifica:</strong> La porta 9222, utilizzata dall'app per comunicare
+      con il browser in modalit&agrave; CDP, &egrave; gi&agrave; occupata da un altro programma
+      (ad esempio un altro strumento di sviluppo o un'istanza precedente del browser non
+      chiusa correttamente).</p>
+    <p><strong>Come verificare:</strong> Aprire un terminale ed eseguire:</p>
+    <pre><code>netstat -ano | findstr 9222</code></pre>
+    <p>Se un processo risulta in ascolto sulla porta 9222, &egrave; possibile chiuderlo
+      oppure configurare l'app per usare una porta diversa.</p>
+    <p><strong>Come cambiare la porta CDP:</strong></p>
+    <ol>
+      <li>Aprire il file <code>settings.env</code> con un editor di testo.
+        <ul>
+          <li>Modalit&agrave; installata: <code>%APPDATA%\FSE Processor\settings.env</code></li>
+          <li>Modalit&agrave; portatile: nella cartella dell'applicazione</li>
+        </ul>
+      </li>
+      <li>Cercare la riga <code>CDP_PORT=9222</code>. Se non esiste, aggiungerla.</li>
+      <li>Sostituire <code>9222</code> con una porta libera (es. <code>9223</code>).</li>
+      <li>Salvare il file e riavviare FSE Processor.</li>
+      <li>Se si usa il metodo Registro per CDP, disabilitare e riabilitare la casella
+        <strong>Abilita CDP nel registro</strong> per aggiornare la porta nel registro di Windows.</li>
+    </ol>
+    <div class="box box-info">
+      <strong>Nota</strong>
+      Nella grande maggioranza dei casi la porta predefinita 9222 funziona senza problemi.
+      Modificare questo valore solo se si &egrave; certi che la porta sia occupata.
+    </div>
+  </div>
+</details>
+
+<details>
+  <summary>Tipologia documento non trovata</summary>
+  <div>
+    <p><strong>Messaggio:</strong> <code>Colonna 'Tipologia' non trovata</code></p>
+    <p><strong>Causa:</strong> La struttura della pagina del portale FSE &egrave; cambiata.</p>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li>Verificare di avere l'ultima versione di FSE Processor.</li>
+      <li>Il portale FSE potrebbe aver subito un aggiornamento. In tal caso, verificare
+        se &egrave; disponibile un aggiornamento dell'applicazione.</li>
+    </ul>
+  </div>
+</details>
+
+<a href="#top" class="top-link">&uarr; Torna all'inizio</a>
+</section>
+
+</main>
+
+<!-- ======================== FOOTER ======================== -->
+<footer>
+  FSE Processor v1.1.0 &mdash; Guida Utente<br>
+  Ultimo aggiornamento: febbraio 2026
+</footer>
+
+</body>
+</html>

@@ -17,6 +17,8 @@ a = Analysis(
         (playwright_driver, os.path.join("playwright", "driver")),
         # Include .installed marker for installed-mode detection
         (os.path.join("assets", ".installed"), "."),
+        # User guide
+        ("guida_utente.html", "."),
     ],
     hiddenimports=[
         "playwright",

@@ -7,6 +7,7 @@ import re
 import threading
 import tkinter as tk
 import traceback
+import webbrowser
 import winreg
 from datetime import date, timedelta
 from pathlib import Path
@@ -633,6 +634,9 @@ class FSEApp(tk.Tk):
         self._btn_stop.pack(side=tk.LEFT)
 
         tk.Button(btn_row, text="Esci", command=self.destroy).pack(side=tk.RIGHT)
+        btn_guide = tk.Button(btn_row, text="Guida", command=self._open_guide)
+        btn_guide.pack(side=tk.RIGHT, padx=(0, 8))
+        Tooltip(btn_guide, "Apri la guida utente nel browser")
 
         # Max email row (moved from Settings)
         max_row = tk.Frame(ctrl_frame)
@@ -996,15 +1000,8 @@ class FSEApp(tk.Tk):
         self._fields["USE_EXISTING_BROWSER"] = var
         Tooltip(cb_cdp, "Connettiti a un browser gia' aperto tramite Chrome DevTools Protocol, invece di avviarne uno nuovo")
 
-        r += 1
-        tk.Label(br_frame, text="Porta CDP", anchor="w").grid(
-            row=r, column=0, sticky="w", padx=(0, 8), pady=2,
-        )
-        var = tk.StringVar(value=spec["CDP_PORT"][1])
-        cdp_port_entry = tk.Entry(br_frame, textvariable=var, width=10)
-        cdp_port_entry.grid(row=r, column=1, sticky="w", pady=2)
-        self._fields["CDP_PORT"] = var
-        Tooltip(cdp_port_entry, "Porta di ascolto del browser per connessioni CDP")
+        # CDP port: not shown in UI, kept as hidden field for code compatibility
+        self._fields["CDP_PORT"] = tk.StringVar(value=spec["CDP_PORT"][1])
 
         r += 1
         self._cdp_registry_var = tk.BooleanVar(value=False)
@@ -1341,6 +1338,14 @@ class FSEApp(tk.Tk):
             self._set_pdf_combo_from_value(self._fields["PDF_READER"].get())
 
     # ---- Helpers ----
+
+    def _open_guide(self) -> None:
+        """Open the user guide HTML file in the default browser."""
+        guide = paths.app_dir / "guida_utente.html"
+        if guide.exists():
+            webbrowser.open(guide.as_uri())
+        else:
+            messagebox.showwarning("Guida non trovata", f"Il file guida non è stato trovato:\n{guide}")
 
     def _browse_dir(self, var: tk.StringVar) -> None:
         path = filedialog.askdirectory(initialdir=var.get() or ".")
