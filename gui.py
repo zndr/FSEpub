@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from app_paths import paths
+from version import __version__
 from browser_automation import (
     detect_default_browser,
     get_cdp_registry_status,
@@ -490,7 +491,7 @@ class TextHandler(logging.Handler):
 class FSEApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("FSE Processor")
+        self.title(f"FSE Processor v{__version__}")
         self.geometry("720x520")
         self.resizable(True, True)
 
