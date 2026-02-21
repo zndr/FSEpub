@@ -46,6 +46,7 @@ SETTINGS_SPEC = [
     ("HEADLESS", "Headless browser", "false", "bool"),
     ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "60", "int"),
     ("PAGE_TIMEOUT", "Page timeout (sec)", "30", "int"),
+    ("MARK_AS_READ", "Marca come letto dopo elaborazione", "true", "bool"),
     ("DELETE_AFTER_PROCESSING", "Elimina email dopo elaborazione", "false", "bool"),
     ("MAX_EMAILS", "Max email da processare (0=tutte)", "3", "int"),
 ]
@@ -598,6 +599,29 @@ class FSEApp(tk.Tk):
         self._siss_max_email_var = self._fields["MAX_EMAILS"]
         tk.Entry(max_row, textvariable=self._siss_max_email_var, width=6).pack(side=tk.LEFT)
 
+        # "Dopo il download" options
+        post_frame = tk.LabelFrame(parent, text="Dopo il download", padx=8, pady=4)
+        post_frame.pack(fill=tk.X, pady=(8, 0))
+
+        mark_var = self._fields["MARK_AS_READ"]
+        delete_var = self._fields["DELETE_AFTER_PROCESSING"]
+
+        self._siss_mark_cb = tk.Checkbutton(
+            post_frame, text='Marca come "gia\' letto" i messaggi scaricati',
+            variable=mark_var,
+        )
+        self._siss_mark_cb.pack(anchor="w")
+
+        self._siss_delete_cb = tk.Checkbutton(
+            post_frame, text="Elimina i messaggi scaricati dal server",
+            variable=delete_var,
+            command=self._on_delete_toggled,
+        )
+        self._siss_delete_cb.pack(anchor="w")
+
+        # Apply initial state
+        self._on_delete_toggled()
+
         # Document type checkboxes with "Tutti"
         self._siss_tutti_var, self._siss_doc_vars = self._build_siss_doc_type_checkboxes(parent)
 
@@ -634,6 +658,14 @@ class FSEApp(tk.Tk):
             doc_cbs.append(cb)
 
         return tutti_var, doc_vars
+
+    def _on_delete_toggled(self) -> None:
+        """When 'Elimina' is checked, force 'Marca come letto' on and disable it."""
+        if self._fields["DELETE_AFTER_PROCESSING"].get():
+            self._fields["MARK_AS_READ"].set(True)
+            self._siss_mark_cb.configure(state=tk.DISABLED)
+        else:
+            self._siss_mark_cb.configure(state=tk.NORMAL)
 
     @staticmethod
     def _get_selected_types(tutti_var: tk.BooleanVar, doc_vars: dict[str, tk.BooleanVar]) -> set[str] | None:
@@ -931,22 +963,22 @@ class FSEApp(tk.Tk):
         )
         self._fields["PAGE_TIMEOUT"] = var
 
-        # MAX_EMAILS field is created here for settings persistence but displayed in SISS tab
+        # Fields created here for settings persistence but displayed in SISS tab
         var = tk.StringVar(value=spec["MAX_EMAILS"][1])
         self._fields["MAX_EMAILS"] = var
 
-        # Row 1: checkboxes side by side
+        var = tk.BooleanVar(value=spec["MARK_AS_READ"][1].lower() == "true")
+        self._fields["MARK_AS_READ"] = var
+
+        var = tk.BooleanVar(value=spec["DELETE_AFTER_PROCESSING"][1].lower() == "true")
+        self._fields["DELETE_AFTER_PROCESSING"] = var
+
+        # Row 1: checkboxes
         var = tk.BooleanVar(value=spec["HEADLESS"][1].lower() == "true")
         tk.Checkbutton(params_frame, text="Headless browser", variable=var).grid(
             row=1, column=0, columnspan=2, sticky="w", pady=2,
         )
         self._fields["HEADLESS"] = var
-
-        var = tk.BooleanVar(value=spec["DELETE_AFTER_PROCESSING"][1].lower() == "true")
-        tk.Checkbutton(
-            params_frame, text="Elimina email dopo elaborazione", variable=var,
-        ).grid(row=1, column=2, columnspan=2, sticky="w", pady=2)
-        self._fields["DELETE_AFTER_PROCESSING"] = var
 
         # Save button centered
         tk.Button(

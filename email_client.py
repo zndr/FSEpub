@@ -193,6 +193,12 @@ class EmailClient:
         _save_processed_uids(processed)
         self._logger.debug(f"Email UID {uid} marcata come letta")
 
+    def track_uid_locally(self, uid: str) -> None:
+        """Track a UID as processed locally without setting IMAP flags."""
+        processed = _load_processed_uids()
+        processed.add(uid)
+        _save_processed_uids(processed)
+
     def delete_message(self, uid: str) -> None:
         """Mark a message for deletion on the server and expunge."""
         if not self._connection:

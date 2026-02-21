@@ -28,6 +28,7 @@ class Config:
     pdf_reader: str
     browser_channel: str
     delete_after_processing: bool
+    mark_as_read: bool
     use_existing_browser: bool
     cdp_port: int
     max_emails: int  # 0 = unlimited
@@ -59,6 +60,7 @@ class Config:
         pdf_reader = os.getenv("PDF_READER", "default")
         browser_channel = os.getenv("BROWSER_CHANNEL", "msedge")
         delete_after_processing = os.getenv("DELETE_AFTER_PROCESSING", "false").lower() == "true"
+        mark_as_read = os.getenv("MARK_AS_READ", "true").lower() == "true"
         use_existing_browser = os.getenv("USE_EXISTING_BROWSER", "false").lower() == "true"
         cdp_port = int(os.getenv("CDP_PORT", "9222"))
         max_emails = int(os.getenv("MAX_EMAILS", "0"))
@@ -78,6 +80,7 @@ class Config:
             pdf_reader=pdf_reader,
             browser_channel=browser_channel,
             delete_after_processing=delete_after_processing,
+            mark_as_read=mark_as_read,
             use_existing_browser=use_existing_browser,
             cdp_port=cdp_port,
             max_emails=max_emails,

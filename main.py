@@ -119,15 +119,18 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
                     logger.documents_renamed += 1
                     session_pdfs.append(str(renamed))
 
-            # Mark email as read only if all documents processed successfully
+            # Post-download actions (only if all documents processed successfully)
             if all_ok:
                 try:
-                    email_client.mark_as_read(email_data.uid)
+                    if config.mark_as_read:
+                        email_client.mark_as_read(email_data.uid)
+                    else:
+                        email_client.track_uid_locally(email_data.uid)
                     if config.delete_after_processing:
                         email_client.delete_message(email_data.uid)
                     logger.emails_processed += 1
                 except Exception as e:
-                    logger.error(f"Errore marcatura email UID {email_data.uid}: {e}")
+                    logger.error(f"Errore post-elaborazione email UID {email_data.uid}: {e}")
             else:
                 logger.emails_skipped += 1
                 logger.warning(
