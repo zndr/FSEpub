@@ -519,6 +519,47 @@ class TextHandler(logging.Handler):
         self._widget.configure(state=tk.DISABLED)
 
 
+class Tooltip:
+    """Lightweight tooltip on hover for any tkinter widget."""
+
+    def __init__(self, widget: tk.Widget, text: str, delay: int = 500) -> None:
+        self._widget = widget
+        self._text = text
+        self._delay = delay
+        self._tip: tk.Toplevel | None = None
+        self._after_id: str | None = None
+        widget.bind("<Enter>", self._on_enter, add="+")
+        widget.bind("<Leave>", self._on_leave, add="+")
+
+    def _on_enter(self, _event: tk.Event) -> None:
+        self._after_id = self._widget.after(self._delay, self._show)
+
+    def _on_leave(self, _event: tk.Event) -> None:
+        if self._after_id:
+            self._widget.after_cancel(self._after_id)
+            self._after_id = None
+        self._hide()
+
+    def _show(self) -> None:
+        if self._tip:
+            return
+        x = self._widget.winfo_rootx() + 20
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tip = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tw, text=self._text, background="#ffffe0", relief="solid",
+            borderwidth=1, padx=4, pady=2, wraplength=300,
+        )
+        label.pack()
+
+    def _hide(self) -> None:
+        if self._tip:
+            self._tip.destroy()
+            self._tip = None
+
+
 class FSEApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -583,6 +624,7 @@ class FSEApp(tk.Tk):
 
         self._btn_check = tk.Button(btn_row, text="Controlla Email", command=self._check_email)
         self._btn_check.pack(side=tk.LEFT, padx=(0, 8))
+        Tooltip(self._btn_check, "Conta le email con referti da scaricare, senza avviare il download")
 
         self._btn_start = tk.Button(btn_row, text="Avvia", command=self._start_processing)
         self._btn_start.pack(side=tk.LEFT, padx=(0, 8))
@@ -598,7 +640,9 @@ class FSEApp(tk.Tk):
         tk.Label(max_row, text="Max email (0=tutte):").pack(side=tk.LEFT, padx=(0, 4))
         # Create the field here; _build_settings_tab already created it in _fields
         self._siss_max_email_var = self._fields["MAX_EMAILS"]
-        tk.Entry(max_row, textvariable=self._siss_max_email_var, width=6).pack(side=tk.LEFT)
+        max_email_entry = tk.Entry(max_row, textvariable=self._siss_max_email_var, width=6)
+        max_email_entry.pack(side=tk.LEFT)
+        Tooltip(max_email_entry, "Numero massimo di email da elaborare per sessione (0 = tutte)")
 
         # "Dopo il download" options
         post_frame = tk.LabelFrame(parent, text="Dopo il download", padx=8, pady=4)
@@ -619,6 +663,7 @@ class FSEApp(tk.Tk):
             command=self._on_delete_toggled,
         )
         self._siss_delete_cb.pack(anchor="w")
+        Tooltip(self._siss_delete_cb, "I messaggi verranno eliminati definitivamente dal server dopo il download")
 
         # Apply initial state
         self._on_delete_toggled()
@@ -719,6 +764,7 @@ class FSEApp(tk.Tk):
         self._ente_var = tk.StringVar()
         self._ente_combo = ttk.Combobox(filter_frame, textvariable=self._ente_var)
         self._ente_combo.grid(row=0, column=1, columnspan=3, sticky="ew", pady=2)
+        Tooltip(self._ente_combo, "Filtra i documenti per ente o struttura sanitaria di provenienza")
 
         # Date period row
         tk.Label(filter_frame, text="Periodo:", anchor="w").grid(
@@ -889,6 +935,10 @@ class FSEApp(tk.Tk):
         mail_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=(0, 8))
         mail_frame.columnconfigure(1, weight=1)
 
+        mail_tooltips = {
+            "IMAP_HOST": "Indirizzo del server di posta in arrivo (IMAP)",
+            "IMAP_PORT": "Porta del server IMAP (993 per connessioni SSL)",
+        }
         for r, key in enumerate(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"]):
             label, default, kind = spec[key]
             tk.Label(mail_frame, text=label, anchor="w").grid(
@@ -896,10 +946,11 @@ class FSEApp(tk.Tk):
             )
             var = tk.StringVar(value=default)
             show = "*" if kind == "password" else ""
-            tk.Entry(mail_frame, textvariable=var, show=show).grid(
-                row=r, column=1, sticky="ew", pady=2,
-            )
+            entry = tk.Entry(mail_frame, textvariable=var, show=show)
+            entry.grid(row=r, column=1, sticky="ew", pady=2)
             self._fields[key] = var
+            if key in mail_tooltips:
+                Tooltip(entry, mail_tooltips[key])
 
         # Test connection button
         r_test = len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"])
@@ -907,6 +958,7 @@ class FSEApp(tk.Tk):
             mail_frame, text="Test connessione", command=self._test_imap_connection,
         )
         self._btn_test_imap.grid(row=r_test, column=0, columnspan=2, pady=(6, 0))
+        Tooltip(self._btn_test_imap, "Verifica connessione e login al server di posta")
 
         # ── Right column: Browser e Download ──
         br_frame = tk.LabelFrame(top_frame, text="Browser e Download", padx=8, pady=6)
@@ -939,20 +991,20 @@ class FSEApp(tk.Tk):
 
         r += 1
         var = tk.BooleanVar(value=spec["USE_EXISTING_BROWSER"][1].lower() == "true")
-        tk.Checkbutton(br_frame, text="Usa browser CDP", variable=var).grid(
-            row=r, column=0, columnspan=3, sticky="w", pady=2,
-        )
+        cb_cdp = tk.Checkbutton(br_frame, text="Usa browser CDP", variable=var)
+        cb_cdp.grid(row=r, column=0, columnspan=3, sticky="w", pady=2)
         self._fields["USE_EXISTING_BROWSER"] = var
+        Tooltip(cb_cdp, "Connettiti a un browser gia' aperto tramite Chrome DevTools Protocol, invece di avviarne uno nuovo")
 
         r += 1
         tk.Label(br_frame, text="Porta CDP", anchor="w").grid(
             row=r, column=0, sticky="w", padx=(0, 8), pady=2,
         )
         var = tk.StringVar(value=spec["CDP_PORT"][1])
-        tk.Entry(br_frame, textvariable=var, width=10).grid(
-            row=r, column=1, sticky="w", pady=2,
-        )
+        cdp_port_entry = tk.Entry(br_frame, textvariable=var, width=10)
+        cdp_port_entry.grid(row=r, column=1, sticky="w", pady=2)
         self._fields["CDP_PORT"] = var
+        Tooltip(cdp_port_entry, "Porta di ascolto del browser per connessioni CDP")
 
         r += 1
         self._cdp_registry_var = tk.BooleanVar(value=False)
@@ -968,6 +1020,7 @@ class FSEApp(tk.Tk):
             state=tk.DISABLED if is_firefox or not self._default_browser_info else tk.NORMAL,
         )
         self._cdp_registry_cb.grid(row=r, column=0, columnspan=3, sticky="w", pady=2)
+        Tooltip(self._cdp_registry_cb, "Modifica il registro di Windows per avviare il browser predefinito con il supporto CDP attivo")
         self._sync_cdp_registry_checkbox()
 
         # ── Bottom (full-width): Parametri ──
@@ -982,19 +1035,19 @@ class FSEApp(tk.Tk):
             row=0, column=0, sticky="w", padx=(0, 8), pady=2,
         )
         var = tk.StringVar(value=spec["DOWNLOAD_TIMEOUT"][1])
-        tk.Entry(params_frame, textvariable=var, width=8).grid(
-            row=0, column=1, sticky="w", pady=2,
-        )
+        dl_timeout_entry = tk.Entry(params_frame, textvariable=var, width=8)
+        dl_timeout_entry.grid(row=0, column=1, sticky="w", pady=2)
         self._fields["DOWNLOAD_TIMEOUT"] = var
+        Tooltip(dl_timeout_entry, "Tempo massimo di attesa (in secondi) per il download di un documento")
 
         tk.Label(params_frame, text="Page timeout (sec)", anchor="w").grid(
             row=0, column=2, sticky="w", padx=(16, 8), pady=2,
         )
         var = tk.StringVar(value=spec["PAGE_TIMEOUT"][1])
-        tk.Entry(params_frame, textvariable=var, width=8).grid(
-            row=0, column=3, sticky="w", pady=2,
-        )
+        pg_timeout_entry = tk.Entry(params_frame, textvariable=var, width=8)
+        pg_timeout_entry.grid(row=0, column=3, sticky="w", pady=2)
         self._fields["PAGE_TIMEOUT"] = var
+        Tooltip(pg_timeout_entry, "Tempo massimo di attesa (in secondi) per il caricamento di una pagina")
 
         # Row 0 continued: console font size
         tk.Label(params_frame, text="Dim. carattere console", anchor="w").grid(
@@ -1018,10 +1071,10 @@ class FSEApp(tk.Tk):
 
         # Row 1: checkboxes
         var = tk.BooleanVar(value=spec["HEADLESS"][1].lower() == "true")
-        tk.Checkbutton(params_frame, text="Headless browser", variable=var).grid(
-            row=1, column=0, columnspan=6, sticky="w", pady=2,
-        )
+        cb_headless = tk.Checkbutton(params_frame, text="Headless browser", variable=var)
+        cb_headless.grid(row=1, column=0, columnspan=6, sticky="w", pady=2)
         self._fields["HEADLESS"] = var
+        Tooltip(cb_headless, "Esegui il browser in background, senza finestra visibile")
 
         # Save button centered
         tk.Button(
