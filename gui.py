@@ -1408,7 +1408,7 @@ class FSEApp(QMainWindow):
         values = self._get_field_values()
         try:
             _save_env_values(values)
-            self._log("Impostazioni salvate in " + ENV_FILE)
+            QMessageBox.information(self, "Impostazioni", "Impostazioni salvate correttamente.")
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Impossibile salvare: {e}")
 
