@@ -548,13 +548,13 @@ class FSEApp(tk.Tk):
         self._notebook = ttk.Notebook(self)
         self._notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 10))
 
-        # Tab 1: Integrazione SISS
+        # Tab 1: Scarica referti non letti
         siss_tab = tk.Frame(self._notebook, padx=8, pady=8)
-        self._notebook.add(siss_tab, text="Integrazione SISS")
+        self._notebook.add(siss_tab, text="Scarica referti non letti")
 
-        # Tab 2: Download Paziente
+        # Tab 2: Scarica referti singolo paziente
         patient_tab = tk.Frame(self._notebook, padx=8, pady=8)
-        self._notebook.add(patient_tab, text="Download Paziente")
+        self._notebook.add(patient_tab, text="Scarica referti singolo paziente")
 
         # Tab 3: Impostazioni (built first so fields exist for SISS tab)
         settings_tab = tk.Frame(self._notebook, padx=8, pady=8)
@@ -567,33 +567,10 @@ class FSEApp(tk.Tk):
 
     def _build_siss_tab(self, parent: tk.Frame) -> None:
         """Build the SISS Integration tab content."""
-        default_name = "Non rilevato"
-        if self._default_browser_info:
-            progid = self._default_browser_info["progid"]
-            friendly_names = {
-                "MSEdgeHTM": "Microsoft Edge",
-                "ChromeHTML": "Google Chrome",
-                "BraveHTML": "Brave",
-                "FirefoxURL": "Mozilla Firefox",
-                "FirefoxHTML": "Mozilla Firefox",
-            }
-            default_name = next(
-                (v for k, v in friendly_names.items() if progid.startswith(k)),
-                progid,
-            )
-
-        # Browser info frame
-        browser_frame = tk.LabelFrame(parent, text="Browser", padx=8, pady=6)
-        browser_frame.pack(fill=tk.X)
-
-        tk.Label(browser_frame, text=f"Browser predefinito: {default_name}").pack(anchor="w")
-
-        self._mismatch_label = tk.Label(
-            browser_frame, text="", fg="orange", wraplength=600, anchor="w", justify=tk.LEFT,
-        )
-        self._mismatch_label.pack(anchor="w", fill=tk.X)
-
-        self._update_browser_mismatch_warning()
+        # Browser info line (compact, no frame)
+        self._browser_info_label = tk.Label(parent, text="", anchor="w", fg="gray")
+        self._browser_info_label.pack(anchor="w")
+        self._update_browser_info_label()
 
         # Controls
         ctrl_frame = tk.LabelFrame(parent, text="Controlli", padx=8, pady=6)
@@ -628,7 +605,7 @@ class FSEApp(tk.Tk):
         console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
         console_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
-        self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10)
+        self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=16)
         self._console.pack(fill=tk.BOTH, expand=True)
 
     def _build_siss_doc_type_checkboxes(self, parent: tk.Widget) -> tuple[tk.BooleanVar, dict[str, tk.BooleanVar]]:
@@ -1037,28 +1014,35 @@ class FSEApp(tk.Tk):
         selected_label = self._browser_combo.get()
         channel = self._browser_map.get(selected_label, "msedge")
         self._fields["BROWSER_CHANNEL"].set(channel)
-        self._update_browser_mismatch_warning()
+        self._update_browser_info_label()
 
-    def _update_browser_mismatch_warning(self) -> None:
-        """Show/hide a warning if the selected browser differs from the system default."""
-        if not self._default_browser_info:
-            self._mismatch_label.configure(text="")
-            return
-
-        default_channel = self._default_browser_info.get("channel")
-        selected_channel = self._fields["BROWSER_CHANNEL"].get()
-
-        # Normalize: both None or both equal means match
-        if default_channel == selected_channel:
-            self._mismatch_label.configure(text="")
-        else:
-            self._mismatch_label.configure(
-                text=(
-                    "Attenzione: il browser selezionato e' diverso dal browser "
-                    "predefinito di sistema. Per usare la sessione SISS di "
-                    "Millewin/Medico2000, seleziona lo stesso browser."
-                ),
+    def _update_browser_info_label(self) -> None:
+        """Update the compact browser info text in the SISS tab."""
+        friendly_names = {
+            "MSEdgeHTM": "Microsoft Edge",
+            "ChromeHTML": "Google Chrome",
+            "BraveHTML": "Brave",
+            "FirefoxURL": "Mozilla Firefox",
+            "FirefoxHTML": "Mozilla Firefox",
+        }
+        default_name = "Non rilevato"
+        if self._default_browser_info:
+            progid = self._default_browser_info["progid"]
+            default_name = next(
+                (v for k, v in friendly_names.items() if progid.startswith(k)),
+                progid,
             )
+
+        text = f"Browser predefinito: {default_name}"
+
+        # Show selected browser if different from default
+        default_channel = self._default_browser_info.get("channel") if self._default_browser_info else None
+        selected_channel = self._fields["BROWSER_CHANNEL"].get()
+        if default_channel != selected_channel:
+            selected_label = self._browser_revmap.get(selected_channel, selected_channel)
+            text += f"  |  Browser selezionato: {selected_label}"
+
+        self._browser_info_label.configure(text=text)
 
     def _sync_cdp_registry_checkbox(self) -> None:
         """Read the current CDP registry status and update the checkbox."""
