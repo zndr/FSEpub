@@ -601,44 +601,131 @@ class FSEApp(tk.Tk):
         self._console.pack(fill=tk.BOTH, expand=True)
 
     def _build_settings_tab(self, parent: tk.Frame) -> None:
-        """Build the Settings tab content."""
-        for row_idx, (key, label, default, kind) in enumerate(SETTINGS_SPEC):
-            tk.Label(parent, text=label, anchor="w").grid(
-                row=row_idx, column=0, sticky="w", padx=(0, 8), pady=2,
+        """Build the Settings tab content with grouped LabelFrames."""
+        # Look-up dict from SETTINGS_SPEC for defaults
+        spec = {key: (label, default, kind) for key, label, default, kind in SETTINGS_SPEC}
+
+        # Top row: two columns side by side
+        top_frame = tk.Frame(parent)
+        top_frame.pack(fill=tk.X)
+        top_frame.columnconfigure(0, weight=1, uniform="top")
+        top_frame.columnconfigure(1, weight=1, uniform="top")
+
+        # ── Left column: Server Posta ──
+        mail_frame = tk.LabelFrame(top_frame, text="Server Posta", padx=8, pady=6)
+        mail_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=(0, 8))
+        mail_frame.columnconfigure(1, weight=1)
+
+        for r, key in enumerate(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"]):
+            label, default, kind = spec[key]
+            tk.Label(mail_frame, text=label, anchor="w").grid(
+                row=r, column=0, sticky="w", padx=(0, 8), pady=2,
             )
+            var = tk.StringVar(value=default)
+            show = "*" if kind == "password" else ""
+            tk.Entry(mail_frame, textvariable=var, show=show).grid(
+                row=r, column=1, sticky="ew", pady=2,
+            )
+            self._fields[key] = var
 
-            if kind == "bool":
-                var = tk.BooleanVar(value=default.lower() == "true")
-                cb = tk.Checkbutton(parent, variable=var)
-                cb.grid(row=row_idx, column=1, sticky="w", pady=2)
-                self._fields[key] = var
-            elif kind == "pdf_reader":
-                self._build_pdf_reader_row(parent, row_idx, key, default)
-            elif kind == "browser_selector":
-                self._build_browser_selector_row(parent, row_idx, key, default)
-            else:
-                var = tk.StringVar(value=default)
-                show = "*" if kind == "password" else ""
-                entry = tk.Entry(parent, textvariable=var, width=52, show=show)
-                entry.grid(row=row_idx, column=1, sticky="ew", pady=2)
-                self._fields[key] = var
+        # ── Right column: Browser e Download ──
+        br_frame = tk.LabelFrame(top_frame, text="Browser e Download", padx=8, pady=6)
+        br_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=(0, 8))
+        br_frame.columnconfigure(1, weight=1)
 
-                if kind == "dir":
-                    tk.Button(
-                        parent, text="Sfoglia...",
-                        command=lambda v=var: self._browse_dir(v),
-                    ).grid(row=row_idx, column=2, padx=(4, 0), pady=2)
-                elif kind == "exe":
-                    tk.Button(
-                        parent, text="Sfoglia...",
-                        command=lambda v=var: self._browse_exe(v),
-                    ).grid(row=row_idx, column=2, padx=(4, 0), pady=2)
-
-        parent.columnconfigure(1, weight=1)
-
-        tk.Button(parent, text="Salva Impostazioni", command=self._save_settings).grid(
-            row=len(SETTINGS_SPEC), column=0, columnspan=3, pady=(8, 0),
+        r = 0
+        tk.Label(br_frame, text="Browser", anchor="w").grid(
+            row=r, column=0, sticky="w", padx=(0, 8), pady=2,
         )
+        self._build_browser_selector_row(br_frame, r, "BROWSER_CHANNEL", spec["BROWSER_CHANNEL"][1])
+
+        r += 1
+        tk.Label(br_frame, text="Lettore PDF", anchor="w").grid(
+            row=r, column=0, sticky="w", padx=(0, 8), pady=2,
+        )
+        self._build_pdf_reader_row(br_frame, r, "PDF_READER", spec["PDF_READER"][1])
+
+        r += 1
+        tk.Label(br_frame, text="Dir. download", anchor="w").grid(
+            row=r, column=0, sticky="w", padx=(0, 8), pady=2,
+        )
+        var = tk.StringVar(value=spec["DOWNLOAD_DIR"][1])
+        tk.Entry(br_frame, textvariable=var).grid(row=r, column=1, sticky="ew", pady=2)
+        tk.Button(
+            br_frame, text="...",
+            command=lambda v=var: self._browse_dir(v),
+        ).grid(row=r, column=2, padx=(4, 0), pady=2)
+        self._fields["DOWNLOAD_DIR"] = var
+
+        r += 1
+        var = tk.BooleanVar(value=spec["USE_EXISTING_BROWSER"][1].lower() == "true")
+        tk.Checkbutton(br_frame, text="Usa browser CDP", variable=var).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=2,
+        )
+        self._fields["USE_EXISTING_BROWSER"] = var
+
+        r += 1
+        tk.Label(br_frame, text="Porta CDP", anchor="w").grid(
+            row=r, column=0, sticky="w", padx=(0, 8), pady=2,
+        )
+        var = tk.StringVar(value=spec["CDP_PORT"][1])
+        tk.Entry(br_frame, textvariable=var, width=10).grid(
+            row=r, column=1, sticky="w", pady=2,
+        )
+        self._fields["CDP_PORT"] = var
+
+        # ── Bottom (full-width): Parametri ──
+        params_frame = tk.LabelFrame(parent, text="Parametri", padx=8, pady=6)
+        params_frame.pack(fill=tk.X)
+        params_frame.columnconfigure(1, weight=1)
+        params_frame.columnconfigure(3, weight=1)
+
+        # Row 0: timeouts side by side
+        tk.Label(params_frame, text="Download timeout (sec)", anchor="w").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=2,
+        )
+        var = tk.StringVar(value=spec["DOWNLOAD_TIMEOUT"][1])
+        tk.Entry(params_frame, textvariable=var, width=8).grid(
+            row=0, column=1, sticky="w", pady=2,
+        )
+        self._fields["DOWNLOAD_TIMEOUT"] = var
+
+        tk.Label(params_frame, text="Page timeout (sec)", anchor="w").grid(
+            row=0, column=2, sticky="w", padx=(16, 8), pady=2,
+        )
+        var = tk.StringVar(value=spec["PAGE_TIMEOUT"][1])
+        tk.Entry(params_frame, textvariable=var, width=8).grid(
+            row=0, column=3, sticky="w", pady=2,
+        )
+        self._fields["PAGE_TIMEOUT"] = var
+
+        # Row 1: max emails
+        tk.Label(params_frame, text="Max email (0=tutte)", anchor="w").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=2,
+        )
+        var = tk.StringVar(value=spec["MAX_EMAILS"][1])
+        tk.Entry(params_frame, textvariable=var, width=8).grid(
+            row=1, column=1, sticky="w", pady=2,
+        )
+        self._fields["MAX_EMAILS"] = var
+
+        # Row 2: checkboxes side by side
+        var = tk.BooleanVar(value=spec["HEADLESS"][1].lower() == "true")
+        tk.Checkbutton(params_frame, text="Headless browser", variable=var).grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=2,
+        )
+        self._fields["HEADLESS"] = var
+
+        var = tk.BooleanVar(value=spec["DELETE_AFTER_PROCESSING"][1].lower() == "true")
+        tk.Checkbutton(
+            params_frame, text="Elimina email dopo elaborazione", variable=var,
+        ).grid(row=2, column=2, columnspan=2, sticky="w", pady=2)
+        self._fields["DELETE_AFTER_PROCESSING"] = var
+
+        # Save button centered
+        tk.Button(
+            params_frame, text="Salva Impostazioni", command=self._save_settings,
+        ).grid(row=3, column=0, columnspan=4, pady=(8, 0))
 
     def _build_pdf_reader_row(self, parent: tk.Widget, row: int, key: str, default: str) -> None:
         """Build the PDF reader selection row with combobox."""
@@ -655,7 +742,7 @@ class FSEApp(tk.Tk):
         frame.columnconfigure(0, weight=1)
 
         self._pdf_combo = ttk.Combobox(
-            frame, values=list(self._pdf_reader_map.keys()), state="readonly", width=49,
+            frame, values=list(self._pdf_reader_map.keys()), state="readonly",
         )
         self._pdf_combo.grid(row=0, column=0, sticky="ew")
         self._set_pdf_combo_from_value(default)
@@ -683,7 +770,7 @@ class FSEApp(tk.Tk):
         frame.columnconfigure(0, weight=1)
 
         self._browser_combo = ttk.Combobox(
-            frame, values=list(self._browser_map.keys()), state="readonly", width=49,
+            frame, values=list(self._browser_map.keys()), state="readonly",
         )
         self._browser_combo.grid(row=0, column=0, sticky="ew")
 
