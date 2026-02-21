@@ -92,12 +92,32 @@ class FileManager:
         return mapping_file
 
     def save_referti_report(self) -> Path | None:
-        successful = [m for m in self._mappings if m["renamed"]]
-        if not successful:
+        if not self._mappings:
             return None
 
+        successful = [m for m in self._mappings if m["renamed"]]
+        failed = [m for m in self._mappings if not m["renamed"]]
+
         now = datetime.now()
-        # Group by tag: {tag: {(cf, name): count}}
+
+        lines = [f"=== REFERTI SCARICATI - {now.strftime('%d/%m/%Y')} ore {now.strftime('%H:%M')} ===", ""]
+
+        # Failed downloads first
+        if failed:
+            fail_groups: dict[tuple[str, str], int] = {}
+            for m in failed:
+                key = (m["codice_fiscale"], m["patient_name"])
+                fail_groups[key] = fail_groups.get(key, 0) + 1
+            fail_total = sum(fail_groups.values())
+            lines.append(f"--- DOWNLOAD FALLITI ({fail_total}) ---")
+            for (cf, name), count in fail_groups.items():
+                entry = f"{cf}  {name}"
+                if count > 1:
+                    entry += f" ({count})"
+                lines.append(entry)
+            lines.append("")
+
+        # Group successful by tag: {tag: {(cf, name): count}}
         groups: dict[str, dict[tuple[str, str], int]] = {}
         for m in successful:
             tag = self._tipologia_tag(m["disciplina"])
@@ -105,7 +125,6 @@ class FileManager:
             groups.setdefault(tag, {})
             groups[tag][key] = groups[tag].get(key, 0) + 1
 
-        lines = [f"=== REFERTI SCARICATI - {now.strftime('%d/%m/%Y')} ore {now.strftime('%H:%M')} ===", ""]
         total = 0
         for tag in ("LAB", "PS", "DIMOSP", "SPEC", "DOC"):
             patients = groups.get(tag)
