@@ -901,6 +901,13 @@ class FSEApp(tk.Tk):
             )
             self._fields[key] = var
 
+        # Test connection button
+        r_test = len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"])
+        self._btn_test_imap = tk.Button(
+            mail_frame, text="Test connessione", command=self._test_imap_connection,
+        )
+        self._btn_test_imap.grid(row=r_test, column=0, columnspan=2, pady=(6, 0))
+
         # ── Right column: Browser e Download ──
         br_frame = tk.LabelFrame(top_frame, text="Browser e Download", padx=8, pady=6)
         br_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=(0, 8))
@@ -1340,6 +1347,38 @@ class FSEApp(tk.Tk):
             self._log("Impostazioni salvate in " + ENV_FILE)
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile salvare: {e}")
+
+    # ---- Test IMAP connection ----
+
+    def _test_imap_connection(self) -> None:
+        self._btn_test_imap.configure(state=tk.DISABLED, text="Test in corso...")
+        threading.Thread(target=self._test_imap_worker, daemon=True).start()
+
+    def _test_imap_worker(self) -> None:
+        try:
+            self._save_settings_quietly()
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            client = EmailClient(config, logger)
+            client.connect()
+            client.disconnect()
+            self.after(0, lambda: messagebox.showinfo(
+                "Test connessione",
+                f"Connessione riuscita!\n\n"
+                f"Server: {config.imap_host}:{config.imap_port}\n"
+                f"Utente: {config.email_user}",
+            ))
+        except Exception as e:
+            err_msg = str(e) if str(e) and str(e) != "None" else (
+                f"{type(e).__name__}: {e.args}" if e.args else type(e).__name__
+            )
+            self.after(0, lambda m=err_msg: messagebox.showerror(
+                "Test connessione", f"Connessione fallita:\n\n{m}",
+            ))
+        finally:
+            self.after(0, lambda: self._btn_test_imap.configure(
+                state=tk.NORMAL, text="Test connessione",
+            ))
 
     # ---- Check email ----
 
