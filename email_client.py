@@ -55,6 +55,7 @@ class EmailClient:
         self._logger = logger
         self._connection: poplib.POP3_SSL | poplib.POP3 | None = None
         self._uid_to_msgnum: dict[str, int] = {}
+        self.limit_reached: bool = False
 
     def connect(self) -> None:
         host = self._config.pop3_host
@@ -148,6 +149,7 @@ class EmailClient:
 
         emails: list[EmailData] = []
         self._uid_to_msgnum = {}
+        self.limit_reached = False
         max_emails = self._config.max_emails
         for msg_num, uid in new_msgs:
             email_data = self._fetch_and_parse(msg_num, uid)
@@ -156,6 +158,7 @@ class EmailClient:
                 self._uid_to_msgnum[uid] = msg_num
                 # Apply max_emails limit after filtering (0 = unlimited)
                 if max_emails > 0 and len(emails) >= max_emails:
+                    self.limit_reached = True
                     self._logger.info(
                         f"Raggiunto limite di {max_emails} email FSE, "
                         f"le restanti saranno processate al prossimo avvio"

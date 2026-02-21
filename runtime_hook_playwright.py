@@ -4,8 +4,8 @@ import os
 import sys
 
 if getattr(sys, "frozen", False):
-    # In frozen mode, the Playwright driver files are bundled alongside the exe
-    _bundle_dir = os.path.dirname(sys.executable)
+    # In frozen mode, data files are in _internal/ (PyInstaller 6.x onedir)
+    _bundle_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     _driver_dir = os.path.join(_bundle_dir, "playwright", "driver")
     _node_exe = os.path.join(_driver_dir, "node.exe")
     _cli_js = os.path.join(_driver_dir, "package", "cli.js")

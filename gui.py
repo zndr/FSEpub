@@ -970,7 +970,15 @@ class FSEApp(tk.Tk):
             emails = client.fetch_unread_emails()
             client.disconnect()
             count = len(emails)
-            msg = f"{count} email con referti da scaricare"
+            if count == 0:
+                msg = "Nessuna email con referti da scaricare"
+            elif client.limit_reached:
+                msg = (
+                    f"Trovati {count} messaggi da scaricare "
+                    f"(raggiunto limite specificato nelle impostazioni)"
+                )
+            else:
+                msg = f"{count} email con referti da scaricare"
             self.after(0, self._log, msg)
             self.after(0, lambda: messagebox.showinfo("Conteggio Email", msg))
         except Exception as e:

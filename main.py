@@ -5,9 +5,16 @@ import threading
 
 from app_paths import paths
 
-# Set Playwright browsers path for frozen/installed mode
+# Set Playwright browsers path to a writable location
+# In installed mode, app_dir is under Program Files (read-only);
+# use AppData instead so Chromium can be downloaded without admin rights.
 if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(paths.app_dir / "playwright_browsers")
+    if paths._data_dir != paths.app_dir:
+        # Installed mode: writable data directory (%APPDATA%/FSE Processor)
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(paths._data_dir / "playwright_browsers")
+    else:
+        # Portable mode: relative to app
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(paths.app_dir / "playwright_browsers")
 
 from config import Config
 from logger_module import ProcessingLogger

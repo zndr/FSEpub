@@ -301,34 +301,25 @@ class FSEBrowser:
             )
         elif channel == "chromium":
             # Bundled Chromium (no channel) - auto-download if needed
+            self._context = self._launch_bundled_chromium()
+        elif channel in ("chrome", "msedge"):
             try:
                 self._context = self._playwright.chromium.launch_persistent_context(
                     user_data_dir=str(self._config.browser_data_dir),
                     headless=self._config.headless,
                     accept_downloads=True,
+                    channel=channel,
                     args=["--disable-blink-features=AutomationControlled"],
                 )
             except Exception as e:
-                if "Executable doesn't exist" in str(e):
-                    self._logger.info("Chromium non trovato, avvio download automatico...")
-                    import subprocess, sys
-                    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-                    self._context = self._playwright.chromium.launch_persistent_context(
-                        user_data_dir=str(self._config.browser_data_dir),
-                        headless=self._config.headless,
-                        accept_downloads=True,
-                        args=["--disable-blink-features=AutomationControlled"],
+                if "Target page, context or browser has been closed" in str(e):
+                    self._logger.warning(
+                        f"Lancio {channel} fallito (versione incompatibile con Playwright). "
+                        f"Fallback a Chromium integrato..."
                     )
+                    self._context = self._launch_bundled_chromium()
                 else:
                     raise
-        elif channel in ("chrome", "msedge"):
-            self._context = self._playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self._config.browser_data_dir),
-                headless=self._config.headless,
-                accept_downloads=True,
-                channel=channel,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
         else:
             # Custom executable path (e.g. Brave)
             self._context = self._playwright.chromium.launch_persistent_context(
@@ -460,6 +451,47 @@ class FSEBrowser:
             f"Connesso a browser esistente (CDP porta {port}, "
             f"{len(self._context.pages)} tab totali)"
         )
+
+    def _launch_bundled_chromium(self) -> BrowserContext:
+        """Launch Playwright's bundled Chromium as fallback when system browser is incompatible."""
+        try:
+            return self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(self._config.browser_data_dir),
+                headless=self._config.headless,
+                accept_downloads=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+        except Exception as e:
+            if "Executable doesn't exist" in str(e):
+                self._logger.info("Chromium non trovato, avvio download automatico...")
+                self._install_chromium()
+                return self._playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(self._config.browser_data_dir),
+                    headless=self._config.headless,
+                    accept_downloads=True,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+            raise
+
+    def _install_chromium(self) -> None:
+        """Install Chromium using the bundled Playwright driver (frozen) or Python (dev)."""
+        import sys
+        if getattr(sys, "frozen", False):
+            # Frozen mode: use bundled node.exe + Playwright CLI
+            # PyInstaller 6.x onedir puts data files in _internal/ (sys._MEIPASS)
+            bundle_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+            node_exe = os.path.join(bundle_dir, "playwright", "driver", "node.exe")
+            cli_js = os.path.join(bundle_dir, "playwright", "driver", "package", "cli.js")
+            if os.path.exists(node_exe) and os.path.exists(cli_js):
+                subprocess.run([node_exe, cli_js, "install", "chromium"], check=True)
+            else:
+                raise RuntimeError(
+                    f"Driver Playwright non trovato nel bundle. "
+                    f"Cercato node.exe in: {node_exe}"
+                )
+        else:
+            # Dev mode: use Python
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
 
     def _resolve_exe_from_channel(self, channel: str) -> str | None:
         """Resolve a Playwright channel name to an exe path via App Paths registry."""
@@ -595,20 +627,57 @@ class FSEBrowser:
         self._page.wait_for_load_state("networkidle")
         self._logger.info("Login manuale completato, proseguo con l'automazione")
 
-    def _fill_codice_fiscale(self, codice_fiscale: str) -> None:
-        """Fill the codice fiscale field and submit the search."""
+    def _wait_for_spinner(self, timeout: int = 15000) -> None:
+        """Wait for the ngx-spinner overlay to disappear before interacting with the page."""
+        spinner = self._page.locator("ngx-spinner .overlay")
+        try:
+            spinner.wait_for(state="hidden", timeout=timeout)
+        except Exception:
+            pass  # Spinner might not exist on this page, that's fine
+
+    def _navigate_to_referti(self, codice_fiscale: str) -> None:
+        """Navigate to the Referti tab, adapting to the current page state.
+
+        The Angular SPA can land on different pages depending on state:
+        - Search page (has #inputcf) → fill CF, click Cerca, Accedi, Referti
+        - Patient fascicolo (has Referti tab) → click Referti directly
+        """
+        self._wait_for_spinner()
+
+        # Step 1: Fill CF and click Cerca (only if search form is visible)
         cf_input = self._page.locator("#inputcf")
-        cf_input.fill(codice_fiscale)
-        self._logger.info(f"Codice fiscale inserito: {codice_fiscale}")
-        # Click "Cerca" button to submit
-        self._page.get_by_role("button", name="Cerca").click()
+        if cf_input.is_visible(timeout=3000):
+            cf_input.fill(codice_fiscale)
+            self._logger.info(f"Codice fiscale inserito: {codice_fiscale}")
+            self._wait_for_spinner()
+            cerca = self._page.get_by_role("button", name="Cerca")
+            if cerca.is_visible(timeout=3000):
+                cerca.click()
+                self._page.wait_for_load_state("networkidle")
+                self._wait_for_spinner()
+        else:
+            self._logger.info("Form ricerca non presente, pagina gia' nel fascicolo")
+
+        # Step 2: Click "Accedi" to enter patient FSE (only if visible)
+        accedi_btn = self._page.locator("button.btn-xlarge")
+        if accedi_btn.is_visible(timeout=3000):
+            accedi_btn.click()
+            self._page.wait_for_load_state("networkidle")
+            self._wait_for_spinner()
+
+        # Step 3: Click "Referti" tab
+        self._logger.info("Ricerca tab 'Referti' nella pagina...")
+        referti = self._page.get_by_text("Referti", exact=True).first
+        if referti.is_visible(timeout=5000):
+            self._logger.info("Tab 'Referti' trovato, click...")
+            referti.click()
+        else:
+            # Broader fallback
+            self._logger.warning("Tab 'Referti' non trovato con exact match, tentativo parziale...")
+            self._page.get_by_text("Referti").first.click()
         self._page.wait_for_load_state("networkidle")
-        # Click "Accedi" button to enter the patient's FSE
-        self._page.locator("button.btn-xlarge").click()
-        self._page.wait_for_load_state("networkidle")
-        # Click "Referti" link
-        self._page.locator("span", has_text="Referti").click()
-        self._page.wait_for_load_state("networkidle")
+        self._wait_for_spinner()
+        self._logger.info(f"Pagina referti caricata: {self._page.url}")
 
     def process_patient(self, fse_link: str, patient_name: str, codice_fiscale: str,
                         stop_event: threading.Event | None = None) -> list[DocumentResult]:
@@ -626,12 +695,14 @@ class FSEBrowser:
 
         try:
             self._page.goto(fse_link, wait_until="networkidle")
+            self._wait_for_spinner()
 
             # Check if we need to click "Accedi" (session might already be active)
             accedi = self._page.get_by_role("button", name="Accedi")
             if accedi.is_visible(timeout=3000):
                 accedi.click()
                 self._page.wait_for_load_state("networkidle")
+                self._wait_for_spinner()
 
             # Check if we got redirected to SSO (session expired)
             if "idpcrlmain" in self._page.url or "ssoauth" in self._page.url:
@@ -662,8 +733,8 @@ class FSEBrowser:
                     accedi.click()
                     self._page.wait_for_load_state("networkidle")
 
-            # Fill the patient's codice fiscale, click Cerca, Accedi, Referti
-            self._fill_codice_fiscale(codice_fiscale)
+            # Navigate to Referti tab (adapts to page state)
+            self._navigate_to_referti(codice_fiscale)
 
             # Wait for table to appear
             self._page.wait_for_selector("table tbody tr", state="attached")
