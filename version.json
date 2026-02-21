@@ -1,6 +1,6 @@
 {
-    "Version": "1.1.0",
-    "ReleaseNotes": "Guida utente HTML, tab Paziente con filtri avanzati, test connessione IMAP, tooltip controlli, semplificazione impostazioni CDP.",
+    "Version": "2.0.0",
+    "ReleaseNotes": "Migrazione interfaccia grafica da Tkinter a PySide6 (Qt6) per un look moderno e nativo.",
     "DownloadUrl": "",
     "ReleaseDate": "2026-02-21",
     "Sha256Hash": "",
