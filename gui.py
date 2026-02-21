@@ -41,6 +41,7 @@ SETTINGS_SPEC = [
     ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "60", "int"),
     ("PAGE_TIMEOUT", "Page timeout (sec)", "30", "int"),
     ("DELETE_AFTER_PROCESSING", "Elimina email dopo elaborazione", "false", "bool"),
+    ("MAX_EMAILS", "Max email da processare (0=tutte)", "3", "int"),
 ]
 
 # Sentinel values for PDF reader selection

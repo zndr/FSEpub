@@ -148,11 +148,19 @@ class EmailClient:
 
         emails: list[EmailData] = []
         self._uid_to_msgnum = {}
+        max_emails = self._config.max_emails
         for msg_num, uid in new_msgs:
             email_data = self._fetch_and_parse(msg_num, uid)
             if email_data:
                 emails.append(email_data)
                 self._uid_to_msgnum[uid] = msg_num
+                # Apply max_emails limit after filtering (0 = unlimited)
+                if max_emails > 0 and len(emails) >= max_emails:
+                    self._logger.info(
+                        f"Raggiunto limite di {max_emails} email FSE, "
+                        f"le restanti saranno processate al prossimo avvio"
+                    )
+                    break
 
         self._logger.info(f"Trovate {len(emails)} email con referti FSE")
         return emails

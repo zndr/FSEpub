@@ -30,6 +30,7 @@ class Config:
     delete_after_processing: bool
     use_existing_browser: bool
     cdp_port: int
+    max_emails: int  # 0 = unlimited
 
     @classmethod
     def load(cls, env_path: str | None = None) -> "Config":
@@ -60,6 +61,7 @@ class Config:
         delete_after_processing = os.getenv("DELETE_AFTER_PROCESSING", "false").lower() == "true"
         use_existing_browser = os.getenv("USE_EXISTING_BROWSER", "false").lower() == "true"
         cdp_port = int(os.getenv("CDP_PORT", "9222"))
+        max_emails = int(os.getenv("MAX_EMAILS", "0"))
 
         config = cls(
             email_user=email_user,
@@ -78,6 +80,7 @@ class Config:
             delete_after_processing=delete_after_processing,
             use_existing_browser=use_existing_browser,
             cdp_port=cdp_port,
+            max_emails=max_emails,
         )
         config._create_directories()
         return config
