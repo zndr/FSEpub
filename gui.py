@@ -3,6 +3,7 @@
 import ctypes
 import logging
 import os
+import re
 import threading
 import tkinter as tk
 import traceback
@@ -14,6 +15,8 @@ from tkinter.scrolledtext import ScrolledText
 from app_paths import paths
 from version import __version__
 from browser_automation import (
+    FSEBrowser,
+    FSE_BASE_URL,
     detect_default_browser,
     get_cdp_registry_status,
     enable_cdp_in_registry,
@@ -21,6 +24,7 @@ from browser_automation import (
 )
 from config import Config
 from email_client import EmailClient
+from file_manager import FileManager
 from logger_module import ProcessingLogger
 from main import run_processing
 
@@ -31,8 +35,8 @@ ENV_FILE = str(paths.settings_file)
 SETTINGS_SPEC = [
     ("EMAIL_USER", "Email utente", "", "text"),
     ("EMAIL_PASS", "Email password", "", "password"),
-    ("IMAP_HOST", "POP3 Host", "mail-crs-lombardia.fastweb360.it", "text"),
-    ("IMAP_PORT", "POP3 Port", "995", "int"),
+    ("IMAP_HOST", "IMAP Host", "mail-crs-lombardia.fastweb360.it", "text"),
+    ("IMAP_PORT", "IMAP Port", "993", "int"),
     ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
     ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
     ("PDF_READER", "Lettore PDF", "default", "pdf_reader"),
@@ -50,6 +54,12 @@ PDF_READER_DEFAULT = "default"
 PDF_READER_CUSTOM = "__custom__"
 PDF_READER_DEFAULT_LABEL = "Predefinito di sistema"
 PDF_READER_CUSTOM_LABEL = "Personalizzato..."
+
+DOCUMENT_TYPES = [
+    ("REFERTO", "Referto", True),
+    ("LETTERA DIMISSIONE", "Lettera Dimissione", True),
+    ("VERBALE PRONTO SOCCORSO", "Verbale Pronto Soccorso", True),
+]
 
 
 def _norm(path: str) -> str:
@@ -500,6 +510,8 @@ class FSEApp(tk.Tk):
 
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
+        self._patient_stop_event = threading.Event()
+        self._patient_worker: threading.Thread | None = None
         self._fields: dict[str, tk.Variable] = {}
 
         self._build_ui()
@@ -520,13 +532,18 @@ class FSEApp(tk.Tk):
         siss_tab = tk.Frame(self._notebook, padx=8, pady=8)
         self._notebook.add(siss_tab, text="Integrazione SISS")
 
-        # Tab 2: Impostazioni (built first so fields exist for SISS tab)
+        # Tab 2: Download Paziente
+        patient_tab = tk.Frame(self._notebook, padx=8, pady=8)
+        self._notebook.add(patient_tab, text="Download Paziente")
+
+        # Tab 3: Impostazioni (built first so fields exist for SISS tab)
         settings_tab = tk.Frame(self._notebook, padx=8, pady=8)
         self._notebook.add(settings_tab, text="Impostazioni")
         self._build_settings_tab(settings_tab)
 
         # Build SISS tab after settings so _fields["BROWSER_CHANNEL"] exists
         self._build_siss_tab(siss_tab)
+        self._build_patient_tab(patient_tab)
 
     def _build_siss_tab(self, parent: tk.Frame) -> None:
         """Build the SISS Integration tab content."""
@@ -594,12 +611,68 @@ class FSEApp(tk.Tk):
 
         tk.Button(ctrl_frame, text="Esci", command=self.destroy).pack(side=tk.RIGHT)
 
+        # Document type checkboxes
+        self._siss_doc_vars = self._build_doc_type_checkboxes(parent)
+
         # Console
         console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
         console_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
         self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10)
         self._console.pack(fill=tk.BOTH, expand=True)
+
+    @staticmethod
+    def _build_doc_type_checkboxes(parent: tk.Widget) -> dict[str, tk.BooleanVar]:
+        """Create a LabelFrame with document type checkboxes. Returns dict[type_key, BooleanVar]."""
+        frame = tk.LabelFrame(parent, text="Tipologie documento", padx=8, pady=4)
+        frame.pack(fill=tk.X, pady=(8, 0))
+        doc_vars: dict[str, tk.BooleanVar] = {}
+        for type_key, label, default_on in DOCUMENT_TYPES:
+            var = tk.BooleanVar(value=default_on)
+            tk.Checkbutton(frame, text=label, variable=var).pack(side=tk.LEFT, padx=(0, 16))
+            doc_vars[type_key] = var
+        return doc_vars
+
+    @staticmethod
+    def _get_selected_types(doc_vars: dict[str, tk.BooleanVar]) -> set[str]:
+        """Return the set of selected document type keys."""
+        return {key for key, var in doc_vars.items() if var.get()}
+
+    def _build_patient_tab(self, parent: tk.Frame) -> None:
+        """Build the Download Paziente tab content."""
+        # CF input
+        input_frame = tk.LabelFrame(parent, text="Codice Fiscale", padx=8, pady=6)
+        input_frame.pack(fill=tk.X)
+        input_frame.columnconfigure(1, weight=1)
+
+        tk.Label(input_frame, text="CF:", anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
+        self._cf_var = tk.StringVar()
+        self._cf_entry = tk.Entry(input_frame, textvariable=self._cf_var, font=("Consolas", 11))
+        self._cf_entry.grid(row=0, column=1, sticky="ew", pady=2)
+
+        # Document type checkboxes (independent from SISS tab)
+        self._patient_doc_vars = self._build_doc_type_checkboxes(parent)
+
+        # Controls
+        ctrl_frame = tk.Frame(parent)
+        ctrl_frame.pack(fill=tk.X, pady=(8, 0))
+
+        self._btn_patient_start = tk.Button(
+            ctrl_frame, text="Avvia Download", command=self._start_patient_download,
+        )
+        self._btn_patient_start.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._btn_patient_stop = tk.Button(
+            ctrl_frame, text="Interrompi", command=self._stop_patient_download, state=tk.DISABLED,
+        )
+        self._btn_patient_stop.pack(side=tk.LEFT)
+
+        # Console
+        console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
+        console_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+
+        self._patient_console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10)
+        self._patient_console.pack(fill=tk.BOTH, expand=True)
 
     def _build_settings_tab(self, parent: tk.Frame) -> None:
         """Build the Settings tab content with grouped LabelFrames."""
@@ -1045,7 +1118,7 @@ class FSEApp(tk.Tk):
 
     def _check_email(self) -> None:
         self._btn_check.configure(state=tk.DISABLED)
-        self._log("Connessione POP3 per conteggio email...")
+        self._log("Connessione IMAP per conteggio email...")
         threading.Thread(target=self._check_email_worker, daemon=True).start()
 
     def _check_email_worker(self) -> None:
@@ -1090,6 +1163,9 @@ class FSEApp(tk.Tk):
         if self._worker and self._worker.is_alive():
             messagebox.showwarning("Attenzione", "Processamento gia' in corso")
             return
+        if self._patient_worker and self._patient_worker.is_alive():
+            messagebox.showwarning("Attenzione", "Download paziente in corso, attendere il completamento")
+            return
 
         self._save_settings_quietly()
         self._stop_event.clear()
@@ -1111,7 +1187,8 @@ class FSEApp(tk.Tk):
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
-            run_processing(config, logger, self._stop_event)
+            selected = self._get_selected_types(self._siss_doc_vars)
+            run_processing(config, logger, self._stop_event, allowed_types=selected or None)
         except Exception as e:
             self.after(0, self._log, f"Errore fatale: {e}")
 
@@ -1127,6 +1204,97 @@ class FSEApp(tk.Tk):
         self._stop_event.set()
         self._log("Richiesta interruzione inviata...")
         self._btn_stop.configure(state=tk.DISABLED)
+
+    # ---- Patient download ----
+
+    def _patient_log(self, msg: str) -> None:
+        """Append a message to the patient console (main-thread safe)."""
+        self._patient_console.configure(state=tk.NORMAL)
+        self._patient_console.insert(tk.END, msg + "\n")
+        self._patient_console.see(tk.END)
+        self._patient_console.configure(state=tk.DISABLED)
+
+    def _start_patient_download(self) -> None:
+        if self._patient_worker and self._patient_worker.is_alive():
+            messagebox.showwarning("Attenzione", "Download paziente gia' in corso")
+            return
+        if self._worker and self._worker.is_alive():
+            messagebox.showwarning("Attenzione", "Processamento SISS in corso, attendere il completamento")
+            return
+
+        cf = self._cf_var.get().strip().upper()
+        if not re.match(r"^[A-Z0-9]{16}$", cf):
+            messagebox.showwarning("Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
+            return
+
+        selected = self._get_selected_types(self._patient_doc_vars)
+        if not selected:
+            messagebox.showwarning("Errore", "Seleziona almeno una tipologia di documento")
+            return
+
+        self._save_settings_quietly()
+        self._patient_stop_event.clear()
+        self._btn_patient_start.configure(state=tk.DISABLED)
+        self._btn_patient_stop.configure(state=tk.NORMAL)
+        self._patient_log(f"--- Avvio download per CF: {cf} ---")
+
+        self._patient_worker = threading.Thread(
+            target=self._patient_download_worker, args=(cf, selected), daemon=True,
+        )
+        self._patient_worker.start()
+        self._poll_patient_worker()
+
+    def _patient_download_worker(self, codice_fiscale: str, allowed_types: set[str]) -> None:
+        try:
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            handler = TextHandler(self._patient_console)
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+            logger._logger.addHandler(handler)
+
+            file_manager = FileManager(config, logger)
+            browser = FSEBrowser(config, logger)
+            try:
+                browser.start()
+                browser.wait_for_manual_login()
+
+                doc_results = browser.process_patient_all_dates(
+                    codice_fiscale, self._patient_stop_event, allowed_types,
+                )
+
+                downloaded = 0
+                for result in doc_results:
+                    if result.skipped or result.error or not result.download_path:
+                        continue
+                    downloaded += 1
+                    file_manager.rename_download(
+                        download_path=result.download_path,
+                        patient_name=codice_fiscale,
+                        codice_fiscale=codice_fiscale,
+                        disciplina=result.disciplina,
+                        fse_link=f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}",
+                    )
+
+                logger.info(f"Download completato: {downloaded} documenti scaricati")
+                file_manager.save_mappings()
+            finally:
+                browser.stop()
+        except Exception as e:
+            self.after(0, self._patient_log, f"Errore fatale: {e}")
+
+    def _poll_patient_worker(self) -> None:
+        if self._patient_worker and self._patient_worker.is_alive():
+            self.after(500, self._poll_patient_worker)
+        else:
+            self._btn_patient_start.configure(state=tk.NORMAL)
+            self._btn_patient_stop.configure(state=tk.DISABLED)
+            self._patient_log("--- Download terminato ---")
+
+    def _stop_patient_download(self) -> None:
+        self._patient_stop_event.set()
+        self._patient_log("Richiesta interruzione inviata...")
+        self._btn_patient_stop.configure(state=tk.DISABLED)
 
 
 if __name__ == "__main__":

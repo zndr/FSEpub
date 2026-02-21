@@ -23,7 +23,8 @@ from browser_automation import FSEBrowser
 from file_manager import FileManager
 
 
-def run_processing(config: Config, logger: ProcessingLogger, stop_event: threading.Event | None = None) -> None:
+def run_processing(config: Config, logger: ProcessingLogger, stop_event: threading.Event | None = None,
+                    allowed_types: set[str] | None = None) -> None:
     """Core processing logic, reusable from CLI and GUI."""
 
     def stopped() -> bool:
@@ -31,12 +32,12 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
 
     logger.info("=== Avvio processamento FSE ===")
 
-    # Connect to POP3
+    # Connect to IMAP
     email_client = EmailClient(config, logger)
     try:
         email_client.connect()
     except Exception as e:
-        logger.error(f"Connessione POP3 fallita: {e}")
+        logger.error(f"Connessione IMAP fallita: {e}")
         return
 
     if stopped():
@@ -92,6 +93,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
             doc_results = browser.process_patient(
                 email_data.fse_link, email_data.patient_name,
                 email_data.codice_fiscale, stop_event=stop_event,
+                allowed_types=allowed_types,
             )
 
             all_ok = True

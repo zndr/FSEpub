@@ -1,5 +1,5 @@
+import imaplib
 import json
-import poplib
 import re
 import socket
 import ssl
@@ -12,7 +12,7 @@ from app_paths import paths
 from config import Config
 from logger_module import ProcessingLogger
 
-# Persistent file tracking processed UIDs (POP3 has no server-side read flags)
+# Persistent file tracking processed UIDs (backup for IMAP \Seen flag)
 _PROCESSED_UIDS_FILE: Path = paths._data_dir / "processed_uids.json"
 
 
@@ -53,19 +53,18 @@ class EmailClient:
     def __init__(self, config: Config, logger: ProcessingLogger) -> None:
         self._config = config
         self._logger = logger
-        self._connection: poplib.POP3_SSL | poplib.POP3 | None = None
-        self._uid_to_msgnum: dict[str, int] = {}
+        self._connection: imaplib.IMAP4_SSL | imaplib.IMAP4 | None = None
         self.limit_reached: bool = False
 
     def connect(self) -> None:
-        host = self._config.pop3_host
-        port = self._config.pop3_port
-        self._logger.info(f"Connessione POP3 a {host}:{port}")
+        host = self._config.imap_host
+        port = self._config.imap_port
+        self._logger.info(f"Connessione IMAP a {host}:{port}")
         try:
-            if self._config.pop3_use_ssl:
+            if self._config.imap_use_ssl:
                 ctx = ssl.create_default_context()
                 try:
-                    self._connection = poplib.POP3_SSL(host, port, context=ctx)
+                    self._connection = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
                 except ssl.SSLCertVerificationError:
                     self._logger.warning(
                         "Certificato SSL del server non valido, tentativo senza verifica certificato..."
@@ -73,9 +72,9 @@ class EmailClient:
                     ctx = ssl.create_default_context()
                     ctx.check_hostname = False
                     ctx.verify_mode = ssl.CERT_NONE
-                    self._connection = poplib.POP3_SSL(host, port, context=ctx)
+                    self._connection = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
             else:
-                self._connection = poplib.POP3(host, port)
+                self._connection = imaplib.IMAP4(host, port)
         except socket.gaierror:
             raise ConnectionError(
                 f"Impossibile risolvere il server '{host}'. Controlla il nome host."
@@ -96,66 +95,79 @@ class EmailClient:
             raise ConnectionError(
                 f"Errore di rete connettendo a {host}:{port}: {e.strerror or e}"
             )
-        except poplib.error_proto as e:
+        except imaplib.IMAP4.error as e:
             msg = str(e)
-            raise ConnectionError(f"Errore POP3 connettendo a {host}:{port}: {msg}")
+            raise ConnectionError(f"Errore IMAP connettendo a {host}:{port}: {msg}")
         except Exception as e:
             raise ConnectionError(
                 f"Errore imprevisto connettendo a {host}:{port}: {type(e).__name__}: {e}"
             )
 
         try:
-            self._connection.user(self._config.email_user)
-            self._connection.pass_(self._config.email_pass)
-        except poplib.error_proto as e:
-            raise ConnectionError(f"Login POP3 fallito: {e}")
+            self._connection.login(self._config.email_user, self._config.email_pass)
+        except imaplib.IMAP4.error as e:
+            raise ConnectionError(f"Login IMAP fallito: {e}")
 
-        self._logger.info("Login POP3 riuscito")
+        # Select INBOX
+        try:
+            self._connection.select("INBOX")
+        except imaplib.IMAP4.error as e:
+            raise ConnectionError(f"Selezione INBOX fallita: {e}")
+
+        self._logger.info("Login IMAP riuscito")
 
     def disconnect(self) -> None:
         if self._connection:
             try:
-                self._connection.quit()
+                self._connection.close()
+            except Exception:
+                pass
+            try:
+                self._connection.logout()
             except Exception:
                 pass
             self._connection = None
 
     def fetch_unread_emails(self) -> list[EmailData]:
         if not self._connection:
-            raise RuntimeError("Non connesso al server POP3")
+            raise RuntimeError("Non connesso al server IMAP")
 
-        # Get persistent UIDs for all messages on the server
-        resp, uidl_list, _ = self._connection.uidl()
-        # uidl_list: [b"1 <uid>", b"2 <uid>", ...]
-        server_msgs: list[tuple[int, str]] = []
-        for item in uidl_list:
-            parts = item.decode().split(None, 1)
-            if len(parts) == 2:
-                msg_num = int(parts[0])
-                uid = parts[1]
-                server_msgs.append((msg_num, uid))
+        # Search for unseen messages using UID commands
+        status, data = self._connection.uid("SEARCH", None, "UNSEEN")
+        if status != "OK":
+            self._logger.warning(f"SEARCH UNSEEN fallita: {status}")
+            return []
 
-        # Load processed UIDs tracking file
+        uid_list = data[0].split() if data[0] else []
+        if not uid_list:
+            # Fallback: search ALL and filter by local processed_uids
+            self._logger.info("Nessun messaggio UNSEEN, controllo con tracking locale...")
+            status, data = self._connection.uid("SEARCH", None, "ALL")
+            if status != "OK" or not data[0]:
+                self._logger.info("Nessuna email trovata")
+                return []
+            uid_list = data[0].split()
+
+        # Load processed UIDs tracking file as backup filter
         processed = _load_processed_uids()
 
         # Filter out already-processed UIDs
-        new_msgs = [(num, uid) for num, uid in server_msgs if uid not in processed]
+        new_uids = [uid for uid in uid_list if uid.decode() not in processed]
 
-        if not new_msgs:
+        if not new_uids:
             self._logger.info("Nessuna email non processata trovata")
             return []
 
-        self._logger.info(f"Trovati {len(new_msgs)} messaggi non ancora processati, analisi in corso...")
+        self._logger.info(f"Trovati {len(new_uids)} messaggi non ancora processati, analisi in corso...")
 
         emails: list[EmailData] = []
-        self._uid_to_msgnum = {}
         self.limit_reached = False
         max_emails = self._config.max_emails
-        for msg_num, uid in new_msgs:
-            email_data = self._fetch_and_parse(msg_num, uid)
+        for uid_bytes in new_uids:
+            uid = uid_bytes.decode()
+            email_data = self._fetch_and_parse(uid)
             if email_data:
                 emails.append(email_data)
-                self._uid_to_msgnum[uid] = msg_num
                 # Apply max_emails limit after filtering (0 = unlimited)
                 if max_emails > 0 and len(emails) >= max_emails:
                     self.limit_reached = True
@@ -169,30 +181,38 @@ class EmailClient:
         return emails
 
     def mark_as_read(self, uid: str) -> None:
-        """Mark a message as processed by adding its UID to the local tracking file."""
+        """Mark a message as read on the server (+FLAGS \\Seen) and in local tracking."""
+        if self._connection:
+            try:
+                self._connection.uid("STORE", uid, "+FLAGS", "\\Seen")
+            except Exception as e:
+                self._logger.warning(f"Impossibile impostare flag \\Seen per UID {uid}: {e}")
+        # Also track locally as backup
         processed = _load_processed_uids()
         processed.add(uid)
         _save_processed_uids(processed)
-        self._logger.debug(f"Email UID {uid} marcata come processata")
+        self._logger.debug(f"Email UID {uid} marcata come letta")
 
     def delete_message(self, uid: str) -> None:
-        """Mark a message for deletion on the server (committed on QUIT/disconnect)."""
+        """Mark a message for deletion on the server and expunge."""
         if not self._connection:
-            raise RuntimeError("Non connesso al server POP3")
-        msg_num = self._uid_to_msgnum.get(uid)
-        if msg_num is None:
-            self._logger.warning(f"Email UID {uid}: msg_num non trovato, impossibile eliminare")
-            return
-        self._connection.dele(msg_num)
-        self._logger.info(f"Email UID {uid} marcata per eliminazione dal server")
-
-    def _fetch_and_parse(self, msg_num: int, uid: str) -> EmailData | None:
+            raise RuntimeError("Non connesso al server IMAP")
         try:
-            resp, lines, octets = self._connection.retr(msg_num)
-        except poplib.error_proto:
+            self._connection.uid("STORE", uid, "+FLAGS", "\\Deleted")
+            self._connection.expunge()
+            self._logger.info(f"Email UID {uid} eliminata dal server")
+        except imaplib.IMAP4.error as e:
+            self._logger.warning(f"Impossibile eliminare UID {uid}: {e}")
+
+    def _fetch_and_parse(self, uid: str) -> EmailData | None:
+        try:
+            status, data = self._connection.uid("FETCH", uid, "(RFC822)")
+            if status != "OK" or not data or data[0] is None:
+                return None
+        except imaplib.IMAP4.error:
             return None
 
-        raw_email = b"\r\n".join(lines)
+        raw_email = data[0][1]
         msg = message_from_bytes(raw_email)
 
         # Filter by sender (decode MIME-encoded From header)

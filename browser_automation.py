@@ -15,7 +15,7 @@ from logger_module import ProcessingLogger
 
 FSE_BASE_URL = "https://operatorisiss.servizirl.it/opefseie/"
 
-TIPOLOGIA_VALIDE_ESATTE = {"LETTERA DIMISSIONE", "VERBALE PRONTO SOCCORSO"}
+DEFAULT_ALLOWED_TYPES = {"REFERTO", "LETTERA DIMISSIONE", "VERBALE PRONTO SOCCORSO"}
 
 # ProgId → (channel for Playwright, process name for tasklist)
 PROGID_TO_BROWSER: dict[str, tuple[str, str]] = {
@@ -30,11 +30,16 @@ CDP_CONNECT_TIMEOUT = 15  # seconds to wait for CDP port to become available
 CDP_CONNECT_POLL = 0.5    # poll interval in seconds
 
 
-def _is_tipologia_valida(tipologia: str) -> bool:
+def _is_tipologia_valida(tipologia: str, allowed_types: set[str] | None = None) -> bool:
+    types = allowed_types if allowed_types is not None else DEFAULT_ALLOWED_TYPES
     upper = tipologia.strip().upper()
-    if upper.startswith("REFERTO"):
-        return True
-    return upper in TIPOLOGIA_VALIDE_ESATTE
+    for t in types:
+        if t == "REFERTO":
+            if upper.startswith("REFERTO"):
+                return True
+        elif upper == t:
+            return True
+    return False
 
 
 def detect_default_browser() -> dict | None:
@@ -680,7 +685,8 @@ class FSEBrowser:
         self._logger.info(f"Pagina referti caricata: {self._page.url}")
 
     def process_patient(self, fse_link: str, patient_name: str, codice_fiscale: str,
-                        stop_event: threading.Event | None = None) -> list[DocumentResult]:
+                        stop_event: threading.Event | None = None,
+                        allowed_types: set[str] | None = None) -> list[DocumentResult]:
         # Check stop request
         if stop_event is not None and stop_event.is_set():
             self._logger.info(f"Processamento interrotto prima di {patient_name}")
@@ -808,7 +814,7 @@ class FSEBrowser:
                     self._logger.info(f"Riga {row_idx + 1}: data '{date_text}' diversa, stop scansione")
                     break
 
-                if not _is_tipologia_valida(tipo_text):
+                if not _is_tipologia_valida(tipo_text, allowed_types):
                     self._logger.info(f"Riga {row_idx + 1}: tipologia '{tipo_text}' non di interesse, saltata")
                     results.append(DocumentResult(
                         disciplina=tipo_text, skipped=True, download_path=None, error=None
@@ -822,6 +828,133 @@ class FSEBrowser:
         except Exception as e:
             self._logger.error(f"Errore lettura tabella per {patient_name}: {e}")
             self._take_debug_screenshot(patient_name)
+            return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
+
+        return results
+
+    def _navigate_and_login(self, fse_link: str, codice_fiscale: str) -> None:
+        """Navigate to an FSE link and handle SSO login if needed."""
+        self._page.goto(fse_link, wait_until="networkidle")
+        self._wait_for_spinner()
+
+        # Check if we need to click "Accedi" (session might already be active)
+        accedi = self._page.get_by_role("button", name="Accedi")
+        if accedi.is_visible(timeout=3000):
+            accedi.click()
+            self._page.wait_for_load_state("networkidle")
+            self._wait_for_spinner()
+
+        # Check if we got redirected to SSO (session expired)
+        if "idpcrlmain" in self._page.url or "ssoauth" in self._page.url:
+            import time
+            self._logger.warning(
+                "Sessione SSO scaduta - completa il login nel browser. "
+                "L'app proseguira' automaticamente."
+            )
+            max_wait = 60
+            elapsed = 0
+            while elapsed < max_wait:
+                try:
+                    current_url = self._page.url
+                    if "operatorisiss" in current_url and "idpcrlmain" not in current_url:
+                        break
+                except Exception:
+                    pass
+                time.sleep(2)
+                elapsed += 2
+            if elapsed >= max_wait:
+                raise RuntimeError("Timeout attesa re-login (1 minuto)")
+
+            self._page.wait_for_load_state("networkidle")
+            # After re-login, navigate again to the patient
+            self._page.goto(fse_link, wait_until="networkidle")
+            accedi = self._page.get_by_role("button", name="Accedi")
+            if accedi.is_visible(timeout=3000):
+                accedi.click()
+                self._page.wait_for_load_state("networkidle")
+
+        # Navigate to Referti tab (adapts to page state)
+        self._navigate_to_referti(codice_fiscale)
+
+        # Wait for table to appear
+        self._page.wait_for_selector("table tbody tr", state="attached")
+
+    def process_patient_all_dates(self, codice_fiscale: str,
+                                  stop_event: threading.Event | None = None,
+                                  allowed_types: set[str] | None = None) -> list[DocumentResult]:
+        """Download ALL documents (all dates) for a patient, filtered by allowed types."""
+        patient_name = codice_fiscale  # Use CF as label since we don't have name
+
+        if stop_event is not None and stop_event.is_set():
+            self._logger.info(f"Download interrotto prima di {codice_fiscale}")
+            return []
+
+        if not self._is_alive():
+            self._restart()
+
+        fse_link = f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}"
+        self._logger.info(f"Navigazione FSE per {codice_fiscale}: {fse_link}")
+        results: list[DocumentResult] = []
+
+        try:
+            self._navigate_and_login(fse_link, codice_fiscale)
+        except Exception as e:
+            self._logger.error(f"Errore navigazione FSE per {codice_fiscale}: {e}")
+            self._take_debug_screenshot(codice_fiscale)
+            return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
+
+        try:
+            referti_table = self._page.locator("table:has(th:has-text('Tipologia documento'))")
+            referti_table.wait_for(state="attached", timeout=10000)
+
+            headers = referti_table.locator("thead th")
+            header_count = headers.count()
+            header_texts = [headers.nth(j).inner_text().strip() for j in range(header_count)]
+            self._logger.info(f"Intestazioni tabella referti: {header_texts}")
+
+            tipo_col = visualizza_col = None
+            for idx, h in enumerate(header_texts):
+                h_upper = h.upper()
+                if "TIPOLOGIA" in h_upper:
+                    tipo_col = idx
+                elif "VISUALIZZA" in h_upper:
+                    visualizza_col = idx
+
+            if tipo_col is None:
+                raise RuntimeError(f"Colonna 'Tipologia' non trovata nelle intestazioni: {header_texts}")
+
+            data_rows = referti_table.locator("tbody tr:has(td)")
+            row_count = data_rows.count()
+            self._logger.info(f"Trovate {row_count} righe dati nella tabella referti")
+
+            if row_count == 0:
+                return results
+
+            # Process ALL rows (no date filtering)
+            for i in range(row_count):
+                if stop_event is not None and stop_event.is_set():
+                    self._logger.info("Download interrotto dall'utente")
+                    break
+
+                cells = data_rows.nth(i).locator("td")
+                cell_count = cells.count()
+                if cell_count <= (tipo_col or 0):
+                    continue
+                tipo_text = cells.nth(tipo_col).inner_text().strip()
+
+                if not _is_tipologia_valida(tipo_text, allowed_types):
+                    self._logger.info(f"Riga {i + 1}: tipologia '{tipo_text}' non di interesse, saltata")
+                    results.append(DocumentResult(
+                        disciplina=tipo_text, skipped=True, download_path=None, error=None
+                    ))
+                    continue
+
+                result = self._download_document(i, tipo_text, patient_name, visualizza_col, data_rows)
+                results.append(result)
+
+        except Exception as e:
+            self._logger.error(f"Errore lettura tabella per {codice_fiscale}: {e}")
+            self._take_debug_screenshot(codice_fiscale)
             return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
 
         return results
