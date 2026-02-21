@@ -10,6 +10,14 @@ from logger_module import ProcessingLogger
 class FileManager:
     INVALID_CHARS = re.compile(r'[<>:"/\\|?*]')
 
+    TAG_LABELS = {
+        "LAB": "LABORATORIO",
+        "PS": "PRONTO SOCCORSO",
+        "DIMOSP": "DIMISSIONE OSPEDALIERA",
+        "SPEC": "SPECIALISTICA",
+        "DOC": "ALTRO",
+    }
+
     def __init__(self, config: Config, logger: ProcessingLogger) -> None:
         self._config = config
         self._logger = logger
@@ -82,6 +90,45 @@ class FileManager:
         )
         self._logger.info(f"Mapping salvato in {mapping_file}")
         return mapping_file
+
+    def save_referti_report(self) -> Path | None:
+        successful = [m for m in self._mappings if m["renamed"]]
+        if not successful:
+            return None
+
+        now = datetime.now()
+        # Group by tag: {tag: {(cf, name): count}}
+        groups: dict[str, dict[tuple[str, str], int]] = {}
+        for m in successful:
+            tag = self._tipologia_tag(m["disciplina"])
+            key = (m["codice_fiscale"], m["patient_name"])
+            groups.setdefault(tag, {})
+            groups[tag][key] = groups[tag].get(key, 0) + 1
+
+        lines = [f"=== REFERTI SCARICATI - {now.strftime('%d/%m/%Y')} ore {now.strftime('%H:%M')} ===", ""]
+        total = 0
+        for tag in ("LAB", "PS", "DIMOSP", "SPEC", "DOC"):
+            patients = groups.get(tag)
+            if not patients:
+                continue
+            section_count = sum(patients.values())
+            total += section_count
+            label = self.TAG_LABELS.get(tag, tag)
+            lines.append(f"--- {label} ({section_count}) ---")
+            for (cf, name), count in patients.items():
+                entry = f"{cf}  {name}"
+                if count > 1:
+                    entry += f" ({count})"
+                lines.append(entry)
+            lines.append("")
+
+        lines.append(f"--- TOTALE: {total} referti scaricati ---")
+
+        report_name = f"referti {now.strftime('%Y%m%d')} {now.strftime('%H%M%S')}.txt"
+        report_path = self._config.download_dir / report_name
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        self._logger.info(f"Report referti salvato in {report_path}")
+        return report_path
 
     @staticmethod
     def _resolve_collision(path: Path) -> Path:

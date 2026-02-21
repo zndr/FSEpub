@@ -137,8 +137,9 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
         browser.stop()
         email_client.disconnect()
 
-    # Save mapping and summary
+    # Save mapping, report, and summary
     file_manager.save_mappings()
+    file_manager.save_referti_report()
     logger.save_summary()
 
     # Open only session PDFs in PDF reader
