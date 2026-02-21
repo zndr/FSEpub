@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.0] - 2026-02-21
+
+### Aggiunto
+
+- Guida utente HTML standalone (`guida_utente.html`) con navigazione, sezioni collassabili e layout responsive
+- Pulsante "Guida" nel Tab SISS per aprire la guida nel browser
+- Tab Paziente: download referti per singolo paziente tramite codice fiscale
+- Tab Paziente: filtri per ente/struttura e periodo (settimana, mese, anno, personalizzato)
+- Tab Paziente: selezione gerarchica tipologie documento (Lab, Imaging, Anat. Pat., Specialistica, Dimissione, PS)
+- Pulsante "Test connessione" nelle impostazioni Server Posta
+- Tooltip descrittivi su tutti i controlli tecnici
+- Sezione troubleshooting per conflitto porta CDP nella guida utente
+- Guida inclusa nel bundle PyInstaller e nell'installer
+
+### Modificato
+
+- Porta CDP rimossa dalla UI (resta configurabile in `settings.env` per utenti avanzati)
+- Layout impostazioni riorganizzato in due colonne
+
 ## [1.0.0] - 2026-02-21
 
 Prima release di FSE Processor.

@@ -309,7 +309,7 @@ echo   Build completato con successo!
 echo ============================================
 echo   Eseguibile: dist\FSE Processor\FSE Processor.exe
 if defined ISCC (
-    echo   Installer:  installer_output\FSE_Processor_Setup_1.0.0.exe
+    echo   Installer:  installer_output\FSE_Processor_Setup_1.1.0.exe
 )
 echo ============================================
 pause

@@ -4,6 +4,7 @@ import ctypes
 import logging
 import os
 import re
+import sys
 import threading
 import tkinter as tk
 import traceback
@@ -1341,11 +1342,16 @@ class FSEApp(tk.Tk):
 
     def _open_guide(self) -> None:
         """Open the user guide HTML file in the default browser."""
-        guide = paths.app_dir / "guida_utente.html"
-        if guide.exists():
-            webbrowser.open(guide.as_uri())
-        else:
-            messagebox.showwarning("Guida non trovata", f"Il file guida non è stato trovato:\n{guide}")
+        guide_name = "guida_utente.html"
+        # In frozen mode, datas are in sys._MEIPASS (_internal); also check app_dir
+        candidates = [paths.app_dir / guide_name]
+        if getattr(sys, "frozen", False):
+            candidates.insert(0, Path(sys._MEIPASS) / guide_name)
+        for guide in candidates:
+            if guide.exists():
+                webbrowser.open(guide.as_uri())
+                return
+        messagebox.showwarning("Guida non trovata", f"Il file guida non è stato trovato:\n{candidates[0]}")
 
     def _browse_dir(self, var: tk.StringVar) -> None:
         path = filedialog.askdirectory(initialdir=var.get() or ".")
