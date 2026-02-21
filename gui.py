@@ -46,6 +46,7 @@ SETTINGS_SPEC = [
     ("HEADLESS", "Headless browser", "false", "bool"),
     ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "60", "int"),
     ("PAGE_TIMEOUT", "Page timeout (sec)", "30", "int"),
+    ("CONSOLE_FONT_SIZE", "Dim. carattere console", "8", "int"),
     ("MARK_AS_READ", "Marca come letto dopo elaborazione", "true", "bool"),
     ("DELETE_AFTER_PROCESSING", "Elimina email dopo elaborazione", "false", "bool"),
     ("MAX_EMAILS", "Max email da processare (0=tutte)", "3", "int"),
@@ -64,13 +65,13 @@ SISS_DOCUMENT_TYPES = [
 ]
 
 PATIENT_DOCUMENT_TYPES = [
-    ("REFERTO", "Tutti i referti specialistici", True),
+    ("REFERTO", "Referti specialistici", True),
     ("REFERTO SPECIALISTICO", "Referto Specialistico", False),
-    ("REFERTO SPECIALISTICO LABORATORIO", "Referto Spec. Laboratorio", False),
-    ("REFERTO SPECIALISTICO RADIOLOGIA", "Referto Spec. Radiologia", False),
-    ("REFERTO ANATOMIA PATOLOGICA", "Referto Anatomia Patologica", False),
+    ("REFERTO SPECIALISTICO LABORATORIO", "Lab", False),
+    ("REFERTO SPECIALISTICO RADIOLOGIA", "Imaging", False),
+    ("REFERTO ANATOMIA PATOLOGICA", "Anat. pat.", False),
     ("LETTERA DIMISSIONE", "Lettera Dimissione", True),
-    ("VERBALE PRONTO SOCCORSO", "Verbale Pronto Soccorso", True),
+    ("VERBALE PRONTO SOCCORSO", "Verbale PS", True),
 ]
 
 REFERTO_SUBTYPES = {
@@ -629,7 +630,9 @@ class FSEApp(tk.Tk):
         console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
         console_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
-        self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=16)
+        font_size = int(self._fields["CONSOLE_FONT_SIZE"].get() or "8")
+        console_font = ("Consolas", font_size)
+        self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=16, font=console_font)
         self._console.pack(fill=tk.BOTH, expand=True)
 
     def _build_siss_doc_type_checkboxes(self, parent: tk.Widget) -> tuple[tk.BooleanVar, dict[str, tk.BooleanVar]]:
@@ -675,9 +678,27 @@ class FSEApp(tk.Tk):
         return {key for key, var in doc_vars.items() if var.get()}
 
     def _build_patient_tab(self, parent: tk.Frame) -> None:
-        """Build the Download Paziente tab content."""
-        # CF input
-        input_frame = tk.LabelFrame(parent, text="Codice Fiscale", padx=8, pady=6)
+        """Build the Download Paziente tab content with two-column layout."""
+        # Top frame: two columns
+        top_frame = tk.Frame(parent)
+        top_frame.pack(fill=tk.X)
+        top_frame.columnconfigure(0, weight=1, uniform="top")
+        top_frame.columnconfigure(1, weight=1, uniform="top")
+
+        # ── Left column: Tipologia documenti ──
+        left_col = tk.Frame(top_frame)
+        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        left_col.rowconfigure(0, weight=1)
+
+        # Document type checkboxes with hierarchy (fill=BOTH to match right column height)
+        self._patient_tutti_var, self._patient_doc_vars = self._build_patient_doc_type_checkboxes(left_col)
+
+        # ── Right column: CF + Origine e data + bottoni ──
+        right_col = tk.Frame(top_frame)
+        right_col.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+
+        # CF input (in right column, above filters)
+        input_frame = tk.LabelFrame(right_col, text="Codice Fiscale", padx=8, pady=6)
         input_frame.pack(fill=tk.X)
         input_frame.columnconfigure(1, weight=1)
 
@@ -686,11 +707,8 @@ class FSEApp(tk.Tk):
         self._cf_entry = tk.Entry(input_frame, textvariable=self._cf_var, font=("Consolas", 11))
         self._cf_entry.grid(row=0, column=1, sticky="ew", pady=2)
 
-        # Document type checkboxes with hierarchy
-        self._patient_tutti_var, self._patient_doc_vars = self._build_patient_doc_type_checkboxes(parent)
-
-        # Filters: Ente/Struttura and Date
-        filter_frame = tk.LabelFrame(parent, text="Filtri", padx=8, pady=6)
+        # Filters: Ente/Struttura and Date (renamed from "Filtri")
+        filter_frame = tk.LabelFrame(right_col, text="Origine e data", padx=8, pady=6)
         filter_frame.pack(fill=tk.X, pady=(8, 0))
         filter_frame.columnconfigure(1, weight=1)
 
@@ -700,7 +718,7 @@ class FSEApp(tk.Tk):
         )
         self._ente_var = tk.StringVar()
         self._ente_combo = ttk.Combobox(filter_frame, textvariable=self._ente_var)
-        self._ente_combo.grid(row=0, column=1, columnspan=5, sticky="ew", pady=2)
+        self._ente_combo.grid(row=0, column=1, columnspan=3, sticky="ew", pady=2)
 
         # Date period row
         tk.Label(filter_frame, text="Periodo:", anchor="w").grid(
@@ -711,26 +729,27 @@ class FSEApp(tk.Tk):
             filter_frame, textvariable=self._date_preset_var,
             values=DATE_PRESETS, state="readonly", width=16,
         )
-        self._date_preset_combo.grid(row=1, column=1, sticky="w", pady=2)
+        self._date_preset_combo.grid(row=1, column=1, columnspan=3, sticky="w", pady=2)
         self._date_preset_combo.bind("<<ComboboxSelected>>", self._on_date_preset_changed)
 
+        # Date from/to on separate row
         tk.Label(filter_frame, text="Dal:", anchor="w").grid(
-            row=1, column=2, sticky="w", padx=(12, 4), pady=2,
+            row=2, column=0, sticky="w", padx=(0, 4), pady=2,
         )
         self._date_from_var = tk.StringVar()
         self._date_from_entry = tk.Entry(filter_frame, textvariable=self._date_from_var, width=12, state=tk.DISABLED)
-        self._date_from_entry.grid(row=1, column=3, sticky="w", pady=2)
+        self._date_from_entry.grid(row=2, column=1, sticky="w", pady=2)
 
         tk.Label(filter_frame, text="Al:", anchor="w").grid(
-            row=1, column=4, sticky="w", padx=(12, 4), pady=2,
+            row=2, column=2, sticky="w", padx=(12, 4), pady=2,
         )
         self._date_to_var = tk.StringVar()
         self._date_to_entry = tk.Entry(filter_frame, textvariable=self._date_to_var, width=12, state=tk.DISABLED)
-        self._date_to_entry.grid(row=1, column=5, sticky="w", pady=2)
+        self._date_to_entry.grid(row=2, column=3, sticky="w", pady=2)
 
-        # Controls
-        ctrl_frame = tk.Frame(parent)
-        ctrl_frame.pack(fill=tk.X, pady=(8, 0))
+        # Controls (in right column, below filters, centered)
+        ctrl_frame = tk.Frame(right_col)
+        ctrl_frame.pack(pady=(8, 0))
 
         self._btn_patient_start = tk.Button(
             ctrl_frame, text="Avvia Download", command=self._start_patient_download,
@@ -742,17 +761,19 @@ class FSEApp(tk.Tk):
         )
         self._btn_patient_stop.pack(side=tk.LEFT)
 
-        # Console
+        # Console (full width, below top_frame)
         console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
         console_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
-        self._patient_console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10)
+        font_size = int(self._fields["CONSOLE_FONT_SIZE"].get() or "8")
+        console_font = ("Consolas", font_size)
+        self._patient_console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10, font=console_font)
         self._patient_console.pack(fill=tk.BOTH, expand=True)
 
     def _build_patient_doc_type_checkboxes(self, parent: tk.Widget) -> tuple[tk.BooleanVar, dict[str, tk.BooleanVar]]:
         """Create Patient document type checkboxes with hierarchy."""
-        frame = tk.LabelFrame(parent, text="Tipologie documento", padx=8, pady=4)
-        frame.pack(fill=tk.X, pady=(8, 0))
+        frame = tk.LabelFrame(parent, text="Tipologia documenti", padx=8, pady=4)
+        frame.pack(fill=tk.BOTH, expand=True)
 
         tutti_var = tk.BooleanVar(value=False)
         doc_vars: dict[str, tk.BooleanVar] = {}
@@ -796,13 +817,17 @@ class FSEApp(tk.Tk):
                 all_cbs.append(cb)
                 break
 
-        # Row 3: Referto sub-types (indented)
-        row3 = tk.Frame(frame)
-        row3.pack(anchor="w", fill=tk.X, padx=(24, 0))
-        for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
-            if type_key in REFERTO_SUBTYPES:
+        # Rows 3-4: Referto sub-types (indented), split into 2 rows of 2
+        sub_items = [
+            (tkey, dlabel, dfl) for tkey, dlabel, dfl in PATIENT_DOCUMENT_TYPES
+            if tkey in REFERTO_SUBTYPES
+        ]
+        for i in range(0, len(sub_items), 2):
+            row_sub = tk.Frame(frame)
+            row_sub.pack(anchor="w", fill=tk.X, padx=(24, 0))
+            for type_key, label, default_on in sub_items[i:i + 2]:
                 var = tk.BooleanVar(value=default_on)
-                cb = tk.Checkbutton(row3, text=label, variable=var)
+                cb = tk.Checkbutton(row_sub, text=label, variable=var)
                 # Disabled by default since parent "Tutti i referti" is checked
                 if referto_parent_var and referto_parent_var.get():
                     cb.configure(state=tk.DISABLED)
@@ -943,6 +968,7 @@ class FSEApp(tk.Tk):
         params_frame.pack(fill=tk.X)
         params_frame.columnconfigure(1, weight=1)
         params_frame.columnconfigure(3, weight=1)
+        params_frame.columnconfigure(5, weight=1)
 
         # Row 0: timeouts side by side
         tk.Label(params_frame, text="Download timeout (sec)", anchor="w").grid(
@@ -963,6 +989,16 @@ class FSEApp(tk.Tk):
         )
         self._fields["PAGE_TIMEOUT"] = var
 
+        # Row 0 continued: console font size
+        tk.Label(params_frame, text="Dim. carattere console", anchor="w").grid(
+            row=0, column=4, sticky="w", padx=(16, 8), pady=2,
+        )
+        var = tk.StringVar(value=spec["CONSOLE_FONT_SIZE"][1])
+        tk.Entry(params_frame, textvariable=var, width=8).grid(
+            row=0, column=5, sticky="w", pady=2,
+        )
+        self._fields["CONSOLE_FONT_SIZE"] = var
+
         # Fields created here for settings persistence but displayed in SISS tab
         var = tk.StringVar(value=spec["MAX_EMAILS"][1])
         self._fields["MAX_EMAILS"] = var
@@ -976,14 +1012,14 @@ class FSEApp(tk.Tk):
         # Row 1: checkboxes
         var = tk.BooleanVar(value=spec["HEADLESS"][1].lower() == "true")
         tk.Checkbutton(params_frame, text="Headless browser", variable=var).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=2,
+            row=1, column=0, columnspan=6, sticky="w", pady=2,
         )
         self._fields["HEADLESS"] = var
 
         # Save button centered
         tk.Button(
             params_frame, text="Salva Impostazioni", command=self._save_settings,
-        ).grid(row=2, column=0, columnspan=4, pady=(8, 0))
+        ).grid(row=2, column=0, columnspan=6, pady=(8, 0))
 
     def _build_pdf_reader_row(self, parent: tk.Widget, row: int, key: str, default: str) -> None:
         """Build the PDF reader selection row with combobox."""
