@@ -8,6 +8,7 @@ import threading
 import tkinter as tk
 import traceback
 import winreg
+from datetime import date, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
@@ -55,11 +56,29 @@ PDF_READER_CUSTOM = "__custom__"
 PDF_READER_DEFAULT_LABEL = "Predefinito di sistema"
 PDF_READER_CUSTOM_LABEL = "Personalizzato..."
 
-DOCUMENT_TYPES = [
+SISS_DOCUMENT_TYPES = [
     ("REFERTO", "Referto", True),
     ("LETTERA DIMISSIONE", "Lettera Dimissione", True),
     ("VERBALE PRONTO SOCCORSO", "Verbale Pronto Soccorso", True),
 ]
+
+PATIENT_DOCUMENT_TYPES = [
+    ("REFERTO", "Tutti i referti specialistici", True),
+    ("REFERTO SPECIALISTICO", "Referto Specialistico", False),
+    ("REFERTO SPECIALISTICO LABORATORIO", "Referto Spec. Laboratorio", False),
+    ("REFERTO SPECIALISTICO RADIOLOGIA", "Referto Spec. Radiologia", False),
+    ("REFERTO ANATOMIA PATOLOGICA", "Referto Anatomia Patologica", False),
+    ("LETTERA DIMISSIONE", "Lettera Dimissione", True),
+    ("VERBALE PRONTO SOCCORSO", "Verbale Pronto Soccorso", True),
+]
+
+REFERTO_SUBTYPES = {
+    "REFERTO SPECIALISTICO", "REFERTO SPECIALISTICO LABORATORIO",
+    "REFERTO SPECIALISTICO RADIOLOGIA", "REFERTO ANATOMIA PATOLOGICA",
+}
+
+DATE_PRESETS = ["Tutte", "Ultima settimana", "Ultimo mese", "Ultimo anno", "Personalizzato"]
+DATE_PRESET_DAYS = {"Ultima settimana": 7, "Ultimo mese": 30, "Ultimo anno": 365}
 
 
 def _norm(path: str) -> str:
@@ -520,9 +539,10 @@ class FSEApp(tk.Tk):
     # ---- UI construction ----
 
     def _build_ui(self) -> None:
-        # Detect PDF readers and browsers once at startup
+        # Detect PDF readers, browsers, and default browser once at startup
         self._pdf_readers = _detect_pdf_readers()  # list of (exe_path, display_name)
         self._browsers = _detect_browsers()  # list of (channel_or_path, display_name)
+        self._default_browser_info = detect_default_browser()
 
         # --- Tabbed notebook ---
         self._notebook = ttk.Notebook(self)
@@ -547,8 +567,6 @@ class FSEApp(tk.Tk):
 
     def _build_siss_tab(self, parent: tk.Frame) -> None:
         """Build the SISS Integration tab content."""
-        # Detect default browser
-        self._default_browser_info = detect_default_browser()
         default_name = "Non rilevato"
         if self._default_browser_info:
             progid = self._default_browser_info["progid"]
@@ -575,44 +593,36 @@ class FSEApp(tk.Tk):
         )
         self._mismatch_label.pack(anchor="w", fill=tk.X)
 
-        self._cdp_registry_var = tk.BooleanVar(value=False)
-        is_firefox = (
-            self._default_browser_info
-            and self._default_browser_info.get("channel") == "firefox"
-        )
-        self._cdp_registry_cb = tk.Checkbutton(
-            browser_frame,
-            text="Abilita CDP nel registro (per Millewin/Medico2000)",
-            variable=self._cdp_registry_var,
-            command=self._on_cdp_registry_toggled,
-            state=tk.DISABLED if is_firefox or not self._default_browser_info else tk.NORMAL,
-        )
-        self._cdp_registry_cb.pack(anchor="w")
-        if is_firefox:
-            tk.Label(
-                browser_frame, text="(Firefox non supporta CDP)", fg="gray",
-            ).pack(anchor="w")
-
-        self._sync_cdp_registry_checkbox()
         self._update_browser_mismatch_warning()
 
         # Controls
         ctrl_frame = tk.LabelFrame(parent, text="Controlli", padx=8, pady=6)
         ctrl_frame.pack(fill=tk.X, pady=(8, 0))
 
-        self._btn_check = tk.Button(ctrl_frame, text="Controlla Email", command=self._check_email)
+        btn_row = tk.Frame(ctrl_frame)
+        btn_row.pack(fill=tk.X)
+
+        self._btn_check = tk.Button(btn_row, text="Controlla Email", command=self._check_email)
         self._btn_check.pack(side=tk.LEFT, padx=(0, 8))
 
-        self._btn_start = tk.Button(ctrl_frame, text="Avvia", command=self._start_processing)
+        self._btn_start = tk.Button(btn_row, text="Avvia", command=self._start_processing)
         self._btn_start.pack(side=tk.LEFT, padx=(0, 8))
 
-        self._btn_stop = tk.Button(ctrl_frame, text="Interrompi", command=self._stop_processing, state=tk.DISABLED)
+        self._btn_stop = tk.Button(btn_row, text="Interrompi", command=self._stop_processing, state=tk.DISABLED)
         self._btn_stop.pack(side=tk.LEFT)
 
-        tk.Button(ctrl_frame, text="Esci", command=self.destroy).pack(side=tk.RIGHT)
+        tk.Button(btn_row, text="Esci", command=self.destroy).pack(side=tk.RIGHT)
 
-        # Document type checkboxes
-        self._siss_doc_vars = self._build_doc_type_checkboxes(parent)
+        # Max email row (moved from Settings)
+        max_row = tk.Frame(ctrl_frame)
+        max_row.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(max_row, text="Max email (0=tutte):").pack(side=tk.LEFT, padx=(0, 4))
+        # Create the field here; _build_settings_tab already created it in _fields
+        self._siss_max_email_var = self._fields["MAX_EMAILS"]
+        tk.Entry(max_row, textvariable=self._siss_max_email_var, width=6).pack(side=tk.LEFT)
+
+        # Document type checkboxes with "Tutti"
+        self._siss_tutti_var, self._siss_doc_vars = self._build_siss_doc_type_checkboxes(parent)
 
         # Console
         console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
@@ -621,21 +631,38 @@ class FSEApp(tk.Tk):
         self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10)
         self._console.pack(fill=tk.BOTH, expand=True)
 
-    @staticmethod
-    def _build_doc_type_checkboxes(parent: tk.Widget) -> dict[str, tk.BooleanVar]:
-        """Create a LabelFrame with document type checkboxes. Returns dict[type_key, BooleanVar]."""
+    def _build_siss_doc_type_checkboxes(self, parent: tk.Widget) -> tuple[tk.BooleanVar, dict[str, tk.BooleanVar]]:
+        """Create SISS document type checkboxes with 'Tutti' toggle."""
         frame = tk.LabelFrame(parent, text="Tipologie documento", padx=8, pady=4)
         frame.pack(fill=tk.X, pady=(8, 0))
+
+        tutti_var = tk.BooleanVar(value=False)
         doc_vars: dict[str, tk.BooleanVar] = {}
-        for type_key, label, default_on in DOCUMENT_TYPES:
+        doc_cbs: list[tk.Checkbutton] = []
+
+        def on_tutti_changed(*_):
+            state = tk.DISABLED if tutti_var.get() else tk.NORMAL
+            for cb in doc_cbs:
+                cb.configure(state=state)
+
+        tk.Checkbutton(frame, text="Tutti", variable=tutti_var, command=on_tutti_changed).pack(
+            side=tk.LEFT, padx=(0, 16),
+        )
+
+        for type_key, label, default_on in SISS_DOCUMENT_TYPES:
             var = tk.BooleanVar(value=default_on)
-            tk.Checkbutton(frame, text=label, variable=var).pack(side=tk.LEFT, padx=(0, 16))
+            cb = tk.Checkbutton(frame, text=label, variable=var)
+            cb.pack(side=tk.LEFT, padx=(0, 16))
             doc_vars[type_key] = var
-        return doc_vars
+            doc_cbs.append(cb)
+
+        return tutti_var, doc_vars
 
     @staticmethod
-    def _get_selected_types(doc_vars: dict[str, tk.BooleanVar]) -> set[str]:
-        """Return the set of selected document type keys."""
+    def _get_selected_types(tutti_var: tk.BooleanVar, doc_vars: dict[str, tk.BooleanVar]) -> set[str] | None:
+        """Return the set of selected document type keys, or None if 'Tutti' is checked."""
+        if tutti_var.get():
+            return None
         return {key for key, var in doc_vars.items() if var.get()}
 
     def _build_patient_tab(self, parent: tk.Frame) -> None:
@@ -650,8 +677,47 @@ class FSEApp(tk.Tk):
         self._cf_entry = tk.Entry(input_frame, textvariable=self._cf_var, font=("Consolas", 11))
         self._cf_entry.grid(row=0, column=1, sticky="ew", pady=2)
 
-        # Document type checkboxes (independent from SISS tab)
-        self._patient_doc_vars = self._build_doc_type_checkboxes(parent)
+        # Document type checkboxes with hierarchy
+        self._patient_tutti_var, self._patient_doc_vars = self._build_patient_doc_type_checkboxes(parent)
+
+        # Filters: Ente/Struttura and Date
+        filter_frame = tk.LabelFrame(parent, text="Filtri", padx=8, pady=6)
+        filter_frame.pack(fill=tk.X, pady=(8, 0))
+        filter_frame.columnconfigure(1, weight=1)
+
+        # Ente/Struttura combobox (editable)
+        tk.Label(filter_frame, text="Ente/Struttura:", anchor="w").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=2,
+        )
+        self._ente_var = tk.StringVar()
+        self._ente_combo = ttk.Combobox(filter_frame, textvariable=self._ente_var)
+        self._ente_combo.grid(row=0, column=1, columnspan=5, sticky="ew", pady=2)
+
+        # Date period row
+        tk.Label(filter_frame, text="Periodo:", anchor="w").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=2,
+        )
+        self._date_preset_var = tk.StringVar(value="Tutte")
+        self._date_preset_combo = ttk.Combobox(
+            filter_frame, textvariable=self._date_preset_var,
+            values=DATE_PRESETS, state="readonly", width=16,
+        )
+        self._date_preset_combo.grid(row=1, column=1, sticky="w", pady=2)
+        self._date_preset_combo.bind("<<ComboboxSelected>>", self._on_date_preset_changed)
+
+        tk.Label(filter_frame, text="Dal:", anchor="w").grid(
+            row=1, column=2, sticky="w", padx=(12, 4), pady=2,
+        )
+        self._date_from_var = tk.StringVar()
+        self._date_from_entry = tk.Entry(filter_frame, textvariable=self._date_from_var, width=12, state=tk.DISABLED)
+        self._date_from_entry.grid(row=1, column=3, sticky="w", pady=2)
+
+        tk.Label(filter_frame, text="Al:", anchor="w").grid(
+            row=1, column=4, sticky="w", padx=(12, 4), pady=2,
+        )
+        self._date_to_var = tk.StringVar()
+        self._date_to_entry = tk.Entry(filter_frame, textvariable=self._date_to_var, width=12, state=tk.DISABLED)
+        self._date_to_entry.grid(row=1, column=5, sticky="w", pady=2)
 
         # Controls
         ctrl_frame = tk.Frame(parent)
@@ -673,6 +739,105 @@ class FSEApp(tk.Tk):
 
         self._patient_console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10)
         self._patient_console.pack(fill=tk.BOTH, expand=True)
+
+    def _build_patient_doc_type_checkboxes(self, parent: tk.Widget) -> tuple[tk.BooleanVar, dict[str, tk.BooleanVar]]:
+        """Create Patient document type checkboxes with hierarchy."""
+        frame = tk.LabelFrame(parent, text="Tipologie documento", padx=8, pady=4)
+        frame.pack(fill=tk.X, pady=(8, 0))
+
+        tutti_var = tk.BooleanVar(value=False)
+        doc_vars: dict[str, tk.BooleanVar] = {}
+        all_cbs: list[tk.Checkbutton] = []  # all checkboxes except "Tutti"
+        referto_parent_var: tk.BooleanVar | None = None
+        referto_sub_cbs: list[tk.Checkbutton] = []
+
+        def on_tutti_changed(*_):
+            state = tk.DISABLED if tutti_var.get() else tk.NORMAL
+            for cb in all_cbs:
+                cb.configure(state=state)
+            # If Tutti is unchecked, re-apply referto parent logic
+            if not tutti_var.get() and referto_parent_var and referto_parent_var.get():
+                for cb in referto_sub_cbs:
+                    cb.configure(state=tk.DISABLED)
+
+        def on_referto_parent_changed(*_):
+            if tutti_var.get():
+                return
+            state = tk.DISABLED if referto_parent_var.get() else tk.NORMAL
+            for cb in referto_sub_cbs:
+                cb.configure(state=state)
+
+        # Row 1: Tutti
+        row1 = tk.Frame(frame)
+        row1.pack(anchor="w", fill=tk.X)
+        tk.Checkbutton(row1, text="Tutti", variable=tutti_var, command=on_tutti_changed).pack(
+            side=tk.LEFT, padx=(0, 16),
+        )
+
+        # Row 2: Referto parent
+        row2 = tk.Frame(frame)
+        row2.pack(anchor="w", fill=tk.X)
+        for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
+            if type_key == "REFERTO":
+                var = tk.BooleanVar(value=default_on)
+                referto_parent_var = var
+                cb = tk.Checkbutton(row2, text=label, variable=var, command=on_referto_parent_changed)
+                cb.pack(side=tk.LEFT, padx=(0, 16))
+                doc_vars[type_key] = var
+                all_cbs.append(cb)
+                break
+
+        # Row 3: Referto sub-types (indented)
+        row3 = tk.Frame(frame)
+        row3.pack(anchor="w", fill=tk.X, padx=(24, 0))
+        for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
+            if type_key in REFERTO_SUBTYPES:
+                var = tk.BooleanVar(value=default_on)
+                cb = tk.Checkbutton(row3, text=label, variable=var)
+                # Disabled by default since parent "Tutti i referti" is checked
+                if referto_parent_var and referto_parent_var.get():
+                    cb.configure(state=tk.DISABLED)
+                cb.pack(side=tk.LEFT, padx=(0, 12))
+                doc_vars[type_key] = var
+                all_cbs.append(cb)
+                referto_sub_cbs.append(cb)
+
+        # Row 4: Other types (Lettera Dimissione, Verbale Pronto Soccorso)
+        row4 = tk.Frame(frame)
+        row4.pack(anchor="w", fill=tk.X)
+        for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
+            if type_key not in REFERTO_SUBTYPES and type_key != "REFERTO":
+                var = tk.BooleanVar(value=default_on)
+                cb = tk.Checkbutton(row4, text=label, variable=var)
+                cb.pack(side=tk.LEFT, padx=(0, 16))
+                doc_vars[type_key] = var
+                all_cbs.append(cb)
+
+        return tutti_var, doc_vars
+
+    def _on_date_preset_changed(self, _event: tk.Event = None) -> None:
+        """Handle date preset combobox selection change."""
+        preset = self._date_preset_var.get()
+        if preset == "Tutte":
+            self._date_from_var.set("")
+            self._date_to_var.set("")
+            self._date_from_entry.configure(state=tk.DISABLED)
+            self._date_to_entry.configure(state=tk.DISABLED)
+        elif preset == "Personalizzato":
+            self._date_from_entry.configure(state=tk.NORMAL)
+            self._date_to_entry.configure(state=tk.NORMAL)
+        elif preset in DATE_PRESET_DAYS:
+            days = DATE_PRESET_DAYS[preset]
+            today = date.today()
+            from_date = today - timedelta(days=days)
+            self._date_from_var.set(from_date.strftime("%d/%m/%Y"))
+            self._date_to_var.set(today.strftime("%d/%m/%Y"))
+            self._date_from_entry.configure(state=tk.DISABLED)
+            self._date_to_entry.configure(state=tk.DISABLED)
+
+    def _update_ente_combobox(self, enti: list[str]) -> None:
+        """Update the Ente/Struttura combobox with values from the table (called from main thread)."""
+        self._ente_combo["values"] = enti
 
     def _build_settings_tab(self, parent: tk.Frame) -> None:
         """Build the Settings tab content with grouped LabelFrames."""
@@ -748,6 +913,22 @@ class FSEApp(tk.Tk):
         )
         self._fields["CDP_PORT"] = var
 
+        r += 1
+        self._cdp_registry_var = tk.BooleanVar(value=False)
+        is_firefox = (
+            self._default_browser_info
+            and self._default_browser_info.get("channel") == "firefox"
+        )
+        self._cdp_registry_cb = tk.Checkbutton(
+            br_frame,
+            text="Abilita CDP nel registro",
+            variable=self._cdp_registry_var,
+            command=self._on_cdp_registry_toggled,
+            state=tk.DISABLED if is_firefox or not self._default_browser_info else tk.NORMAL,
+        )
+        self._cdp_registry_cb.grid(row=r, column=0, columnspan=3, sticky="w", pady=2)
+        self._sync_cdp_registry_checkbox()
+
         # ── Bottom (full-width): Parametri ──
         params_frame = tk.LabelFrame(parent, text="Parametri", padx=8, pady=6)
         params_frame.pack(fill=tk.X)
@@ -773,33 +954,27 @@ class FSEApp(tk.Tk):
         )
         self._fields["PAGE_TIMEOUT"] = var
 
-        # Row 1: max emails
-        tk.Label(params_frame, text="Max email (0=tutte)", anchor="w").grid(
-            row=1, column=0, sticky="w", padx=(0, 8), pady=2,
-        )
+        # MAX_EMAILS field is created here for settings persistence but displayed in SISS tab
         var = tk.StringVar(value=spec["MAX_EMAILS"][1])
-        tk.Entry(params_frame, textvariable=var, width=8).grid(
-            row=1, column=1, sticky="w", pady=2,
-        )
         self._fields["MAX_EMAILS"] = var
 
-        # Row 2: checkboxes side by side
+        # Row 1: checkboxes side by side
         var = tk.BooleanVar(value=spec["HEADLESS"][1].lower() == "true")
         tk.Checkbutton(params_frame, text="Headless browser", variable=var).grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=2,
+            row=1, column=0, columnspan=2, sticky="w", pady=2,
         )
         self._fields["HEADLESS"] = var
 
         var = tk.BooleanVar(value=spec["DELETE_AFTER_PROCESSING"][1].lower() == "true")
         tk.Checkbutton(
             params_frame, text="Elimina email dopo elaborazione", variable=var,
-        ).grid(row=2, column=2, columnspan=2, sticky="w", pady=2)
+        ).grid(row=1, column=2, columnspan=2, sticky="w", pady=2)
         self._fields["DELETE_AFTER_PROCESSING"] = var
 
         # Save button centered
         tk.Button(
             params_frame, text="Salva Impostazioni", command=self._save_settings,
-        ).grid(row=3, column=0, columnspan=4, pady=(8, 0))
+        ).grid(row=2, column=0, columnspan=4, pady=(8, 0))
 
     def _build_pdf_reader_row(self, parent: tk.Widget, row: int, key: str, default: str) -> None:
         """Build the PDF reader selection row with combobox."""
@@ -1167,17 +1342,22 @@ class FSEApp(tk.Tk):
             messagebox.showwarning("Attenzione", "Download paziente in corso, attendere il completamento")
             return
 
+        selected = self._get_selected_types(self._siss_tutti_var, self._siss_doc_vars)
+        if selected is not None and not selected:
+            messagebox.showwarning("Errore", "Seleziona almeno una tipologia di documento")
+            return
+
         self._save_settings_quietly()
         self._stop_event.clear()
         self._btn_start.configure(state=tk.DISABLED)
         self._btn_stop.configure(state=tk.NORMAL)
         self._log("--- Avvio processamento ---")
 
-        self._worker = threading.Thread(target=self._processing_worker, daemon=True)
+        self._worker = threading.Thread(target=self._processing_worker, args=(selected,), daemon=True)
         self._worker.start()
         self._poll_worker()
 
-    def _processing_worker(self) -> None:
+    def _processing_worker(self, allowed_types: set[str] | None) -> None:
         try:
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
@@ -1187,8 +1367,7 @@ class FSEApp(tk.Tk):
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
-            selected = self._get_selected_types(self._siss_doc_vars)
-            run_processing(config, logger, self._stop_event, allowed_types=selected or None)
+            run_processing(config, logger, self._stop_event, allowed_types=allowed_types)
         except Exception as e:
             self.after(0, self._log, f"Errore fatale: {e}")
 
@@ -1227,10 +1406,15 @@ class FSEApp(tk.Tk):
             messagebox.showwarning("Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
             return
 
-        selected = self._get_selected_types(self._patient_doc_vars)
-        if not selected:
+        selected = self._get_selected_types(self._patient_tutti_var, self._patient_doc_vars)
+        if selected is not None and not selected:
             messagebox.showwarning("Errore", "Seleziona almeno una tipologia di documento")
             return
+
+        # Collect filters
+        ente_filter = self._ente_var.get().strip()
+        date_from = self._parse_user_date(self._date_from_var.get())
+        date_to = self._parse_user_date(self._date_to_var.get())
 
         self._save_settings_quietly()
         self._patient_stop_event.clear()
@@ -1239,12 +1423,30 @@ class FSEApp(tk.Tk):
         self._patient_log(f"--- Avvio download per CF: {cf} ---")
 
         self._patient_worker = threading.Thread(
-            target=self._patient_download_worker, args=(cf, selected), daemon=True,
+            target=self._patient_download_worker,
+            args=(cf, selected, ente_filter, date_from, date_to),
+            daemon=True,
         )
         self._patient_worker.start()
         self._poll_patient_worker()
 
-    def _patient_download_worker(self, codice_fiscale: str, allowed_types: set[str]) -> None:
+    @staticmethod
+    def _parse_user_date(text: str) -> date | None:
+        """Parse a dd/mm/yyyy string into a date object."""
+        text = text.strip()
+        if not text:
+            return None
+        from datetime import datetime
+        try:
+            return datetime.strptime(text, "%d/%m/%Y").date()
+        except ValueError:
+            return None
+
+    def _patient_download_worker(self, codice_fiscale: str,
+                                 allowed_types: set[str] | None,
+                                 ente_filter: str = "",
+                                 date_from: date | None = None,
+                                 date_to: date | None = None) -> None:
         try:
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
@@ -1259,8 +1461,13 @@ class FSEApp(tk.Tk):
                 browser.start()
                 browser.wait_for_manual_login()
 
+                def on_enti_found(enti):
+                    self.after(0, self._update_ente_combobox, enti)
+
                 doc_results = browser.process_patient_all_dates(
                     codice_fiscale, self._patient_stop_event, allowed_types,
+                    ente_filter=ente_filter, date_from=date_from, date_to=date_to,
+                    on_enti_found=on_enti_found,
                 )
 
                 downloaded = 0

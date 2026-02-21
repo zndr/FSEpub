@@ -6,6 +6,7 @@ import threading
 import time
 import winreg
 from dataclasses import dataclass
+from datetime import datetime, date
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, Playwright
@@ -40,6 +41,16 @@ def _is_tipologia_valida(tipologia: str, allowed_types: set[str] | None = None) 
         elif upper == t:
             return True
     return False
+
+
+def _parse_table_date(date_text: str) -> date | None:
+    """Parse a date string from the FSE table into a date object."""
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(date_text.strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def detect_default_browser() -> dict | None:
@@ -881,8 +892,12 @@ class FSEBrowser:
 
     def process_patient_all_dates(self, codice_fiscale: str,
                                   stop_event: threading.Event | None = None,
-                                  allowed_types: set[str] | None = None) -> list[DocumentResult]:
-        """Download ALL documents (all dates) for a patient, filtered by allowed types."""
+                                  allowed_types: set[str] | None = None,
+                                  ente_filter: str = "",
+                                  date_from: date | None = None,
+                                  date_to: date | None = None,
+                                  on_enti_found: callable | None = None) -> list[DocumentResult]:
+        """Download ALL documents (all dates) for a patient, filtered by allowed types, ente, and date range."""
         patient_name = codice_fiscale  # Use CF as label since we don't have name
 
         if stop_event is not None and stop_event.is_set():
@@ -912,11 +927,15 @@ class FSEBrowser:
             header_texts = [headers.nth(j).inner_text().strip() for j in range(header_count)]
             self._logger.info(f"Intestazioni tabella referti: {header_texts}")
 
-            tipo_col = visualizza_col = None
+            date_col = tipo_col = ente_col = visualizza_col = None
             for idx, h in enumerate(header_texts):
                 h_upper = h.upper()
-                if "TIPOLOGIA" in h_upper:
+                if "DATA" in h_upper and date_col is None:
+                    date_col = idx
+                elif "TIPOLOGIA" in h_upper:
                     tipo_col = idx
+                elif "ENTE" in h_upper or "STRUTTURA" in h_upper:
+                    ente_col = idx
                 elif "VISUALIZZA" in h_upper:
                     visualizza_col = idx
 
@@ -930,24 +949,64 @@ class FSEBrowser:
             if row_count == 0:
                 return results
 
-            # Process ALL rows (no date filtering)
+            # Phase 1: Scan all rows to extract data and collect unique enti
+            row_info: list[tuple[int, str, str, str]] = []  # (index, date_text, tipo_text, ente_text)
+            ente_set: set[str] = set()
             for i in range(row_count):
-                if stop_event is not None and stop_event.is_set():
-                    self._logger.info("Download interrotto dall'utente")
-                    break
-
                 cells = data_rows.nth(i).locator("td")
                 cell_count = cells.count()
                 if cell_count <= (tipo_col or 0):
                     continue
+                date_text = cells.nth(date_col).inner_text().strip() if date_col is not None else ""
                 tipo_text = cells.nth(tipo_col).inner_text().strip()
+                ente_text = cells.nth(ente_col).inner_text().strip() if ente_col is not None else ""
+                row_info.append((i, date_text, tipo_text, ente_text))
+                if ente_text:
+                    ente_set.add(ente_text)
 
+            # Notify callback with unique enti
+            if on_enti_found and ente_set:
+                on_enti_found(sorted(ente_set))
+
+            # Phase 2: Filter and download
+            ente_filter_upper = ente_filter.strip().upper()
+            for i, date_text, tipo_text, ente_text in row_info:
+                if stop_event is not None and stop_event.is_set():
+                    self._logger.info("Download interrotto dall'utente")
+                    break
+
+                # Filter: tipologia
                 if not _is_tipologia_valida(tipo_text, allowed_types):
                     self._logger.info(f"Riga {i + 1}: tipologia '{tipo_text}' non di interesse, saltata")
                     results.append(DocumentResult(
                         disciplina=tipo_text, skipped=True, download_path=None, error=None
                     ))
                     continue
+
+                # Filter: ente
+                if ente_filter_upper and ente_filter_upper not in ente_text.upper():
+                    self._logger.info(f"Riga {i + 1}: ente '{ente_text}' non corrisponde al filtro, saltata")
+                    results.append(DocumentResult(
+                        disciplina=tipo_text, skipped=True, download_path=None, error=None
+                    ))
+                    continue
+
+                # Filter: date range
+                if date_from or date_to:
+                    parsed = _parse_table_date(date_text)
+                    if parsed:
+                        if date_from and parsed < date_from:
+                            self._logger.info(f"Riga {i + 1}: data '{date_text}' fuori intervallo, saltata")
+                            results.append(DocumentResult(
+                                disciplina=tipo_text, skipped=True, download_path=None, error=None
+                            ))
+                            continue
+                        if date_to and parsed > date_to:
+                            self._logger.info(f"Riga {i + 1}: data '{date_text}' fuori intervallo, saltata")
+                            results.append(DocumentResult(
+                                disciplina=tipo_text, skipped=True, download_path=None, error=None
+                            ))
+                            continue
 
                 result = self._download_document(i, tipo_text, patient_name, visualizza_col, data_rows)
                 results.append(result)
