@@ -610,7 +610,7 @@ class FSEBrowser:
         self._attached = False
         self._logger.info("Browser chiuso")
 
-    def wait_for_manual_login(self) -> None:
+    def wait_for_manual_login(self, stop_event: threading.Event | None = None) -> None:
         """Navigate to the FSE portal and wait for the user to complete SSO login."""
         import time
 
@@ -636,6 +636,11 @@ class FSEBrowser:
         max_wait = 300  # 5 minutes max
         elapsed = 0
         while elapsed < max_wait:
+            # Check for stop request
+            if stop_event is not None and stop_event.is_set():
+                self._logger.info("Attesa login interrotta dall'utente")
+                raise InterruptedError("Attesa login interrotta dall'utente")
+
             try:
                 # Check all pages using JS to get the real URL (page.url can be stale)
                 for page in self._context.pages:

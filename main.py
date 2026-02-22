@@ -70,7 +70,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
     browser = FSEBrowser(config, logger)
     try:
         browser.start()
-        browser.wait_for_manual_login()
+        browser.wait_for_manual_login(stop_event=stop_event)
     except Exception as e:
         logger.error(f"Avvio browser fallito: {e}")
         email_client.disconnect()

@@ -1736,6 +1736,8 @@ class FSEApp(QMainWindow):
 
         self._btn_load_enti.setEnabled(False)
         self._btn_patient_start.setEnabled(False)
+        self._btn_patient_stop.setEnabled(True)
+        self._patient_stop_event.clear()
         self._patient_log("--- Scansione strutture in corso... ---")
 
         self._ente_scan_worker = threading.Thread(
@@ -1759,7 +1761,7 @@ class FSEApp(QMainWindow):
 
             browser = FSEBrowser(config, logger)
             browser.start()
-            browser.wait_for_manual_login()
+            browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
             enti = browser.scan_patient_enti(codice_fiscale)
             if enti:
@@ -1783,6 +1785,7 @@ class FSEApp(QMainWindow):
         self._ente_scan_poll_timer.stop()
         self._btn_load_enti.setEnabled(True)
         self._btn_patient_start.setEnabled(True)
+        self._btn_patient_stop.setEnabled(False)
         self._patient_log("--- Scansione strutture terminata ---")
 
     # ---- Patient download ----
@@ -1867,7 +1870,7 @@ class FSEApp(QMainWindow):
             if not reused:
                 browser = FSEBrowser(config, logger)
                 browser.start()
-                browser.wait_for_manual_login()
+                browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
             try:
                 def on_enti_found(enti):
