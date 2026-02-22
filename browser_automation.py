@@ -734,6 +734,157 @@ class FSEBrowser:
         self._wait_for_spinner()
         self._logger.info(f"Pagina referti caricata: {self._page.url}")
 
+    def navigate_for_millewin(self, codice_fiscale: str,
+                              stop_event: threading.Event | None = None) -> None:
+        """Navigate to the FSE documents page for a patient from Millewin.
+
+        Handles these scenarios:
+        1. Page already showing documents for same patient → do nothing
+        2. Page showing documents for different patient → click 'Identifica altro cittadino', re-navigate
+        3. Page on CF input form → fill and navigate
+        4. Session expired → refresh and retry
+        5. No FSE page open → open new one
+        """
+        # Step 1: Find or open an FSE page
+        fse_page = None
+        if self._context:
+            for page in self._context.pages:
+                try:
+                    real_url = page.evaluate("window.location.href")
+                except Exception:
+                    real_url = page.url
+                if "operatorisiss" in real_url and "idpcrlmain" not in real_url and "ssoauth" not in real_url:
+                    fse_page = page
+                    break
+
+        if fse_page:
+            self._page = fse_page
+            self._page.set_default_timeout(self._config.page_timeout)
+            self._page.bring_to_front()
+            self._logger.info(f"Pagina FSE esistente trovata: {self._page.url}")
+        else:
+            self._logger.info("Nessuna pagina FSE trovata, apertura nuova pagina...")
+            self._page = self._context.new_page()
+            self._page.set_default_timeout(self._config.page_timeout)
+            self._page.goto(FSE_BASE_URL, wait_until="networkidle")
+
+            # Check if we landed on SSO login
+            try:
+                current_url = self._page.evaluate("window.location.href")
+            except Exception:
+                current_url = self._page.url
+            if "idpcrlmain" in current_url or "ssoauth" in current_url:
+                self.wait_for_manual_login(stop_event)
+
+        if stop_event is not None and stop_event.is_set():
+            raise InterruptedError("Workflow interrotto dall'utente")
+
+        self._wait_for_spinner()
+
+        # Step 2: Check current state of the page
+        existing_cf = None
+        try:
+            existing_cf = self._page.evaluate(
+                'document.querySelector("span:nth-child(2) span:nth-child(1)")?.textContent?.trim()'
+            )
+        except Exception:
+            pass
+
+        if existing_cf:
+            existing_cf_upper = existing_cf.strip().upper()
+            if existing_cf_upper == codice_fiscale.upper():
+                self._logger.info("Paziente gia' aperto nel FSE, nessuna azione necessaria")
+                return
+            else:
+                self._logger.info(f"Paziente diverso nel FSE ({existing_cf_upper}), cambio paziente...")
+                try:
+                    self._page.locator('a[href="#/"]').click()
+                    self._page.wait_for_load_state("networkidle")
+                    self._wait_for_spinner()
+                except Exception as e:
+                    self._logger.warning(f"Click 'Identifica altro cittadino' fallito: {e}, navigazione diretta...")
+                    self._page.goto(FSE_BASE_URL, wait_until="networkidle")
+                    self._wait_for_spinner()
+
+        if stop_event is not None and stop_event.is_set():
+            raise InterruptedError("Workflow interrotto dall'utente")
+
+        # Step 3: Fill CF and navigate (with session expiry handling)
+        max_retries = 2
+        for attempt in range(max_retries):
+            cf_input = self._page.locator("#inputcf")
+            if not cf_input.is_visible(timeout=5000):
+                self._logger.warning("Campo #inputcf non visibile, navigazione a pagina iniziale FSE...")
+                self._page.goto(FSE_BASE_URL, wait_until="networkidle")
+                self._wait_for_spinner()
+                # Check for SSO redirect
+                try:
+                    current_url = self._page.evaluate("window.location.href")
+                except Exception:
+                    current_url = self._page.url
+                if "idpcrlmain" in current_url or "ssoauth" in current_url:
+                    self.wait_for_manual_login(stop_event)
+                    self._wait_for_spinner()
+                cf_input = self._page.locator("#inputcf")
+                if not cf_input.is_visible(timeout=5000):
+                    raise RuntimeError("Campo codice fiscale non trovato nella pagina FSE")
+
+            cf_input.fill(codice_fiscale)
+            self._logger.info(f"Codice fiscale inserito: {codice_fiscale}")
+            self._wait_for_spinner()
+
+            cerca = self._page.get_by_role("button", name="Cerca")
+            if not cerca.is_visible(timeout=3000):
+                raise RuntimeError("Pulsante 'Cerca' non trovato")
+
+            cerca.click()
+
+            # Check for session expiry: wait for any sign of progression
+            try:
+                self._page.locator("button.btn-xlarge, :text-is('Referti')").first.wait_for(
+                    state="visible", timeout=8000,
+                )
+            except Exception:
+                # Nothing happened → session likely expired
+                if attempt < max_retries - 1:
+                    self._logger.warning("Sessione FSE scaduta, refresh pagina...")
+                    self._page.reload(wait_until="networkidle")
+                    self._wait_for_spinner()
+                    continue
+                else:
+                    raise RuntimeError(
+                        "Sessione FSE scaduta. Chiudi e riapri il browser, poi riprova."
+                    )
+
+            self._page.wait_for_load_state("networkidle")
+            self._wait_for_spinner()
+            break  # Success
+
+        if stop_event is not None and stop_event.is_set():
+            raise InterruptedError("Workflow interrotto dall'utente")
+
+        # Step 4: Click "Accedi" if visible
+        accedi_btn = self._page.locator("button.btn-xlarge")
+        if accedi_btn.is_visible(timeout=3000):
+            accedi_btn.click()
+            self._page.wait_for_load_state("networkidle")
+            self._wait_for_spinner()
+
+        if stop_event is not None and stop_event.is_set():
+            raise InterruptedError("Workflow interrotto dall'utente")
+
+        # Step 5: Click "Referti" tab
+        self._logger.info("Ricerca tab 'Referti' nella pagina...")
+        referti = self._page.get_by_text("Referti", exact=True).first
+        if referti.is_visible(timeout=5000):
+            referti.click()
+        else:
+            self._page.get_by_text("Referti").first.click()
+        self._page.wait_for_load_state("networkidle")
+        self._wait_for_spinner()
+
+        self._logger.info("Pagina documenti pronta")
+
     def process_patient(self, fse_link: str, patient_name: str, codice_fiscale: str,
                         stop_event: threading.Event | None = None,
                         allowed_types: set[str] | None = None) -> list[DocumentResult]:

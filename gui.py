@@ -1,6 +1,7 @@
 """GUI PySide6 per FSE Processor."""
 
 import ctypes
+import ctypes.wintypes as wintypes
 import json
 import logging
 import os
@@ -700,6 +701,9 @@ class FSEApp(QMainWindow):
         self._patient_worker: threading.Thread | None = None
         self._patient_browser: FSEBrowser | None = None
         self._ente_scan_worker: threading.Thread | None = None
+        self._mw_stop_event = threading.Event()
+        self._mw_worker: threading.Thread | None = None
+        self._mw_browser: FSEBrowser | None = None
         self._fields: dict[str, str | bool] = {}  # key -> current value
 
         # Signal bridge for thread-safe GUI updates
@@ -742,7 +746,7 @@ class FSEApp(QMainWindow):
         file_menu = menu_bar.addMenu("File")
 
         act_settings = QAction("Impostazioni", self)
-        act_settings.triggered.connect(lambda: self._notebook.setCurrentIndex(2))
+        act_settings.triggered.connect(lambda: self._notebook.setCurrentIndex(3))
         file_menu.addAction(act_settings)
 
         file_menu.addSeparator()
@@ -786,7 +790,11 @@ class FSEApp(QMainWindow):
         patient_tab = QWidget()
         self._notebook.addTab(patient_tab, "Scarica referti singolo paziente")
 
-        # Tab 3: Impostazioni (built first so fields exist for SISS tab)
+        # Tab 3: Millewin → FSE
+        mw_tab = QWidget()
+        self._notebook.addTab(mw_tab, "Millewin \u2192 FSE")
+
+        # Tab 4: Impostazioni (built first so fields exist for SISS tab)
         settings_tab = QWidget()
         self._notebook.addTab(settings_tab, "Impostazioni")
         self._build_settings_tab(settings_tab)
@@ -794,6 +802,7 @@ class FSEApp(QMainWindow):
         # Build SISS tab after settings so fields exist
         self._build_siss_tab(siss_tab)
         self._build_patient_tab(patient_tab)
+        self._build_millewin_tab(mw_tab)
 
         # Bottom bar: Reset console (left) — Apri cartella download (right)
         bottom_row = QHBoxLayout()
@@ -813,6 +822,8 @@ class FSEApp(QMainWindow):
             self._console.clear()
         elif idx == 1:
             self._patient_console.clear()
+        elif idx == 2:
+            self._mw_console.clear()
 
     def _open_download_dir(self) -> None:
         """Open the configured download directory in the file explorer."""
@@ -1108,6 +1119,181 @@ class FSEApp(QMainWindow):
         group_layout.addLayout(other_row)
 
         return tutti_cb, doc_cbs
+
+    def _build_millewin_tab(self, parent: QWidget) -> None:
+        """Build the Millewin → FSE tab content."""
+        layout = QVBoxLayout(parent)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Info label
+        info_label = QLabel(
+            "Apri la scheda di un paziente in Millewin, poi premi il pulsante."
+        )
+        layout.addWidget(info_label)
+
+        # Controls group
+        ctrl_group = QGroupBox("Controlli")
+        ctrl_layout = QHBoxLayout(ctrl_group)
+
+        self._btn_mw_start = QPushButton("Leggi Millewin e vai al FSE")
+        self._btn_mw_start.clicked.connect(self._start_mw_workflow)
+        ctrl_layout.addWidget(self._btn_mw_start)
+
+        self._btn_mw_stop = QPushButton("Interrompi")
+        self._btn_mw_stop.clicked.connect(self._stop_mw_workflow)
+        self._btn_mw_stop.setEnabled(False)
+        ctrl_layout.addWidget(self._btn_mw_stop)
+
+        ctrl_layout.addStretch()
+        layout.addWidget(ctrl_group)
+
+        # CF extracted label
+        self._mw_cf_label = QLabel("")
+        self._mw_cf_label.setFont(QFont("Consolas", 14))
+        layout.addWidget(self._mw_cf_label)
+
+        # Console
+        console_group = QGroupBox("Console")
+        console_layout = QVBoxLayout(console_group)
+        font_size = int(self._get_field("CONSOLE_FONT_SIZE") or "8")
+        self._mw_console = QTextEdit()
+        self._mw_console.setReadOnly(True)
+        self._mw_console.setFont(QFont("Consolas", font_size))
+        self._mw_console.setMinimumHeight(200)
+        console_layout.addWidget(self._mw_console)
+        layout.addWidget(console_group, 1)
+
+    def _start_mw_workflow(self) -> None:
+        """Start the Millewin → FSE workflow."""
+        if self._mw_worker and self._mw_worker.is_alive():
+            QMessageBox.warning(self, "Attenzione", "Workflow Millewin gia' in corso")
+            return
+
+        self._save_settings_quietly()
+        self._mw_stop_event.clear()
+        self._btn_mw_start.setEnabled(False)
+        self._btn_mw_stop.setEnabled(True)
+        self._mw_cf_label.setText("")
+        self._mw_log("--- Avvio workflow Millewin → FSE ---")
+
+        self._mw_worker = threading.Thread(
+            target=self._mw_workflow_worker, daemon=True,
+        )
+        self._mw_worker.start()
+        self._mw_poll_timer = QTimer(self)
+        self._mw_poll_timer.timeout.connect(self._poll_mw_worker)
+        self._mw_poll_timer.start(500)
+
+    def _mw_workflow_worker(self) -> None:
+        """Worker thread for the Millewin → FSE workflow."""
+        try:
+            # Step 1: Read CF from Millewin
+            cf = self._read_millewin_cf()
+            if cf is None:
+                self._mw_log("Nessun paziente aperto in Millewin (finestra non trovata o CF assente nel titolo)")
+                return
+
+            self._mw_log(f"CF estratto: {cf}")
+            self._bridge.call_on_main.emit(lambda c=cf: self._mw_cf_label.setText(c))
+
+            # Step 2: Create/reuse FSEBrowser
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            handler = TextHandler(self._mw_console, self._bridge)
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+            logger._logger.addHandler(handler)
+
+            reused = False
+            if self._mw_browser is not None:
+                try:
+                    if self._mw_browser._is_alive():
+                        reused = True
+                        logger.info("Riutilizzo browser esistente")
+                except Exception:
+                    pass
+                if not reused:
+                    try:
+                        self._mw_browser.stop()
+                    except Exception:
+                        pass
+                    self._mw_browser = None
+
+            if not reused:
+                browser = FSEBrowser(config, logger)
+                browser.start()
+                self._mw_browser = browser
+
+            # Step 3: Navigate to FSE documents page
+            self._mw_browser.navigate_for_millewin(cf, self._mw_stop_event)
+
+            self._mw_log("Navigazione completata, pagina documenti pronta")
+        except InterruptedError:
+            self._mw_log("Workflow interrotto dall'utente")
+        except Exception as e:
+            self._mw_log(f"Errore: {e}")
+
+    def _poll_mw_worker(self) -> None:
+        """Poll the Millewin workflow worker thread."""
+        if self._mw_worker and self._mw_worker.is_alive():
+            return
+        self._mw_poll_timer.stop()
+        self._btn_mw_start.setEnabled(True)
+        self._btn_mw_stop.setEnabled(False)
+        self._mw_log("--- Workflow terminato ---")
+
+    def _stop_mw_workflow(self) -> None:
+        """Request stop of the Millewin workflow."""
+        self._mw_stop_event.set()
+        self._mw_log("Richiesta interruzione inviata...")
+        self._btn_mw_stop.setEnabled(False)
+
+    def _mw_log(self, msg: str) -> None:
+        """Append a message to the Millewin console (main-thread safe)."""
+        self._bridge.append_text.emit(self._mw_console, msg)
+
+    def _read_millewin_cf(self) -> str | None:
+        """Read the codice fiscale from the Millewin window title."""
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+
+        CF_PATTERN = re.compile(r'[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]')
+
+        result = None
+
+        def enum_callback(hwnd, _):
+            nonlocal result
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            # Check class name starts with "FNWND"
+            class_name = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, class_name, 256)
+            if not class_name.value.startswith("FNWND"):
+                return True
+            # Check process is millewin.exe
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            h_process = kernel32.OpenProcess(0x0410, False, pid.value)  # QUERY_INFO | VM_READ
+            if h_process:
+                exe_name = ctypes.create_unicode_buffer(260)
+                psapi.GetModuleFileNameExW(h_process, None, exe_name, 260)
+                kernel32.CloseHandle(h_process)
+                if "millewin.exe" not in exe_name.value.lower():
+                    return True
+            # Read window title
+            length = user32.GetWindowTextLengthW(hwnd) + 1
+            title = ctypes.create_unicode_buffer(length)
+            user32.GetWindowTextW(hwnd, title, length)
+            match = CF_PATTERN.search(title.value.upper())
+            if match:
+                result = match.group(0)
+                return False  # Stop enumeration
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows(WNDENUMPROC(enum_callback), 0)
+        return result
 
     def _on_date_preset_changed(self, preset: str) -> None:
         """Handle date preset combobox selection change."""
@@ -2345,6 +2531,12 @@ class FSEApp(QMainWindow):
             except Exception:
                 pass
             self._patient_browser = None
+        if self._mw_browser is not None:
+            try:
+                self._mw_browser.stop()
+            except Exception:
+                pass
+            self._mw_browser = None
         super().closeEvent(event)
 
 
