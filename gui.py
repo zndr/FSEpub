@@ -577,6 +577,8 @@ class FSEApp(QMainWindow):
         self._worker: threading.Thread | None = None
         self._patient_stop_event = threading.Event()
         self._patient_worker: threading.Thread | None = None
+        self._patient_browser: FSEBrowser | None = None
+        self._ente_scan_worker: threading.Thread | None = None
         self._fields: dict[str, str | bool] = {}  # key -> current value
 
         # Signal bridge for thread-safe GUI updates
@@ -800,6 +802,9 @@ class FSEApp(QMainWindow):
         self._ente_combo.setEditable(True)
         self._ente_combo.addItem("")
         self._ente_combo.setToolTip("Filtra i documenti per ente o struttura sanitaria di provenienza")
+        small_font = self._ente_combo.font()
+        small_font.setPointSize(small_font.pointSize() - 1)
+        self._ente_combo.setFont(small_font)
         filter_layout.addWidget(self._ente_combo, 0, 1, 1, 3)
 
         filter_layout.addWidget(QLabel("Periodo:"), 1, 0)
@@ -826,6 +831,11 @@ class FSEApp(QMainWindow):
         # Controls
         ctrl_layout = QHBoxLayout()
         ctrl_layout.addStretch()
+        self._btn_load_enti = QPushButton("Carica strutture")
+        self._btn_load_enti.setToolTip("Apre il browser e carica le strutture disponibili per il paziente")
+        self._btn_load_enti.clicked.connect(self._start_ente_scan)
+        ctrl_layout.addWidget(self._btn_load_enti)
+
         self._btn_patient_start = QPushButton("Avvia Download")
         self._btn_patient_start.clicked.connect(self._start_patient_download)
         ctrl_layout.addWidget(self._btn_patient_start)
@@ -864,6 +874,7 @@ class FSEApp(QMainWindow):
         """Create Patient document type checkboxes with hierarchy."""
         self._patient_doc_group = QGroupBox("Tipologia documenti")
         group_layout = QVBoxLayout(self._patient_doc_group)
+        group_layout.setSpacing(2)
 
         tutti_cb = QCheckBox("Tutti")
         doc_cbs: dict[str, QCheckBox] = {}
@@ -899,14 +910,17 @@ class FSEApp(QMainWindow):
                 all_cbs.append(cb)
                 break
 
-        # Referto sub-types (indented)
+        # Referto sub-types (indented, compact)
         sub_items = [
             (tkey, dlabel, dfl) for tkey, dlabel, dfl in PATIENT_DOCUMENT_TYPES
             if tkey in REFERTO_SUBTYPES
         ]
+        sub_container = QVBoxLayout()
+        sub_container.setContentsMargins(24, 0, 0, 0)
+        sub_container.setSpacing(0)
         for i in range(0, len(sub_items), 2):
             row = QHBoxLayout()
-            row.setContentsMargins(24, 0, 0, 0)
+            row.setSpacing(8)
             for type_key, label, default_on in sub_items[i:i + 2]:
                 cb = QCheckBox(label)
                 cb.setChecked(default_on)
@@ -917,7 +931,8 @@ class FSEApp(QMainWindow):
                 all_cbs.append(cb)
                 referto_sub_cbs.append(cb)
             row.addStretch()
-            group_layout.addLayout(row)
+            sub_container.addLayout(row)
+        group_layout.addLayout(sub_container)
 
         # Other types
         other_row = QHBoxLayout()
@@ -1559,6 +1574,72 @@ class FSEApp(QMainWindow):
         self._log("Richiesta interruzione inviata...")
         self._btn_stop.setEnabled(False)
 
+    # ---- Patient ente scan ----
+
+    def _start_ente_scan(self) -> None:
+        if self._ente_scan_worker and self._ente_scan_worker.is_alive():
+            QMessageBox.warning(self, "Attenzione", "Scansione strutture gia' in corso")
+            return
+        if self._patient_worker and self._patient_worker.is_alive():
+            QMessageBox.warning(self, "Attenzione", "Download paziente in corso, attendere il completamento")
+            return
+
+        cf = self._cf_entry.text().strip().upper()
+        if not re.match(r"^[A-Z0-9]{16}$", cf):
+            QMessageBox.warning(self, "Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
+            return
+
+        self._btn_load_enti.setEnabled(False)
+        self._btn_patient_start.setEnabled(False)
+        self._patient_log("--- Scansione strutture in corso... ---")
+
+        self._ente_scan_worker = threading.Thread(
+            target=self._ente_scan_worker_fn,
+            args=(cf,),
+            daemon=True,
+        )
+        self._ente_scan_worker.start()
+        self._ente_scan_poll_timer = QTimer(self)
+        self._ente_scan_poll_timer.timeout.connect(self._poll_ente_scan)
+        self._ente_scan_poll_timer.start(500)
+
+    def _ente_scan_worker_fn(self, codice_fiscale: str) -> None:
+        try:
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            handler = TextHandler(self._patient_console, self._bridge)
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+            logger._logger.addHandler(handler)
+
+            browser = FSEBrowser(config, logger)
+            browser.start()
+            browser.wait_for_manual_login()
+
+            enti = browser.scan_patient_enti(codice_fiscale)
+            if enti:
+                self._bridge.call_on_main.emit(lambda e=enti: self._update_ente_combobox(e))
+                self._bridge.append_text.emit(
+                    self._patient_console, f"Trovate {len(enti)} strutture"
+                )
+            else:
+                self._bridge.append_text.emit(
+                    self._patient_console, "Nessuna struttura trovata"
+                )
+
+            # Save the browser for reuse by download worker
+            self._patient_browser = browser
+        except Exception as e:
+            self._bridge.append_text.emit(self._patient_console, f"Errore scansione strutture: {e}")
+
+    def _poll_ente_scan(self) -> None:
+        if self._ente_scan_worker and self._ente_scan_worker.is_alive():
+            return
+        self._ente_scan_poll_timer.stop()
+        self._btn_load_enti.setEnabled(True)
+        self._btn_patient_start.setEnabled(True)
+        self._patient_log("--- Scansione strutture terminata ---")
+
     # ---- Patient download ----
 
     def _start_patient_download(self) -> None:
@@ -1587,6 +1668,7 @@ class FSEApp(QMainWindow):
         self._patient_stop_event.clear()
         self._btn_patient_start.setEnabled(False)
         self._btn_patient_stop.setEnabled(True)
+        self._btn_load_enti.setEnabled(False)
         self._patient_log(f"--- Avvio download per CF: {cf} ---")
 
         self._patient_worker = threading.Thread(
@@ -1625,11 +1707,24 @@ class FSEApp(QMainWindow):
             logger._logger.addHandler(handler)
 
             file_manager = FileManager(config, logger)
-            browser = FSEBrowser(config, logger)
-            try:
+
+            # Reuse browser from ente scan if still alive
+            reused = False
+            if self._patient_browser is not None:
+                try:
+                    if self._patient_browser._is_alive():
+                        browser = self._patient_browser
+                        self._patient_browser = None
+                        reused = True
+                        logger.info("Riutilizzo browser dalla scansione strutture")
+                except Exception:
+                    pass
+            if not reused:
+                browser = FSEBrowser(config, logger)
                 browser.start()
                 browser.wait_for_manual_login()
 
+            try:
                 def on_enti_found(enti):
                     self._bridge.call_on_main.emit(lambda e=enti: self._update_ente_combobox(e))
 
@@ -1674,12 +1769,22 @@ class FSEApp(QMainWindow):
         self._patient_poll_timer.stop()
         self._btn_patient_start.setEnabled(True)
         self._btn_patient_stop.setEnabled(False)
+        self._btn_load_enti.setEnabled(True)
         self._patient_log("--- Download terminato ---")
 
     def _stop_patient_download(self) -> None:
         self._patient_stop_event.set()
         self._patient_log("Richiesta interruzione inviata...")
         self._btn_patient_stop.setEnabled(False)
+
+    def closeEvent(self, event) -> None:
+        if self._patient_browser is not None:
+            try:
+                self._patient_browser.stop()
+            except Exception:
+                pass
+            self._patient_browser = None
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":

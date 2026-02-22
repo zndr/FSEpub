@@ -922,6 +922,50 @@ class FSEBrowser:
         # Wait for table to appear
         self._page.wait_for_selector("table tbody tr", state="attached")
 
+    def scan_patient_enti(self, codice_fiscale: str) -> list[str]:
+        """Navigate to the patient page and return sorted unique Ente values without downloading."""
+        if not self._is_alive():
+            self._restart()
+
+        fse_link = f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}"
+        self._logger.info(f"Scansione enti per {codice_fiscale}: {fse_link}")
+
+        self._navigate_and_login(fse_link, codice_fiscale)
+
+        referti_table = self._page.locator("table:has(th:has-text('Tipologia documento'))")
+        referti_table.wait_for(state="attached", timeout=10000)
+
+        headers = referti_table.locator("thead th")
+        header_count = headers.count()
+        header_texts = [headers.nth(j).inner_text().strip() for j in range(header_count)]
+
+        ente_col = None
+        for idx, h in enumerate(header_texts):
+            h_upper = h.upper()
+            if "ENTE" in h_upper or "STRUTTURA" in h_upper:
+                ente_col = idx
+                break
+
+        if ente_col is None:
+            self._logger.warning(f"Colonna 'Ente/Struttura' non trovata: {header_texts}")
+            return []
+
+        data_rows = referti_table.locator("tbody tr:has(td)")
+        row_count = data_rows.count()
+        self._logger.info(f"Scansione enti: {row_count} righe trovate")
+
+        ente_set: set[str] = set()
+        for i in range(row_count):
+            cells = data_rows.nth(i).locator("td")
+            if cells.count() <= ente_col:
+                continue
+            ente_text = cells.nth(ente_col).inner_text().strip()
+            if ente_text:
+                ente_set.add(ente_text)
+
+        self._logger.info(f"Enti trovati: {sorted(ente_set)}")
+        return sorted(ente_set)
+
     def process_patient_all_dates(self, codice_fiscale: str,
                                   stop_event: threading.Event | None = None,
                                   allowed_types: set[str] | None = None,
