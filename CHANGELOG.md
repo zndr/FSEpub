@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.1.0] - 2026-02-22
+
+### Aggiunto
+
+- Tema blu professionale con barra dei menu
+- Pulsante "Carica strutture" per pre-caricare il dropdown Ente prima del download
+- Pulsante "Interrompi" per fermare il ciclo di attesa login
+- Dialogo di conferma al salvataggio delle impostazioni
+- Suffisso _QT6 al nome file installer
+
+### Modificato
+
+- Checkbox sotto-tipo referto compattate in riga singola con label brevi e tooltip
+- Tab paziente migliorato: placeholder Ente, feedback progresso, riepilogo e pulsanti di pulizia
+- Migliorata visibilita e gestione finestra browser durante l'automazione
+- Messaggio di fallback migliorato quando il browser di sistema non e disponibile
+
+### Corretto
+
+- Fix connessione CDP: validazione endpoint con HTTP, timeout aumentato e retry su sessione stale
+
 ## [2.0.0] - 2026-02-21
 
 ### Modificato

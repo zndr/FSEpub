@@ -1,8 +1,8 @@
 {
-    "Version": "2.0.0",
-    "ReleaseNotes": "Migrazione interfaccia grafica da Tkinter a PySide6 (Qt6) per un look moderno e nativo.",
+    "Version": "2.1.0",
+    "ReleaseNotes": "Tema blu professionale, miglioramenti UI, fix connessione CDP e nuove funzionalita tab paziente.",
     "DownloadUrl": "",
-    "ReleaseDate": "2026-02-21",
+    "ReleaseDate": "2026-02-22",
     "Sha256Hash": "",
     "FileSize": 0
 }
