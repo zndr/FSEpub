@@ -38,7 +38,7 @@ class FileManager:
 
     @staticmethod
     def build_filename(patient_name: str, codice_fiscale: str, disciplina: str) -> str:
-        safe_name = re.sub(r'[<>:"/\\|?*]', "", patient_name).replace(" ", "_")
+        safe_name = re.sub(r'[<>:"/\\|?*]', "", patient_name).replace(" ", "-")
         tag = FileManager._tipologia_tag(disciplina)
         return f"{codice_fiscale}_{safe_name}_{tag}.pdf"
 

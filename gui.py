@@ -63,12 +63,13 @@ ENV_FILE = str(paths.settings_file)
 SETTINGS_SPEC = [
     ("EMAIL_USER", "Email utente", "", "text"),
     ("EMAIL_PASS", "Email password", "", "password"),
-    ("IMAP_HOST", "IMAP Host", "mail-crs-lombardia.fastweb360.it", "text"),
+    ("IMAP_HOST", "IMAP Host", "mail.fastweb360.it", "text"),
     ("IMAP_PORT", "IMAP Port", "993", "int"),
     ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
     ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
     ("PDF_READER", "Lettore PDF", "default", "pdf_reader"),
     ("USE_EXISTING_BROWSER", "Usa browser esistente (CDP)", "false", "bool"),
+    ("OPEN_AFTER_DOWNLOAD", "Apri al termine", "true", "bool"),
     ("CDP_PORT", "Porta CDP", "9222", "int"),
     ("HEADLESS", "Headless browser", "false", "bool"),
     ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "60", "int"),
@@ -121,7 +122,7 @@ QGroupBox {
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 12px;
+    left: 10px;
     padding: 2px 8px;
     color: #1a4a8a;
 }
@@ -906,14 +907,14 @@ class FSEApp(QMainWindow):
 
         tutti_cb.toggled.connect(on_tutti_changed)
         row_layout.addWidget(tutti_cb)
+        row_layout.addStretch()
 
         for type_key, label, default_on in SISS_DOCUMENT_TYPES:
             cb = QCheckBox(label)
             cb.setChecked(default_on)
             row_layout.addWidget(cb)
+            row_layout.addStretch()
             doc_cbs[type_key] = cb
-
-        row_layout.addStretch()
         parent_layout.addWidget(group)
         return tutti_cb, doc_cbs
 
@@ -1077,7 +1078,6 @@ class FSEApp(QMainWindow):
         ]
         sub_row = QHBoxLayout()
         sub_row.setContentsMargins(24, 0, 0, 0)
-        sub_row.setSpacing(2)
         for type_key, label, default_on in sub_items:
             cb = QCheckBox(label)
             cb.setToolTip(type_key.title())
@@ -1085,10 +1085,10 @@ class FSEApp(QMainWindow):
             if referto_parent_cb and referto_parent_cb.isChecked():
                 cb.setEnabled(False)
             sub_row.addWidget(cb)
+            sub_row.addStretch()
             doc_cbs[type_key] = cb
             all_cbs.append(cb)
             referto_sub_cbs.append(cb)
-        sub_row.addStretch()
         group_layout.addLayout(sub_row)
 
         # Other types
@@ -1165,11 +1165,19 @@ class FSEApp(QMainWindow):
             self._settings_entries[key] = entry
             self._fields[key] = default
 
-        # Test connection button
+        # Test connection + Reset default buttons
+        mail_btn_row = QHBoxLayout()
         self._btn_test_imap = QPushButton("Test connessione")
         self._btn_test_imap.clicked.connect(self._test_imap_connection)
         self._btn_test_imap.setToolTip("Verifica connessione e login al server di posta")
-        mail_layout.addWidget(self._btn_test_imap, len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"]), 0, 1, 2)
+        mail_btn_row.addWidget(self._btn_test_imap)
+
+        btn_reset_imap = QPushButton("Ripristina default")
+        btn_reset_imap.setToolTip("Ripristina host e porta IMAP ai valori predefiniti")
+        btn_reset_imap.clicked.connect(self._reset_imap_defaults)
+        mail_btn_row.addWidget(btn_reset_imap)
+
+        mail_layout.addLayout(mail_btn_row, len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"]), 0, 1, 2)
 
         top_layout.addWidget(mail_group)
 
@@ -1187,14 +1195,20 @@ class FSEApp(QMainWindow):
         self._build_pdf_reader_row(br_layout, r, "PDF_READER", spec["PDF_READER"][1])
 
         r += 1
-        br_layout.addWidget(QLabel("Dir. download"), r, 0)
+        br_layout.addWidget(QLabel("salva in"), r, 0)
+        dl_row = QHBoxLayout()
         self._download_dir_entry = QLineEdit(spec["DOWNLOAD_DIR"][1])
-        br_layout.addWidget(self._download_dir_entry, r, 1)
+        self._download_dir_entry.setToolTip(spec["DOWNLOAD_DIR"][1])
+        self._download_dir_entry.textChanged.connect(
+            lambda text: self._download_dir_entry.setToolTip(text)
+        )
+        dl_row.addWidget(self._download_dir_entry, 1)
         browse_btn = QPushButton("...")
         browse_btn.setFixedWidth(30)
         browse_btn.setObjectName("browseBtn")
         browse_btn.clicked.connect(self._browse_download_dir)
-        br_layout.addWidget(browse_btn, r, 2)
+        dl_row.addWidget(browse_btn)
+        br_layout.addLayout(dl_row, r, 1, 1, 2)
         self._fields["DOWNLOAD_DIR"] = spec["DOWNLOAD_DIR"][1]
 
         r += 1
@@ -1206,8 +1220,14 @@ class FSEApp(QMainWindow):
             "solo nella console dell'app. Disattiva questa opzione per vedere il browser\n"
             "in azione durante l'automazione."
         )
-        br_layout.addWidget(self._cdp_cb, r, 0, 1, 3)
+        br_layout.addWidget(self._cdp_cb, r, 0, 1, 2)
         self._fields["USE_EXISTING_BROWSER"] = spec["USE_EXISTING_BROWSER"][1]
+
+        self._open_after_cb = QCheckBox("Apri al termine")
+        self._open_after_cb.setChecked(True)
+        self._open_after_cb.setToolTip("Apri automaticamente i PDF scaricati al termine del download")
+        br_layout.addWidget(self._open_after_cb, r, 2)
+        self._fields["OPEN_AFTER_DOWNLOAD"] = "true"
 
         # CDP port: hidden field for code compatibility
         self._fields["CDP_PORT"] = spec["CDP_PORT"][1]
@@ -1221,46 +1241,9 @@ class FSEApp(QMainWindow):
         self._cdp_registry_cb.setEnabled(not is_firefox and bool(self._default_browser_info))
         self._cdp_registry_cb.setToolTip("Modifica il registro di Windows per avviare il browser predefinito con il supporto CDP attivo")
         self._cdp_registry_cb.toggled.connect(self._on_cdp_registry_toggled)
-        br_layout.addWidget(self._cdp_registry_cb, r, 0, 1, 3)
+        br_layout.addWidget(self._cdp_registry_cb, r, 0, 1, 2)
         self._sync_cdp_registry_checkbox()
 
-        top_layout.addWidget(br_group)
-        layout.addLayout(top_layout)
-
-        # ── Bottom (full-width): Parametri ──
-        params_group = QGroupBox("Parametri")
-        params_layout = QGridLayout(params_group)
-        params_layout.setColumnStretch(1, 1)
-        params_layout.setColumnStretch(3, 1)
-        params_layout.setColumnStretch(5, 1)
-
-        # Row 0: timeouts
-        params_layout.addWidget(QLabel("Download timeout (sec)"), 0, 0)
-        self._dl_timeout_entry = QLineEdit(spec["DOWNLOAD_TIMEOUT"][1])
-        self._dl_timeout_entry.setFixedWidth(60)
-        self._dl_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il download di un documento")
-        params_layout.addWidget(self._dl_timeout_entry, 0, 1)
-        self._fields["DOWNLOAD_TIMEOUT"] = spec["DOWNLOAD_TIMEOUT"][1]
-
-        params_layout.addWidget(QLabel("Page timeout (sec)"), 0, 2)
-        self._pg_timeout_entry = QLineEdit(spec["PAGE_TIMEOUT"][1])
-        self._pg_timeout_entry.setFixedWidth(60)
-        self._pg_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il caricamento di una pagina")
-        params_layout.addWidget(self._pg_timeout_entry, 0, 3)
-        self._fields["PAGE_TIMEOUT"] = spec["PAGE_TIMEOUT"][1]
-
-        params_layout.addWidget(QLabel("Dim. carattere console"), 0, 4)
-        self._font_size_entry = QLineEdit(spec["CONSOLE_FONT_SIZE"][1])
-        self._font_size_entry.setFixedWidth(60)
-        params_layout.addWidget(self._font_size_entry, 0, 5)
-        self._fields["CONSOLE_FONT_SIZE"] = spec["CONSOLE_FONT_SIZE"][1]
-
-        # Fields for settings persistence displayed in SISS tab
-        self._fields["MAX_EMAILS"] = spec["MAX_EMAILS"][1]
-        self._fields["MARK_AS_READ"] = spec["MARK_AS_READ"][1]
-        self._fields["DELETE_AFTER_PROCESSING"] = spec["DELETE_AFTER_PROCESSING"][1]
-
-        # Row 1: headless checkbox
         self._headless_cb = QCheckBox("Headless browser")
         self._headless_cb.setChecked(spec["HEADLESS"][1].lower() == "true")
         self._headless_cb.setToolTip(
@@ -1268,13 +1251,54 @@ class FSEApp(QMainWindow):
             "Utile per esecuzioni non presidiate, ma impedisce il login manuale SSO.\n"
             "Disattiva questa opzione per vedere il browser pilotato dall'app."
         )
-        params_layout.addWidget(self._headless_cb, 1, 0, 1, 6)
+        br_layout.addWidget(self._headless_cb, r, 2)
         self._fields["HEADLESS"] = spec["HEADLESS"][1]
+
+        top_layout.addWidget(br_group)
+        layout.addLayout(top_layout)
+
+        # ── Bottom (full-width): Parametri ──
+        params_group = QGroupBox("Parametri")
+        params_layout = QVBoxLayout(params_group)
+
+        # Row 0: timeouts
+        params_row0 = QHBoxLayout()
+
+        params_row0.addWidget(QLabel("Download timeout (sec)"))
+        self._dl_timeout_entry = QLineEdit(spec["DOWNLOAD_TIMEOUT"][1])
+        self._dl_timeout_entry.setFixedWidth(60)
+        self._dl_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il download di un documento")
+        params_row0.addWidget(self._dl_timeout_entry)
+        self._fields["DOWNLOAD_TIMEOUT"] = spec["DOWNLOAD_TIMEOUT"][1]
+
+        params_row0.addStretch()
+
+        params_row0.addWidget(QLabel("Page timeout (sec)"))
+        self._pg_timeout_entry = QLineEdit(spec["PAGE_TIMEOUT"][1])
+        self._pg_timeout_entry.setFixedWidth(60)
+        self._pg_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il caricamento di una pagina")
+        params_row0.addWidget(self._pg_timeout_entry)
+        self._fields["PAGE_TIMEOUT"] = spec["PAGE_TIMEOUT"][1]
+
+        params_row0.addStretch()
+
+        params_row0.addWidget(QLabel("Dim. carattere console"))
+        self._font_size_entry = QLineEdit(spec["CONSOLE_FONT_SIZE"][1])
+        self._font_size_entry.setFixedWidth(60)
+        params_row0.addWidget(self._font_size_entry)
+        self._fields["CONSOLE_FONT_SIZE"] = spec["CONSOLE_FONT_SIZE"][1]
+
+        params_layout.addLayout(params_row0)
+
+        # Fields for settings persistence displayed in SISS tab
+        self._fields["MAX_EMAILS"] = spec["MAX_EMAILS"][1]
+        self._fields["MARK_AS_READ"] = spec["MARK_AS_READ"][1]
+        self._fields["DELETE_AFTER_PROCESSING"] = spec["DELETE_AFTER_PROCESSING"][1]
 
         # Save button
         save_btn = QPushButton("Salva Impostazioni")
         save_btn.clicked.connect(self._save_settings)
-        params_layout.addWidget(save_btn, 2, 0, 1, 6)
+        params_layout.addWidget(save_btn)
 
         layout.addWidget(params_group)
         layout.addStretch()
@@ -1640,6 +1664,11 @@ class FSEApp(QMainWindow):
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(_get_full_report()))
         btn_layout.addWidget(copy_btn)
 
+        preview_btn = QPushButton("Anteprima")
+        preview_btn.setToolTip("Visualizza il messaggio che verra' inviato al supporto (con CF oscurati)")
+        preview_btn.clicked.connect(lambda: self._show_send_preview(self._sanitize_cf(_get_full_report())))
+        btn_layout.addWidget(preview_btn)
+
         send_btn = QPushButton("Invia")
         send_btn.setToolTip("Invia le informazioni di debug via email a supporto@dottorgiorgio.it")
         send_btn.clicked.connect(lambda: self._send_debug_email(_get_full_report(), dlg))
@@ -1653,11 +1682,31 @@ class FSEApp(QMainWindow):
 
         dlg.exec()
 
+    def _show_send_preview(self, sanitized_body: str) -> None:
+        """Show a preview of the sanitized message that will be sent."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Anteprima messaggio")
+        dlg.resize(520, 400)
+        layout = QVBoxLayout(dlg)
+
+        layout.addWidget(QLabel("Questo e' il messaggio che verra' inviato al supporto:"))
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setFont(QFont("Consolas", 9))
+        text.setPlainText(sanitized_body)
+        layout.addWidget(text)
+
+        close_btn = QPushButton("Chiudi")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn)
+
+        dlg.exec()
+
     @staticmethod
     def _sanitize_cf(text: str) -> str:
         """Replace any Italian codice fiscale in text with a placeholder."""
         return re.sub(
-            r'\b[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b',
+            r'[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]',
             'XXXYYY11Z22H123T',
             text,
             flags=re.IGNORECASE,
@@ -1749,7 +1798,7 @@ class FSEApp(QMainWindow):
     def _browse_download_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Seleziona directory", self._download_dir_entry.text() or ".")
         if path:
-            self._download_dir_entry.setText(path)
+            self._download_dir_entry.setText(os.path.normpath(path))
 
     def _log(self, msg: str) -> None:
         """Append a message to the console (main-thread safe)."""
@@ -1769,6 +1818,7 @@ class FSEApp(QMainWindow):
         self._fields["CONSOLE_FONT_SIZE"] = self._font_size_entry.text()
         self._fields["HEADLESS"] = "true" if self._headless_cb.isChecked() else "false"
         self._fields["USE_EXISTING_BROWSER"] = "true" if self._cdp_cb.isChecked() else "false"
+        self._fields["OPEN_AFTER_DOWNLOAD"] = "true" if self._open_after_cb.isChecked() else "false"
         # BROWSER_CHANNEL and PDF_READER are already updated via combobox handlers
         # Sync fields from SISS tab widgets
         self._fields["MAX_EMAILS"] = self._max_email_entry.text()
@@ -1799,7 +1849,7 @@ class FSEApp(QMainWindow):
             if key in self._settings_entries:
                 self._settings_entries[key].setText(val)
             elif key == "DOWNLOAD_DIR":
-                self._download_dir_entry.setText(val)
+                self._download_dir_entry.setText(os.path.normpath(val))
             elif key == "DOWNLOAD_TIMEOUT":
                 self._dl_timeout_entry.setText(val)
             elif key == "PAGE_TIMEOUT":
@@ -1810,6 +1860,8 @@ class FSEApp(QMainWindow):
                 self._headless_cb.setChecked(val.lower() == "true")
             elif key == "USE_EXISTING_BROWSER":
                 self._cdp_cb.setChecked(val.lower() == "true")
+            elif key == "OPEN_AFTER_DOWNLOAD":
+                self._open_after_cb.setChecked(val.lower() == "true")
             elif key == "BROWSER_CHANNEL":
                 label = self._browser_revmap.get(val)
                 if label:
@@ -1835,6 +1887,11 @@ class FSEApp(QMainWindow):
             QMessageBox.critical(self, "Errore", f"Impossibile salvare: {e}")
 
     # ---- Test IMAP connection ----
+
+    def _reset_imap_defaults(self) -> None:
+        """Reset IMAP host and port to default values."""
+        self._settings_entries["IMAP_HOST"].setText("mail.fastweb360.it")
+        self._settings_entries["IMAP_PORT"].setText("993")
 
     def _test_imap_connection(self) -> None:
         self._btn_test_imap.setEnabled(False)
