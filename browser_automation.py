@@ -4,6 +4,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.request
 import winreg
 from dataclasses import dataclass
 from datetime import datetime, date
@@ -232,12 +233,18 @@ def _delete_registry_tree(hive: int, subkey: str) -> None:
 
 
 def _is_cdp_port_available(port: int) -> bool:
-    """Check if a CDP endpoint is responding on localhost:port."""
+    """Check if a CDP endpoint is responding on localhost:port via HTTP /json/version."""
     try:
-        with socket.create_connection(("localhost", port), timeout=1):
-            return True
-    except (ConnectionRefusedError, TimeoutError, OSError):
-        return False
+        req = urllib.request.Request(f"http://localhost:{port}/json/version")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        # Fallback to raw socket check (e.g. if /json/version is slow)
+        try:
+            with socket.create_connection(("localhost", port), timeout=1):
+                return True
+        except (ConnectionRefusedError, TimeoutError, OSError):
+            return False
 
 
 def _is_browser_process_running(process_name: str) -> bool:
@@ -356,13 +363,7 @@ class FSEBrowser:
         endpoint = f"http://localhost:{port}"
         channel = self._config.browser_channel
 
-        # 1. CDP port already available → connect directly
-        if _is_cdp_port_available(port):
-            self._logger.info(f"Porta CDP {port} disponibile, connessione diretta...")
-            self._connect_cdp(endpoint, port)
-            return
-
-        # 2. Detect browser info for further logic
+        # 1. Detect browser info (needed for recovery)
         browser_info = detect_default_browser()
         process_name = None
         exe_path = None
@@ -371,11 +372,40 @@ class FSEBrowser:
             process_name = browser_info["process_name"]
             exe_path = browser_info["exe_path"]
 
-        # Also try to resolve from configured channel
         if not exe_path:
             exe_path = self._resolve_exe_from_channel(channel)
         if not process_name and channel in ("msedge", "chrome"):
             process_name = "msedge.exe" if channel == "msedge" else "chrome.exe"
+
+        # 2. CDP port already available → connect directly
+        if _is_cdp_port_available(port):
+            self._logger.info(f"Porta CDP {port} disponibile, connessione diretta...")
+            try:
+                self._connect_cdp(endpoint, port)
+                return
+            except ConnectionError:
+                # CDP port responds but handshake failed (stale session, browser busy).
+                # Try to kill and relaunch if we know the browser.
+                if process_name and exe_path and Path(exe_path).exists():
+                    self._logger.warning(
+                        "Connessione CDP fallita nonostante la porta sia aperta. "
+                        "Rilancio del browser..."
+                    )
+                    _kill_browser_processes(process_name)
+                    _launch_browser_with_cdp(exe_path, port)
+
+                    elapsed = 0.0
+                    while elapsed < CDP_CONNECT_TIMEOUT:
+                        if _is_cdp_port_available(port):
+                            self._logger.info(
+                                f"Porta CDP {port} disponibile dopo rilancio ({elapsed:.1f}s)"
+                            )
+                            self._connect_cdp(endpoint, port)
+                            return
+                        time.sleep(CDP_CONNECT_POLL)
+                        elapsed += CDP_CONNECT_POLL
+
+                raise  # Re-raise if recovery not possible or also failed
 
         # 3. Browser running without CDP
         if process_name and _is_browser_process_running(process_name):
@@ -442,7 +472,9 @@ class FSEBrowser:
     def _connect_cdp(self, endpoint: str, port: int) -> None:
         """Connect to a browser via CDP and set up context/page."""
         try:
-            self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+            self._browser = self._playwright.chromium.connect_over_cdp(
+                endpoint, timeout=60000
+            )
         except Exception as e:
             raise ConnectionError(
                 f"Impossibile connettersi al browser su {endpoint}. "
