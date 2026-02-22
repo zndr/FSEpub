@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.2.0] - 2026-02-22
+
+### Aggiunto
+
+- Crittografia credenziali email: la password viene salvata crittografata in `settings.env` con prefisso `ENC:` (Fernet + PBKDF2HMAC legato all'identita Windows)
+- Dialog dedicato "Cambia password" con verifica della password attuale, nuova password e conferma
+- Migrazione automatica: le password in chiaro vengono crittografate al primo avvio senza intervento dell'utente
+- Nuovo modulo `credential_manager.py` per gestione centralizzata delle credenziali
+- Dipendenza `cryptography>=42.0.0`
+
+### Modificato
+
+- Campo password email reso read-only con pulsante "Cambia..." a fianco
+- `config.py` decritta automaticamente `EMAIL_PASS` al caricamento
+
+
 ## [2.1.0] - 2026-02-22
 
 ### Aggiunto

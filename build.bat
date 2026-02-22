@@ -309,7 +309,7 @@ echo   Build completato con successo!
 echo ============================================
 echo   Eseguibile: dist\FSE Processor\FSE Processor.exe
 if defined ISCC (
-    echo   Installer:  installer_output\FSE_Processor_Setup_2.1.0_QT6.exe
+    echo   Installer:  installer_output\FSE_Processor_Setup_2.2.0_QT6.exe
 )
 echo ============================================
 pause
