@@ -89,8 +89,8 @@ SISS_DOCUMENT_TYPES = [
 ]
 
 PATIENT_DOCUMENT_TYPES = [
-    ("REFERTO", "Referti specialistici", True),
-    ("REFERTO SPECIALISTICO", "Referto Specialistico", False),
+    ("REFERTO", "Tutti i referti specialistici", True),
+    ("REFERTO SPECIALISTICO", "non def.", False),
     ("REFERTO SPECIALISTICO LABORATORIO", "Lab", False),
     ("REFERTO SPECIALISTICO RADIOLOGIA", "Imaging", False),
     ("REFERTO ANATOMIA PATOLOGICA", "Anat. pat.", False),
@@ -910,29 +910,26 @@ class FSEApp(QMainWindow):
                 all_cbs.append(cb)
                 break
 
-        # Referto sub-types (indented, compact)
+        # Referto sub-types (single indented row, compact)
         sub_items = [
             (tkey, dlabel, dfl) for tkey, dlabel, dfl in PATIENT_DOCUMENT_TYPES
             if tkey in REFERTO_SUBTYPES
         ]
-        sub_container = QVBoxLayout()
-        sub_container.setContentsMargins(24, 0, 0, 0)
-        sub_container.setSpacing(0)
-        for i in range(0, len(sub_items), 2):
-            row = QHBoxLayout()
-            row.setSpacing(8)
-            for type_key, label, default_on in sub_items[i:i + 2]:
-                cb = QCheckBox(label)
-                cb.setChecked(default_on)
-                if referto_parent_cb and referto_parent_cb.isChecked():
-                    cb.setEnabled(False)
-                row.addWidget(cb)
-                doc_cbs[type_key] = cb
-                all_cbs.append(cb)
-                referto_sub_cbs.append(cb)
-            row.addStretch()
-            sub_container.addLayout(row)
-        group_layout.addLayout(sub_container)
+        sub_row = QHBoxLayout()
+        sub_row.setContentsMargins(24, 0, 0, 0)
+        sub_row.setSpacing(2)
+        for type_key, label, default_on in sub_items:
+            cb = QCheckBox(label)
+            cb.setToolTip(type_key.title())
+            cb.setChecked(default_on)
+            if referto_parent_cb and referto_parent_cb.isChecked():
+                cb.setEnabled(False)
+            sub_row.addWidget(cb)
+            doc_cbs[type_key] = cb
+            all_cbs.append(cb)
+            referto_sub_cbs.append(cb)
+        sub_row.addStretch()
+        group_layout.addLayout(sub_row)
 
         # Other types
         other_row = QHBoxLayout()
