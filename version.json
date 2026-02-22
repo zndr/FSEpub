@@ -3,6 +3,6 @@
     "ReleaseNotes": "Auto-polling Millewin con navigazione automatica al cambio paziente. Rilevamento installazione Millewin con tab nascosto se assente.",
     "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.0/FSE_Processor_Setup_2.3.0_QT6.exe",
     "ReleaseDate": "2026-02-22",
-    "Sha256Hash": "0862a187f5d05680bdf790810660d5c1a97bb628fd83587dc5b78f00ae993405",
-    "FileSize": 61229534
+    "Sha256Hash": "93f88118739a89c771b6b5d6971f595fe76a6a9b7ef02539f758f592c5e3f904",
+    "FileSize": 61250208
 }

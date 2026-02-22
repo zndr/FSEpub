@@ -1157,7 +1157,7 @@ class FSEApp(QMainWindow):
         ctrl_group = QGroupBox("Controlli")
         ctrl_layout = QHBoxLayout(ctrl_group)
 
-        self._btn_mw_start = QPushButton("Leggi Millewin e vai al FSE")
+        self._btn_mw_start = QPushButton("Vai al FSE del paziente corrente")
         self._btn_mw_start.clicked.connect(lambda: self._start_mw_workflow())
         ctrl_layout.addWidget(self._btn_mw_start)
 
@@ -1170,7 +1170,7 @@ class FSEApp(QMainWindow):
         layout.addWidget(ctrl_group)
 
         # Auto-polling checkbox
-        self._mw_auto_cb = QCheckBox("Navigazione automatica al cambio paziente")
+        self._mw_auto_cb = QCheckBox("Sincronizzazione automatica al cambio paziente")
         self._mw_auto_cb.setToolTip(
             "Monitora Millewin e naviga automaticamente al FSE quando cambi paziente"
         )
