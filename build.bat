@@ -198,8 +198,19 @@ echo.
 :: Set PIP command based on Python command
 set "PIP_CMD=!PYTHON_CMD! -m pip"
 
+:: ---- Step 1b: Auto-bump patch version ----
+echo [1b/8] Auto-incremento versione patch...
+for /f "tokens=*" %%v in ('!PYTHON_CMD! bump_version.py') do set "VERSION=%%v"
+if "!VERSION!"=="" (
+    echo [ERRORE] bump_version.py non ha restituito una versione valida
+    pause
+    exit /b 1
+)
+echo [OK] Nuova versione: !VERSION!
+echo.
+
 :: ---- Step 2: Check/install PyInstaller ----
-echo [2/6] Verifica PyInstaller...
+echo [2/8] Verifica PyInstaller...
 echo       Controllo se PyInstaller e' gia' installato...
 !PYTHON_CMD! -c "import PyInstaller" >nul 2>&1
 if errorlevel 1 (
@@ -216,14 +227,14 @@ echo [OK] PyInstaller disponibile
 echo.
 
 :: ---- Step 3: Install dependencies ----
-echo [3/6] Installazione dipendenze da requirements.txt...
+echo [3/8] Installazione dipendenze da requirements.txt...
 echo       Esecuzione: !PIP_CMD! install -r requirements.txt
 !PIP_CMD! install -r requirements.txt >nul 2>&1
 echo [OK] Dipendenze installate
 echo.
 
 :: ---- Step 4: Clean & Build ----
-echo [4/6] Compilazione con PyInstaller...
+echo [4/8] Compilazione con PyInstaller...
 
 echo       Pulizia build precedente...
 if exist dist (
@@ -252,7 +263,7 @@ echo [OK] PyInstaller build completato
 echo.
 
 :: ---- Step 5: Verify output ----
-echo [5/6] Verifica risultato build...
+echo [5/8] Verifica risultato build...
 
 echo       Ricerca eseguibile...
 if not exist "dist\FSE Processor\FSE Processor.exe" (
@@ -272,7 +283,7 @@ if not exist "dist\FSE Processor\playwright\driver\node.exe" (
 echo.
 
 :: ---- Step 6: Create Installer ----
-echo [6/6] Generazione installer con Inno Setup...
+echo [6/8] Generazione installer con Inno Setup...
 
 set "ISCC="
 echo       Ricerca Inno Setup 6...
@@ -297,19 +308,32 @@ if defined ISCC (
     )
     echo.
     echo [OK] Installer creato in installer_output\
+    echo.
+
+    :: ---- Step 7: Update hash and size in version.json ----
+    echo [7/8] Aggiornamento hash e dimensione in version.json...
+    set "INSTALLER_PATH=installer_output\FSE_Processor_Setup_!VERSION!_QT6.exe"
+    !PYTHON_CMD! bump_version.py --hash "!INSTALLER_PATH!"
+    if errorlevel 1 (
+        echo [ERRORE] Aggiornamento hash fallito
+        pause
+        exit /b 1
+    )
+    echo [OK] version.json aggiornato con SHA256 e dimensione
 ) else (
     echo       Inno Setup non trovato. Installer non generato.
     echo       Installa Inno Setup 6 da: https://jrsoftware.org/isinfo.php
     echo       Poi riesegui build.bat per generare l'installer.
 )
 
+:: ---- Step 8: Summary ----
 echo.
 echo ============================================
-echo   Build completato con successo!
+echo   Build completato con successo! v!VERSION!
 echo ============================================
 echo   Eseguibile: dist\FSE Processor\FSE Processor.exe
 if defined ISCC (
-    echo   Installer:  installer_output\FSE_Processor_Setup_2.2.1_QT6.exe
+    echo   Installer:  installer_output\FSE_Processor_Setup_!VERSION!_QT6.exe
 )
 echo ============================================
 pause
