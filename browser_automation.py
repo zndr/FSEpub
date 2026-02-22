@@ -336,9 +336,11 @@ class FSEBrowser:
                 )
             except Exception as e:
                 if "Target page, context or browser has been closed" in str(e):
-                    self._logger.warning(
-                        f"Lancio {channel} fallito (versione incompatibile con Playwright). "
-                        f"Fallback a Chromium integrato..."
+                    self._logger.info(
+                        f"Modalità DCP disabilitata nelle impostazioni"
+                        f"{channel} non verrà usato per l'automazione. "
+                        f"Verra' avviato Chromium integrato: sara' necessario un nuovo login SSO."
+                        f"\nAbilita l'opzione 'Usa browser CDP' nelle impostazioni per utilizzare il browser già in sessione"
                     )
                     self._context = self._launch_bundled_chromium()
                 else:
