@@ -708,6 +708,9 @@ class FSEApp(QMainWindow):
         self._build_ui()
         self._load_settings()
 
+        # Auto-check for updates after the window is shown
+        QTimer.singleShot(2000, self._check_updates_startup)
+
     # ---- helpers for field values ----
 
     def _get_field(self, key: str) -> str:
@@ -838,7 +841,7 @@ class FSEApp(QMainWindow):
         btn_row = QHBoxLayout()
         self._btn_check = QPushButton("Controlla Email")
         self._btn_check.clicked.connect(self._check_email)
-        self._btn_check.setToolTip("Conta le email con referti da scaricare, senza avviare il download")
+        self._btn_check.setToolTip("Conta le email non lette con referti da scaricare, senza avviare il download")
         btn_row.addWidget(self._btn_check)
 
         self._btn_start = QPushButton("Avvia download")
@@ -1562,8 +1565,16 @@ class FSEApp(QMainWindow):
                 return
         QMessageBox.warning(self, "Guida non trovata", f"Il file guida non è stato trovato:\n{candidates[0]}")
 
-    def _check_updates(self) -> None:
-        """Check for updates by fetching version.json from GitHub."""
+    def _check_updates_startup(self) -> None:
+        """Silent update check at startup – only notifies if a new version exists."""
+        self._check_updates(silent=True)
+
+    def _check_updates(self, silent: bool = False) -> None:
+        """Check for updates by fetching version.json from GitHub.
+
+        When *silent* is True (startup check), no feedback is shown if the app
+        is already up-to-date or if the network request fails.
+        """
         VERSION_URL = "https://raw.githubusercontent.com/zndr/FSEpub/main/version.json"
 
         def worker():
@@ -1585,16 +1596,17 @@ class FSEApp(QMainWindow):
                     if download_url:
                         msg += "Vuoi aprire la pagina di download?"
                     self._bridge.call_on_main.emit(lambda: self._prompt_update(msg, download_url))
-                else:
+                elif not silent:
                     self._bridge.show_info.emit(
                         "Aggiornamenti",
                         f"Nessun aggiornamento disponibile.\n\nVersione attuale: v{__version__}",
                     )
             except Exception as e:
-                self._bridge.show_error.emit(
-                    "Aggiornamenti",
-                    f"Impossibile verificare gli aggiornamenti:\n{e}",
-                )
+                if not silent:
+                    self._bridge.show_error.emit(
+                        "Aggiornamenti",
+                        f"Impossibile verificare gli aggiornamenti:\n{e}",
+                    )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2042,14 +2054,14 @@ class FSEApp(QMainWindow):
             client.disconnect()
             count = len(emails)
             if count == 0:
-                msg = "Nessuna email con referti da scaricare"
+                msg = "Nessuna email con referti non letti da scaricare"
             elif client.limit_reached:
                 msg = (
                     f"Trovati {count} messaggi da scaricare "
                     f"(raggiunto limite specificato nelle impostazioni)"
                 )
             else:
-                msg = f"{count} email con referti da scaricare"
+                msg = f"{count} email con referti non letti da scaricare"
             self._bridge.append_text.emit(self._console, msg)
             self._bridge.show_info.emit("Conteggio Email", msg)
         except Exception as e:

@@ -1,8 +1,8 @@
 {
-    "Version": "2.2.0",
-    "ReleaseNotes": "Crittografia credenziali email, dialog cambio password, migrazione automatica.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.2.0/FSE_Processor_Setup_2.2.0_QT6.exe",
+    "Version": "2.2.1",
+    "ReleaseNotes": "Controllo automatico aggiornamenti all'avvio dell'applicazione.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.2.1/FSE_Processor_Setup_2.2.1_QT6.exe",
     "ReleaseDate": "2026-02-22",
-    "Sha256Hash": "fa5590b176758f63d20416a9c397a52e63ba087e88e42d3771232d14498ce423",
-    "FileSize": 61234763
+    "Sha256Hash": "",
+    "FileSize": 0
 }

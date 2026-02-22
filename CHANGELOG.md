@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.1] - 2026-02-22
+
+### Aggiunto
+
+- Controllo automatico aggiornamenti all'avvio: l'app verifica silenziosamente la disponibilita di nuove versioni 2 secondi dopo l'apertura della finestra
+- Se disponibile un aggiornamento, l'utente viene avvisato con dialog e possibilita di scaricare direttamente
+- Nessuna interruzione se la versione e gia aggiornata o se la rete non e disponibile
+
+### Modificato
+
+- Refactoring metodo `_check_updates()` con parametro `silent` per distinguere il controllo automatico (silenzioso) da quello manuale (menu Aiuto)
+
 ## [2.2.0] - 2026-02-22
 
 ### Aggiunto
