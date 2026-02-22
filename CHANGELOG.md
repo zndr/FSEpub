@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.0.0] - 2026-02-21
+
+### Modificato
+
+- Migrazione completa interfaccia grafica da Tkinter a PySide6 (Qt6)
+- Look nativo Windows moderno con widget Qt6
+- Tooltip nativi Qt al posto della classe Tooltip custom
+- Sistema threading riscritto con Qt Signal/Slot e QTimer al posto di `.after()`
+- Dialoghi nativi Qt (QMessageBox, QFileDialog, QDialog)
+- Layout con QVBoxLayout/QHBoxLayout/QGridLayout al posto di pack/grid Tkinter
+
+### Rimosso
+
+- Dipendenza da Tkinter
+- Classe Tooltip custom (sostituita da setToolTip nativo)
+- StringVar/BooleanVar (sostituiti da accesso diretto ai widget)
+
+### Aggiunto
+
+- Dipendenza PySide6 >= 6.6.0
+- Classe _SignalBridge per comunicazione thread-safe tra worker e GUI
+
 ## [1.1.0] - 2026-02-21
 
 ### Aggiunto

@@ -2,7 +2,7 @@
 ; Requires Inno Setup 6.x
 
 #define MyAppName "FSE Processor"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "FSE Processor"
 #define MyAppExeName "FSE Processor.exe"
 
@@ -15,7 +15,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=installer_output
-OutputBaseFilename=FSE_Processor_Setup_{#MyAppVersion}
+OutputBaseFilename=FSE_Processor_Setup_{#MyAppVersion}_QT6
 SetupIconFile=assets\icon.ico
 Compression=lzma2
 SolidCompression=yes

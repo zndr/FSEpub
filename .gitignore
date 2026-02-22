@@ -7,6 +7,18 @@ __pycache__/
 *.pyc
 .venv/
 
+# IDE
+.vscode/
+
+# Screenshots
+*.png
+
+# Playwright
+playwright_browsers/
+
+# Data
+processed_uids.json
+
 # Build artifacts
 dist/
 build/

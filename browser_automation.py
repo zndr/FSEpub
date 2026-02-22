@@ -4,6 +4,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.request
 import winreg
 from dataclasses import dataclass
 from datetime import datetime, date
@@ -232,12 +233,18 @@ def _delete_registry_tree(hive: int, subkey: str) -> None:
 
 
 def _is_cdp_port_available(port: int) -> bool:
-    """Check if a CDP endpoint is responding on localhost:port."""
+    """Check if a CDP endpoint is responding on localhost:port via HTTP /json/version."""
     try:
-        with socket.create_connection(("localhost", port), timeout=1):
-            return True
-    except (ConnectionRefusedError, TimeoutError, OSError):
-        return False
+        req = urllib.request.Request(f"http://localhost:{port}/json/version")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        # Fallback to raw socket check (e.g. if /json/version is slow)
+        try:
+            with socket.create_connection(("localhost", port), timeout=1):
+                return True
+        except (ConnectionRefusedError, TimeoutError, OSError):
+            return False
 
 
 def _is_browser_process_running(process_name: str) -> bool:
@@ -329,9 +336,11 @@ class FSEBrowser:
                 )
             except Exception as e:
                 if "Target page, context or browser has been closed" in str(e):
-                    self._logger.warning(
-                        f"Lancio {channel} fallito (versione incompatibile con Playwright). "
-                        f"Fallback a Chromium integrato..."
+                    self._logger.info(
+                        f"Modalità DCP disabilitata nelle impostazioni"
+                        f"{channel} non verrà usato per l'automazione. "
+                        f"Verra' avviato Chromium integrato: sara' necessario un nuovo login SSO."
+                        f"\nAbilita l'opzione 'Usa browser CDP' nelle impostazioni per utilizzare il browser già in sessione"
                     )
                     self._context = self._launch_bundled_chromium()
                 else:
@@ -356,13 +365,7 @@ class FSEBrowser:
         endpoint = f"http://localhost:{port}"
         channel = self._config.browser_channel
 
-        # 1. CDP port already available → connect directly
-        if _is_cdp_port_available(port):
-            self._logger.info(f"Porta CDP {port} disponibile, connessione diretta...")
-            self._connect_cdp(endpoint, port)
-            return
-
-        # 2. Detect browser info for further logic
+        # 1. Detect browser info (needed for recovery)
         browser_info = detect_default_browser()
         process_name = None
         exe_path = None
@@ -371,11 +374,40 @@ class FSEBrowser:
             process_name = browser_info["process_name"]
             exe_path = browser_info["exe_path"]
 
-        # Also try to resolve from configured channel
         if not exe_path:
             exe_path = self._resolve_exe_from_channel(channel)
         if not process_name and channel in ("msedge", "chrome"):
             process_name = "msedge.exe" if channel == "msedge" else "chrome.exe"
+
+        # 2. CDP port already available → connect directly
+        if _is_cdp_port_available(port):
+            self._logger.info(f"Porta CDP {port} disponibile, connessione diretta...")
+            try:
+                self._connect_cdp(endpoint, port)
+                return
+            except ConnectionError:
+                # CDP port responds but handshake failed (stale session, browser busy).
+                # Try to kill and relaunch if we know the browser.
+                if process_name and exe_path and Path(exe_path).exists():
+                    self._logger.warning(
+                        "Connessione CDP fallita nonostante la porta sia aperta. "
+                        "Rilancio del browser..."
+                    )
+                    _kill_browser_processes(process_name)
+                    _launch_browser_with_cdp(exe_path, port)
+
+                    elapsed = 0.0
+                    while elapsed < CDP_CONNECT_TIMEOUT:
+                        if _is_cdp_port_available(port):
+                            self._logger.info(
+                                f"Porta CDP {port} disponibile dopo rilancio ({elapsed:.1f}s)"
+                            )
+                            self._connect_cdp(endpoint, port)
+                            return
+                        time.sleep(CDP_CONNECT_POLL)
+                        elapsed += CDP_CONNECT_POLL
+
+                raise  # Re-raise if recovery not possible or also failed
 
         # 3. Browser running without CDP
         if process_name and _is_browser_process_running(process_name):
@@ -442,7 +474,9 @@ class FSEBrowser:
     def _connect_cdp(self, endpoint: str, port: int) -> None:
         """Connect to a browser via CDP and set up context/page."""
         try:
-            self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+            self._browser = self._playwright.chromium.connect_over_cdp(
+                endpoint, timeout=60000
+            )
         except Exception as e:
             raise ConnectionError(
                 f"Impossibile connettersi al browser su {endpoint}. "
@@ -578,7 +612,7 @@ class FSEBrowser:
         self._attached = False
         self._logger.info("Browser chiuso")
 
-    def wait_for_manual_login(self) -> None:
+    def wait_for_manual_login(self, stop_event: threading.Event | None = None) -> None:
         """Navigate to the FSE portal and wait for the user to complete SSO login."""
         import time
 
@@ -604,6 +638,11 @@ class FSEBrowser:
         max_wait = 300  # 5 minutes max
         elapsed = 0
         while elapsed < max_wait:
+            # Check for stop request
+            if stop_event is not None and stop_event.is_set():
+                self._logger.info("Attesa login interrotta dall'utente")
+                raise InterruptedError("Attesa login interrotta dall'utente")
+
             try:
                 # Check all pages using JS to get the real URL (page.url can be stale)
                 for page in self._context.pages:
@@ -890,6 +929,50 @@ class FSEBrowser:
         # Wait for table to appear
         self._page.wait_for_selector("table tbody tr", state="attached")
 
+    def scan_patient_enti(self, codice_fiscale: str) -> list[str]:
+        """Navigate to the patient page and return sorted unique Ente values without downloading."""
+        if not self._is_alive():
+            self._restart()
+
+        fse_link = f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}"
+        self._logger.info(f"Scansione enti per {codice_fiscale}: {fse_link}")
+
+        self._navigate_and_login(fse_link, codice_fiscale)
+
+        referti_table = self._page.locator("table:has(th:has-text('Tipologia documento'))")
+        referti_table.wait_for(state="attached", timeout=10000)
+
+        headers = referti_table.locator("thead th")
+        header_count = headers.count()
+        header_texts = [headers.nth(j).inner_text().strip() for j in range(header_count)]
+
+        ente_col = None
+        for idx, h in enumerate(header_texts):
+            h_upper = h.upper()
+            if "ENTE" in h_upper or "STRUTTURA" in h_upper:
+                ente_col = idx
+                break
+
+        if ente_col is None:
+            self._logger.warning(f"Colonna 'Ente/Struttura' non trovata: {header_texts}")
+            return []
+
+        data_rows = referti_table.locator("tbody tr:has(td)")
+        row_count = data_rows.count()
+        self._logger.info(f"Scansione enti: {row_count} righe trovate")
+
+        ente_set: set[str] = set()
+        for i in range(row_count):
+            cells = data_rows.nth(i).locator("td")
+            if cells.count() <= ente_col:
+                continue
+            ente_text = cells.nth(ente_col).inner_text().strip()
+            if ente_text:
+                ente_set.add(ente_text)
+
+        self._logger.info(f"Enti trovati: {sorted(ente_set)}")
+        return sorted(ente_set)
+
     def process_patient_all_dates(self, codice_fiscale: str,
                                   stop_event: threading.Event | None = None,
                                   allowed_types: set[str] | None = None,
@@ -970,44 +1053,45 @@ class FSEBrowser:
 
             # Phase 2: Filter and download
             ente_filter_upper = ente_filter.strip().upper()
+
+            # Pre-filter to identify matching rows and count
+            rows_to_download: list[tuple[int, str, str, str]] = []
             for i, date_text, tipo_text, ente_text in row_info:
-                if stop_event is not None and stop_event.is_set():
-                    self._logger.info("Download interrotto dall'utente")
-                    break
-
-                # Filter: tipologia
                 if not _is_tipologia_valida(tipo_text, allowed_types):
-                    self._logger.info(f"Riga {i + 1}: tipologia '{tipo_text}' non di interesse, saltata")
                     results.append(DocumentResult(
                         disciplina=tipo_text, skipped=True, download_path=None, error=None
                     ))
                     continue
-
-                # Filter: ente
                 if ente_filter_upper and ente_filter_upper not in ente_text.upper():
-                    self._logger.info(f"Riga {i + 1}: ente '{ente_text}' non corrisponde al filtro, saltata")
                     results.append(DocumentResult(
                         disciplina=tipo_text, skipped=True, download_path=None, error=None
                     ))
                     continue
-
-                # Filter: date range
                 if date_from or date_to:
                     parsed = _parse_table_date(date_text)
                     if parsed:
                         if date_from and parsed < date_from:
-                            self._logger.info(f"Riga {i + 1}: data '{date_text}' fuori intervallo, saltata")
                             results.append(DocumentResult(
                                 disciplina=tipo_text, skipped=True, download_path=None, error=None
                             ))
                             continue
                         if date_to and parsed > date_to:
-                            self._logger.info(f"Riga {i + 1}: data '{date_text}' fuori intervallo, saltata")
                             results.append(DocumentResult(
                                 disciplina=tipo_text, skipped=True, download_path=None, error=None
                             ))
                             continue
+                rows_to_download.append((i, date_text, tipo_text, ente_text))
 
+            total_match = len(rows_to_download)
+            total_rows = len(row_info)
+            self._logger.info(f"Trovati {total_match} documenti corrispondenti ai filtri (su {total_rows} totali)")
+
+            for dl_idx, (i, date_text, tipo_text, ente_text) in enumerate(rows_to_download, 1):
+                if stop_event is not None and stop_event.is_set():
+                    self._logger.info("Download interrotto dall'utente")
+                    break
+
+                self._logger.info(f"Download {dl_idx}/{total_match}: {tipo_text}")
                 result = self._download_document(i, tipo_text, patient_name, visualizza_col, data_rows)
                 results.append(result)
 

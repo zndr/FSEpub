@@ -1,4 +1,4 @@
-"""GUI tkinter per FSE Processor."""
+"""GUI PySide6 per FSE Processor."""
 
 import ctypes
 import logging
@@ -6,14 +6,36 @@ import os
 import re
 import sys
 import threading
-import tkinter as tk
 import traceback
 import webbrowser
 import winreg
 from datetime import date, timedelta
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
+
+from PySide6.QtCore import Qt, Signal, QObject, QTimer
+from PySide6.QtGui import QAction, QFont
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app_paths import paths
 from version import __version__
@@ -67,8 +89,8 @@ SISS_DOCUMENT_TYPES = [
 ]
 
 PATIENT_DOCUMENT_TYPES = [
-    ("REFERTO", "Referti specialistici", True),
-    ("REFERTO SPECIALISTICO", "Referto Specialistico", False),
+    ("REFERTO", "Tutti i referti specialistici", True),
+    ("REFERTO SPECIALISTICO", "non def.", False),
     ("REFERTO SPECIALISTICO LABORATORIO", "Lab", False),
     ("REFERTO SPECIALISTICO RADIOLOGIA", "Imaging", False),
     ("REFERTO ANATOMIA PATOLOGICA", "Anat. pat.", False),
@@ -83,6 +105,122 @@ REFERTO_SUBTYPES = {
 
 DATE_PRESETS = ["Tutte", "Ultima settimana", "Ultimo mese", "Ultimo anno", "Personalizzato"]
 DATE_PRESET_DAYS = {"Ultima settimana": 7, "Ultimo mese": 30, "Ultimo anno": 365}
+
+APP_STYLE = """
+/* ---------- QGroupBox ---------- */
+QGroupBox {
+    border: 1px solid #3b7dd8;
+    border-radius: 4px;
+    margin-top: 14px;
+    padding-top: 14px;
+    font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 2px 8px;
+    color: #1a4a8a;
+}
+
+/* ---------- QPushButton ---------- */
+QPushButton {
+    background-color: #2b6cb0;
+    color: white;
+    border: 1px solid #1e5a9a;
+    border-radius: 4px;
+    padding: 5px 14px;
+    min-height: 20px;
+}
+QPushButton:hover {
+    background-color: #1e5a9a;
+}
+QPushButton:pressed {
+    background-color: #174a7a;
+}
+QPushButton:disabled {
+    background-color: #e0e0e0;
+    color: #a0a0a0;
+    border-color: #c0c0c0;
+}
+QPushButton#browseBtn {
+    background-color: #e8eef4;
+    color: #333333;
+    border: 1px solid #b0c4de;
+    font-weight: bold;
+    padding: 2px;
+}
+QPushButton#browseBtn:hover {
+    background-color: #d0dcea;
+}
+
+/* ---------- QTabWidget / QTabBar ---------- */
+QTabWidget::pane {
+    border: 1px solid #3b7dd8;
+    border-top: 2px solid #2b6cb0;
+}
+QTabBar::tab {
+    background-color: #e8eef4;
+    color: #333333;
+    border: 1px solid #b0c4de;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    padding: 6px 16px;
+    margin-right: 2px;
+}
+QTabBar::tab:selected {
+    background-color: #2b6cb0;
+    color: white;
+    border-color: #2b6cb0;
+}
+QTabBar::tab:hover:!selected {
+    background-color: #d0dcea;
+}
+
+/* ---------- QTextEdit (console) ---------- */
+QTextEdit {
+    background-color: #f0f4f8;
+    border: 1px solid #c0d0e0;
+    border-radius: 3px;
+}
+
+/* ---------- QLineEdit ---------- */
+QLineEdit {
+    border: 1px solid #b0c4de;
+    border-radius: 3px;
+    padding: 3px 6px;
+}
+QLineEdit:focus {
+    border: 1px solid #2b6cb0;
+}
+
+/* ---------- QComboBox ---------- */
+QComboBox {
+    border: 1px solid #b0c4de;
+    border-radius: 3px;
+    padding: 3px 6px;
+}
+QComboBox:focus {
+    border: 1px solid #2b6cb0;
+}
+/* ---------- QCheckBox ---------- */
+QCheckBox::indicator:checked {
+    background-color: #2b6cb0;
+    border: 1px solid #1e5a9a;
+    border-radius: 2px;
+}
+QCheckBox::indicator:unchecked {
+    border: 1px solid #b0c4de;
+    border-radius: 2px;
+    background-color: white;
+}
+
+/* ---------- Utility ---------- */
+.subtle-label {
+    color: #6b7b8d;
+}
+"""
 
 
 def _norm(path: str) -> str:
@@ -137,10 +275,8 @@ def _detect_pdf_readers() -> list[tuple[str, str]]:
         name_counts.setdefault(name, []).append(nk)
     for name, nkeys in name_counts.items():
         if len(nkeys) > 1:
-            # Find the first distinguishing parent folder for each
             all_parts = [Path(raw_paths[nk]).parts for nk in nkeys]
             for nk, parts in zip(nkeys, all_parts):
-                # Walk up from parent to find a unique folder
                 suffix = Path(raw_paths[nk]).parent.name
                 for p in reversed(parts[:-1]):
                     candidate = p
@@ -152,7 +288,6 @@ def _detect_pdf_readers() -> list[tuple[str, str]]:
                         break
                 readers[nk] = f"{name} ({suffix})"
 
-    # Return sorted by display name
     return sorted(
         [(raw_paths[k], v) for k, v in readers.items()],
         key=lambda item: item[1].lower(),
@@ -169,14 +304,13 @@ def _detect_browsers() -> list[tuple[str, str]]:
         "msedge.exe": ("msedge", "Microsoft Edge"),
         "chrome.exe": ("chrome", "Google Chrome"),
         "firefox.exe": ("firefox", "Mozilla Firefox"),
-        "brave.exe": (None, "Brave"),  # channel=None means use exe path
+        "brave.exe": (None, "Brave"),
     }
 
     browsers: list[tuple[str, str]] = []
     seen: set[str] = set()
 
     for exe_name, (channel, display) in KNOWN_BROWSERS.items():
-        # Try App Paths registry
         exe_path = None
         for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
             try:
@@ -191,7 +325,6 @@ def _detect_browsers() -> list[tuple[str, str]]:
             except OSError:
                 pass
 
-        # Fallback: well-known install paths
         if not exe_path:
             fallback_dirs = [
                 Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")),
@@ -288,7 +421,6 @@ def _collect_applications_with_pdf_support(
     for app_name in _enum_subkeys(winreg.HKEY_CLASSES_ROOT, "Applications"):
         if not app_name.lower().endswith(".exe"):
             continue
-        # Check SupportedTypes for .pdf
         supported = _enum_value_names(
             winreg.HKEY_CLASSES_ROOT,
             rf"Applications\{app_name}\SupportedTypes",
@@ -310,9 +442,7 @@ def _collect_registered_applications(
     ):
         if not isinstance(val, str):
             continue
-        # val is like "SOFTWARE\\Clients\\...\\Capabilities"
         cap_path = val.replace("/", "\\")
-        # Check FileAssociations for .pdf
         assocs = _enum_values(winreg.HKEY_LOCAL_MACHINE, rf"{cap_path}\FileAssociations")
         pdf_progid = None
         for assoc_name, assoc_val in assocs:
@@ -349,7 +479,6 @@ def _resolve_progid_to_exe(progid: str) -> str | None:
 
 def _resolve_app_exe(exe_name: str) -> str | None:
     """Resolve an exe name from OpenWithList/Applications to a full path."""
-    # Try HKCR\Applications
     try:
         with winreg.OpenKey(
             winreg.HKEY_CLASSES_ROOT,
@@ -362,7 +491,6 @@ def _resolve_app_exe(exe_name: str) -> str | None:
                     return result
     except OSError:
         pass
-    # Try App Paths
     try:
         with winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,
@@ -407,7 +535,6 @@ def _get_exe_version_field(exe_path: str) -> str | None:
         if not _GetFileVersionInfoW(exe_path, 0, size, buf):
             return None
 
-        # Get translation table (language + codepage pairs)
         p_val = ctypes.c_void_p()
         val_size = ctypes.c_uint()
         if not _VerQueryValueW(
@@ -421,7 +548,6 @@ def _get_exe_version_field(exe_path: str) -> str | None:
         lang = ctypes.cast(p_val, ctypes.POINTER(ctypes.c_ushort))[0]
         cp = ctypes.cast(p_val, ctypes.POINTER(ctypes.c_ushort))[1]
 
-        # Try FileDescription first, then ProductName
         for field in ("FileDescription", "ProductName"):
             query = f"\\StringFileInfo\\{lang:04x}{cp:04x}\\{field}"
             p_str = ctypes.c_void_p()
@@ -438,7 +564,6 @@ def _get_exe_version_field(exe_path: str) -> str | None:
 
 def _get_app_display_name(exe_path: str, progid: str) -> str:
     """Get a user-friendly display name for an application."""
-    # 1. Try FriendlyAppName from Applications registry
     try:
         with winreg.OpenKey(
             winreg.HKEY_CLASSES_ROOT,
@@ -450,12 +575,10 @@ def _get_app_display_name(exe_path: str, progid: str) -> str:
     except OSError:
         pass
 
-    # 2. Try FileDescription / ProductName from exe version info
     ver_name = _get_exe_version_field(exe_path)
     if ver_name:
         return ver_name
 
-    # 3. Fallback: cleaned exe stem
     return Path(exe_path).stem.replace("_", " ").replace("-", " ").title()
 
 
@@ -495,7 +618,6 @@ def _save_env_values(values: dict[str, str], path: str = ENV_FILE) -> None:
             else:
                 lines.append(line)
 
-    # Append any new keys not already in file
     for key, val in values.items():
         if key not in written_keys:
             lines.append(f"{key}={val}")
@@ -503,71 +625,66 @@ def _save_env_values(values: dict[str, str], path: str = ENV_FILE) -> None:
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-class TextHandler(logging.Handler):
-    """Logging handler that writes to a ScrolledText widget (thread-safe)."""
+# ---- Signal bridge for thread-safe GUI updates ----
 
-    def __init__(self, text_widget: ScrolledText) -> None:
-        super().__init__()
-        self._widget = text_widget
+class _SignalBridge(QObject):
+    """Bridge for thread-safe communication from worker threads to GUI."""
+    append_text = Signal(QTextEdit, str)
+    show_info = Signal(str, str)
+    show_error = Signal(str, str)
+    show_warning = Signal(str, str)
+    call_on_main = Signal(object)  # generic callable
 
-    def emit(self, record: logging.LogRecord) -> None:
-        msg = self.format(record) + "\n"
-        self._widget.after(0, self._append, msg)
-
-    def _append(self, msg: str) -> None:
-        self._widget.configure(state=tk.NORMAL)
-        self._widget.insert(tk.END, msg)
-        self._widget.see(tk.END)
-        self._widget.configure(state=tk.DISABLED)
-
-
-class Tooltip:
-    """Lightweight tooltip on hover for any tkinter widget."""
-
-    def __init__(self, widget: tk.Widget, text: str, delay: int = 500) -> None:
-        self._widget = widget
-        self._text = text
-        self._delay = delay
-        self._tip: tk.Toplevel | None = None
-        self._after_id: str | None = None
-        widget.bind("<Enter>", self._on_enter, add="+")
-        widget.bind("<Leave>", self._on_leave, add="+")
-
-    def _on_enter(self, _event: tk.Event) -> None:
-        self._after_id = self._widget.after(self._delay, self._show)
-
-    def _on_leave(self, _event: tk.Event) -> None:
-        if self._after_id:
-            self._widget.after_cancel(self._after_id)
-            self._after_id = None
-        self._hide()
-
-    def _show(self) -> None:
-        if self._tip:
-            return
-        x = self._widget.winfo_rootx() + 20
-        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
-        self._tip = tw = tk.Toplevel(self._widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
-        label = tk.Label(
-            tw, text=self._text, background="#ffffe0", relief="solid",
-            borderwidth=1, padx=4, pady=2, wraplength=300,
-        )
-        label.pack()
-
-    def _hide(self) -> None:
-        if self._tip:
-            self._tip.destroy()
-            self._tip = None
-
-
-class FSEApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title(f"FSE Processor v{__version__}")
-        self.geometry("720x520")
-        self.resizable(True, True)
+        self.append_text.connect(self._on_append_text)
+        self.show_info.connect(self._on_show_info)
+        self.show_error.connect(self._on_show_error)
+        self.show_warning.connect(self._on_show_warning)
+        self.call_on_main.connect(self._on_call)
+
+    @staticmethod
+    def _on_append_text(widget: QTextEdit, msg: str) -> None:
+        widget.setReadOnly(False)
+        widget.append(msg)
+        widget.setReadOnly(True)
+        widget.verticalScrollBar().setValue(widget.verticalScrollBar().maximum())
+
+    @staticmethod
+    def _on_show_info(title: str, msg: str) -> None:
+        QMessageBox.information(None, title, msg)
+
+    @staticmethod
+    def _on_show_error(title: str, msg: str) -> None:
+        QMessageBox.critical(None, title, msg)
+
+    @staticmethod
+    def _on_show_warning(title: str, msg: str) -> None:
+        QMessageBox.warning(None, title, msg)
+
+    @staticmethod
+    def _on_call(fn: object) -> None:
+        fn()
+
+
+class TextHandler(logging.Handler):
+    """Logging handler that writes to a QTextEdit widget (thread-safe via signals)."""
+
+    def __init__(self, text_widget: QTextEdit, bridge: _SignalBridge) -> None:
+        super().__init__()
+        self._widget = text_widget
+        self._bridge = bridge
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = self.format(record)
+        self._bridge.append_text.emit(self._widget, msg)
+
+
+class FSEApp(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle(f"FSE Processor v{__version__}")
+        self.resize(750, 560)
 
         # Ensure data directories exist (for installed mode)
         paths.ensure_dirs()
@@ -576,570 +693,615 @@ class FSEApp(tk.Tk):
         self._worker: threading.Thread | None = None
         self._patient_stop_event = threading.Event()
         self._patient_worker: threading.Thread | None = None
-        self._fields: dict[str, tk.Variable] = {}
+        self._patient_browser: FSEBrowser | None = None
+        self._ente_scan_worker: threading.Thread | None = None
+        self._fields: dict[str, str | bool] = {}  # key -> current value
+
+        # Signal bridge for thread-safe GUI updates
+        self._bridge = _SignalBridge()
 
         self._build_ui()
         self._load_settings()
+
+    # ---- helpers for field values ----
+
+    def _get_field(self, key: str) -> str:
+        """Get a field value as string."""
+        val = self._fields.get(key, "")
+        if isinstance(val, bool):
+            return "true" if val else "false"
+        return str(val)
+
+    def _set_field(self, key: str, value) -> None:
+        """Set a field value."""
+        self._fields[key] = value
 
     # ---- UI construction ----
 
     def _build_ui(self) -> None:
         # Detect PDF readers, browsers, and default browser once at startup
-        self._pdf_readers = _detect_pdf_readers()  # list of (exe_path, display_name)
-        self._browsers = _detect_browsers()  # list of (channel_or_path, display_name)
+        self._pdf_readers = _detect_pdf_readers()
+        self._browsers = _detect_browsers()
         self._default_browser_info = detect_default_browser()
 
-        # --- Tabbed notebook ---
-        self._notebook = ttk.Notebook(self)
-        self._notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 10))
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Menu bar
+        menu_bar = self.menuBar()
+        file_menu = menu_bar.addMenu("File")
+
+        act_settings = QAction("Impostazioni", self)
+        act_settings.triggered.connect(lambda: self._notebook.setCurrentIndex(2))
+        file_menu.addAction(act_settings)
+
+        file_menu.addSeparator()
+
+        act_exit = QAction("Esci", self)
+        act_exit.triggered.connect(self.close)
+        file_menu.addAction(act_exit)
+
+        act_guide = QAction("Guida", self)
+        act_guide.triggered.connect(self._open_guide)
+        menu_bar.addAction(act_guide)
+
+        # Tabbed notebook
+        self._notebook = QTabWidget()
+        main_layout.addWidget(self._notebook)
 
         # Tab 1: Scarica referti non letti
-        siss_tab = tk.Frame(self._notebook, padx=8, pady=8)
-        self._notebook.add(siss_tab, text="Scarica referti non letti")
+        siss_tab = QWidget()
+        self._notebook.addTab(siss_tab, "Scarica referti non letti")
 
         # Tab 2: Scarica referti singolo paziente
-        patient_tab = tk.Frame(self._notebook, padx=8, pady=8)
-        self._notebook.add(patient_tab, text="Scarica referti singolo paziente")
+        patient_tab = QWidget()
+        self._notebook.addTab(patient_tab, "Scarica referti singolo paziente")
 
         # Tab 3: Impostazioni (built first so fields exist for SISS tab)
-        settings_tab = tk.Frame(self._notebook, padx=8, pady=8)
-        self._notebook.add(settings_tab, text="Impostazioni")
+        settings_tab = QWidget()
+        self._notebook.addTab(settings_tab, "Impostazioni")
         self._build_settings_tab(settings_tab)
 
-        # Build SISS tab after settings so _fields["BROWSER_CHANNEL"] exists
+        # Build SISS tab after settings so fields exist
         self._build_siss_tab(siss_tab)
         self._build_patient_tab(patient_tab)
 
-    def _build_siss_tab(self, parent: tk.Frame) -> None:
+        # Bottom bar: Reset console (left) — Apri cartella download (right)
+        bottom_row = QHBoxLayout()
+        self._btn_reset_console = QPushButton("Reset console")
+        self._btn_reset_console.clicked.connect(self._reset_active_console)
+        bottom_row.addWidget(self._btn_reset_console)
+        bottom_row.addStretch()
+        btn_open_dl = QPushButton("Apri cartella download")
+        btn_open_dl.clicked.connect(self._open_download_dir)
+        bottom_row.addWidget(btn_open_dl)
+        main_layout.addLayout(bottom_row)
+
+    def _reset_active_console(self) -> None:
+        """Clear the console of the currently active tab."""
+        idx = self._notebook.currentIndex()
+        if idx == 0:
+            self._console.clear()
+        elif idx == 1:
+            self._patient_console.clear()
+
+    def _open_download_dir(self) -> None:
+        """Open the configured download directory in the file explorer."""
+        dl_dir = self._download_dir_entry.text() or str(paths.default_download_dir)
+        p = Path(dl_dir)
+        if p.is_dir():
+            os.startfile(p)
+        else:
+            QMessageBox.warning(self, "Cartella non trovata", f"La cartella non esiste:\n{dl_dir}")
+
+    def _build_siss_tab(self, parent: QWidget) -> None:
         """Build the SISS Integration tab content."""
-        # Browser info line (compact, no frame)
-        self._browser_info_label = tk.Label(parent, text="", anchor="w", fg="gray")
-        self._browser_info_label.pack(anchor="w")
+        layout = QVBoxLayout(parent)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Browser info line
+        self._browser_info_label = QLabel("")
+        self._browser_info_label.setProperty("class", "subtle-label")
+        layout.addWidget(self._browser_info_label)
         self._update_browser_info_label()
 
         # Controls
-        ctrl_frame = tk.LabelFrame(parent, text="Controlli", padx=8, pady=6)
-        ctrl_frame.pack(fill=tk.X, pady=(8, 0))
+        ctrl_group = QGroupBox("Controlli")
+        ctrl_layout = QVBoxLayout(ctrl_group)
 
-        btn_row = tk.Frame(ctrl_frame)
-        btn_row.pack(fill=tk.X)
+        btn_row = QHBoxLayout()
+        self._btn_check = QPushButton("Controlla Email")
+        self._btn_check.clicked.connect(self._check_email)
+        self._btn_check.setToolTip("Conta le email con referti da scaricare, senza avviare il download")
+        btn_row.addWidget(self._btn_check)
 
-        self._btn_check = tk.Button(btn_row, text="Controlla Email", command=self._check_email)
-        self._btn_check.pack(side=tk.LEFT, padx=(0, 8))
-        Tooltip(self._btn_check, "Conta le email con referti da scaricare, senza avviare il download")
+        self._btn_start = QPushButton("Avvia download")
+        self._btn_start.clicked.connect(self._start_processing)
+        btn_row.addWidget(self._btn_start)
 
-        self._btn_start = tk.Button(btn_row, text="Avvia", command=self._start_processing)
-        self._btn_start.pack(side=tk.LEFT, padx=(0, 8))
+        self._btn_stop = QPushButton("Interrompi")
+        self._btn_stop.clicked.connect(self._stop_processing)
+        self._btn_stop.setEnabled(False)
+        btn_row.addWidget(self._btn_stop)
 
-        self._btn_stop = tk.Button(btn_row, text="Interrompi", command=self._stop_processing, state=tk.DISABLED)
-        self._btn_stop.pack(side=tk.LEFT)
+        btn_row.addStretch()
+        ctrl_layout.addLayout(btn_row)
 
-        tk.Button(btn_row, text="Esci", command=self.destroy).pack(side=tk.RIGHT)
-        btn_guide = tk.Button(btn_row, text="Guida", command=self._open_guide)
-        btn_guide.pack(side=tk.RIGHT, padx=(0, 8))
-        Tooltip(btn_guide, "Apri la guida utente nel browser")
+        # Max email row
+        max_row = QHBoxLayout()
+        max_row.addWidget(QLabel("Num. max email da scaricare (0=tutte):"))
+        self._max_email_entry = QLineEdit()
+        self._max_email_entry.setFixedWidth(60)
+        self._max_email_entry.setText(self._get_field("MAX_EMAILS") or "3")
+        self._max_email_entry.setToolTip("Numero massimo di email da elaborare per sessione (0 = tutte)")
+        max_row.addWidget(self._max_email_entry)
+        max_row.addStretch()
+        ctrl_layout.addLayout(max_row)
 
-        # Max email row (moved from Settings)
-        max_row = tk.Frame(ctrl_frame)
-        max_row.pack(fill=tk.X, pady=(4, 0))
-        tk.Label(max_row, text="Max email (0=tutte):").pack(side=tk.LEFT, padx=(0, 4))
-        # Create the field here; _build_settings_tab already created it in _fields
-        self._siss_max_email_var = self._fields["MAX_EMAILS"]
-        max_email_entry = tk.Entry(max_row, textvariable=self._siss_max_email_var, width=6)
-        max_email_entry.pack(side=tk.LEFT)
-        Tooltip(max_email_entry, "Numero massimo di email da elaborare per sessione (0 = tutte)")
+        layout.addWidget(ctrl_group)
 
         # "Dopo il download" options
-        post_frame = tk.LabelFrame(parent, text="Dopo il download", padx=8, pady=4)
-        post_frame.pack(fill=tk.X, pady=(8, 0))
+        post_group = QGroupBox("Dopo il download")
+        post_layout = QVBoxLayout(post_group)
 
-        mark_var = self._fields["MARK_AS_READ"]
-        delete_var = self._fields["DELETE_AFTER_PROCESSING"]
+        self._siss_mark_cb = QCheckBox('Marca come "gia\' letto" i messaggi scaricati')
+        post_layout.addWidget(self._siss_mark_cb)
 
-        self._siss_mark_cb = tk.Checkbutton(
-            post_frame, text='Marca come "gia\' letto" i messaggi scaricati',
-            variable=mark_var,
-        )
-        self._siss_mark_cb.pack(anchor="w")
+        self._siss_delete_cb = QCheckBox("Elimina i messaggi scaricati dal server")
+        self._siss_delete_cb.setToolTip("I messaggi verranno eliminati definitivamente dal server dopo il download")
+        self._siss_delete_cb.toggled.connect(self._on_delete_toggled)
+        post_layout.addWidget(self._siss_delete_cb)
 
-        self._siss_delete_cb = tk.Checkbutton(
-            post_frame, text="Elimina i messaggi scaricati dal server",
-            variable=delete_var,
-            command=self._on_delete_toggled,
-        )
-        self._siss_delete_cb.pack(anchor="w")
-        Tooltip(self._siss_delete_cb, "I messaggi verranno eliminati definitivamente dal server dopo il download")
-
-        # Apply initial state
-        self._on_delete_toggled()
+        layout.addWidget(post_group)
 
         # Document type checkboxes with "Tutti"
-        self._siss_tutti_var, self._siss_doc_vars = self._build_siss_doc_type_checkboxes(parent)
+        self._siss_tutti_cb, self._siss_doc_cbs = self._build_siss_doc_type_checkboxes(layout)
 
         # Console
-        console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
-        console_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        console_group = QGroupBox("Console")
+        console_layout = QVBoxLayout(console_group)
+        font_size = int(self._get_field("CONSOLE_FONT_SIZE") or "8")
+        self._console = QTextEdit()
+        self._console.setReadOnly(True)
+        self._console.setFont(QFont("Consolas", font_size))
+        self._console.setMinimumHeight(200)
+        console_layout.addWidget(self._console)
+        layout.addWidget(console_group, 1)  # stretch factor
 
-        font_size = int(self._fields["CONSOLE_FONT_SIZE"].get() or "8")
-        console_font = ("Consolas", font_size)
-        self._console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=16, font=console_font)
-        self._console.pack(fill=tk.BOTH, expand=True)
-
-    def _build_siss_doc_type_checkboxes(self, parent: tk.Widget) -> tuple[tk.BooleanVar, dict[str, tk.BooleanVar]]:
+    def _build_siss_doc_type_checkboxes(self, parent_layout: QVBoxLayout) -> tuple[QCheckBox, dict[str, QCheckBox]]:
         """Create SISS document type checkboxes with 'Tutti' toggle."""
-        frame = tk.LabelFrame(parent, text="Tipologie documento", padx=8, pady=4)
-        frame.pack(fill=tk.X, pady=(8, 0))
+        group = QGroupBox("Tipologie documento")
+        row_layout = QHBoxLayout(group)
 
-        tutti_var = tk.BooleanVar(value=False)
-        doc_vars: dict[str, tk.BooleanVar] = {}
-        doc_cbs: list[tk.Checkbutton] = []
+        tutti_cb = QCheckBox("Tutti")
+        doc_cbs: dict[str, QCheckBox] = {}
 
-        def on_tutti_changed(*_):
-            state = tk.DISABLED if tutti_var.get() else tk.NORMAL
-            for cb in doc_cbs:
-                cb.configure(state=state)
+        def on_tutti_changed(checked):
+            for cb in doc_cbs.values():
+                cb.setEnabled(not checked)
 
-        tk.Checkbutton(frame, text="Tutti", variable=tutti_var, command=on_tutti_changed).pack(
-            side=tk.LEFT, padx=(0, 16),
-        )
+        tutti_cb.toggled.connect(on_tutti_changed)
+        row_layout.addWidget(tutti_cb)
 
         for type_key, label, default_on in SISS_DOCUMENT_TYPES:
-            var = tk.BooleanVar(value=default_on)
-            cb = tk.Checkbutton(frame, text=label, variable=var)
-            cb.pack(side=tk.LEFT, padx=(0, 16))
-            doc_vars[type_key] = var
-            doc_cbs.append(cb)
+            cb = QCheckBox(label)
+            cb.setChecked(default_on)
+            row_layout.addWidget(cb)
+            doc_cbs[type_key] = cb
 
-        return tutti_var, doc_vars
+        row_layout.addStretch()
+        parent_layout.addWidget(group)
+        return tutti_cb, doc_cbs
 
-    def _on_delete_toggled(self) -> None:
+    def _on_delete_toggled(self, checked: bool) -> None:
         """When 'Elimina' is checked, force 'Marca come letto' on and disable it."""
-        if self._fields["DELETE_AFTER_PROCESSING"].get():
-            self._fields["MARK_AS_READ"].set(True)
-            self._siss_mark_cb.configure(state=tk.DISABLED)
+        if checked:
+            self._siss_mark_cb.setChecked(True)
+            self._siss_mark_cb.setEnabled(False)
         else:
-            self._siss_mark_cb.configure(state=tk.NORMAL)
+            self._siss_mark_cb.setEnabled(True)
 
     @staticmethod
-    def _get_selected_types(tutti_var: tk.BooleanVar, doc_vars: dict[str, tk.BooleanVar]) -> set[str] | None:
+    def _get_selected_types(tutti_cb: QCheckBox, doc_cbs: dict[str, QCheckBox]) -> set[str] | None:
         """Return the set of selected document type keys, or None if 'Tutti' is checked."""
-        if tutti_var.get():
+        if tutti_cb.isChecked():
             return None
-        return {key for key, var in doc_vars.items() if var.get()}
+        return {key for key, cb in doc_cbs.items() if cb.isChecked()}
 
-    def _build_patient_tab(self, parent: tk.Frame) -> None:
+    def _build_patient_tab(self, parent: QWidget) -> None:
         """Build the Download Paziente tab content with two-column layout."""
+        layout = QVBoxLayout(parent)
+        layout.setContentsMargins(8, 8, 8, 8)
+
         # Top frame: two columns
-        top_frame = tk.Frame(parent)
-        top_frame.pack(fill=tk.X)
-        top_frame.columnconfigure(0, weight=1, uniform="top")
-        top_frame.columnconfigure(1, weight=1, uniform="top")
+        top_layout = QHBoxLayout()
 
         # ── Left column: Tipologia documenti ──
-        left_col = tk.Frame(top_frame)
-        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-        left_col.rowconfigure(0, weight=1)
-
-        # Document type checkboxes with hierarchy (fill=BOTH to match right column height)
-        self._patient_tutti_var, self._patient_doc_vars = self._build_patient_doc_type_checkboxes(left_col)
+        self._patient_tutti_cb, self._patient_doc_cbs = self._build_patient_doc_type_checkboxes()
+        top_layout.addWidget(self._patient_doc_group, 1)
 
         # ── Right column: CF + Origine e data + bottoni ──
-        right_col = tk.Frame(top_frame)
-        right_col.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
-        # CF input (in right column, above filters)
-        input_frame = tk.LabelFrame(right_col, text="Codice Fiscale", padx=8, pady=6)
-        input_frame.pack(fill=tk.X)
-        input_frame.columnconfigure(1, weight=1)
+        # CF input
+        cf_group = QGroupBox("Codice Fiscale")
+        cf_layout = QGridLayout(cf_group)
+        cf_layout.addWidget(QLabel("CF:"), 0, 0)
+        self._cf_entry = QLineEdit()
+        self._cf_entry.setFont(QFont("Consolas", 11))
+        cf_layout.addWidget(self._cf_entry, 0, 1)
+        cf_layout.setColumnStretch(1, 1)
+        right_layout.addWidget(cf_group)
 
-        tk.Label(input_frame, text="CF:", anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
-        self._cf_var = tk.StringVar()
-        self._cf_entry = tk.Entry(input_frame, textvariable=self._cf_var, font=("Consolas", 11))
-        self._cf_entry.grid(row=0, column=1, sticky="ew", pady=2)
+        # Filters: Ente/Struttura and Date
+        filter_group = QGroupBox("Origine e data")
+        filter_layout = QGridLayout(filter_group)
+        filter_layout.setColumnStretch(1, 1)
 
-        # Filters: Ente/Struttura and Date (renamed from "Filtri")
-        filter_frame = tk.LabelFrame(right_col, text="Origine e data", padx=8, pady=6)
-        filter_frame.pack(fill=tk.X, pady=(8, 0))
-        filter_frame.columnconfigure(1, weight=1)
+        filter_layout.addWidget(QLabel("Ente/Struttura:"), 0, 0)
+        self._ente_combo = QComboBox()
+        self._ente_combo.setEditable(True)
+        self._ente_combo.addItem("")
+        self._ente_combo.setToolTip("Filtra i documenti per ente o struttura sanitaria di provenienza")
+        small_font = self._ente_combo.font()
+        small_font.setPointSize(small_font.pointSize() - 1)
+        self._ente_combo.setFont(small_font)
+        filter_layout.addWidget(self._ente_combo, 0, 1, 1, 3)
 
-        # Ente/Struttura combobox (editable)
-        tk.Label(filter_frame, text="Ente/Struttura:", anchor="w").grid(
-            row=0, column=0, sticky="w", padx=(0, 8), pady=2,
-        )
-        self._ente_var = tk.StringVar()
-        self._ente_combo = ttk.Combobox(filter_frame, textvariable=self._ente_var)
-        self._ente_combo.grid(row=0, column=1, columnspan=3, sticky="ew", pady=2)
-        Tooltip(self._ente_combo, "Filtra i documenti per ente o struttura sanitaria di provenienza")
+        filter_layout.addWidget(QLabel("Periodo:"), 1, 0)
+        self._date_preset_combo = QComboBox()
+        self._date_preset_combo.addItems(DATE_PRESETS)
+        self._date_preset_combo.setCurrentText("Tutte")
+        self._date_preset_combo.currentTextChanged.connect(self._on_date_preset_changed)
+        filter_layout.addWidget(self._date_preset_combo, 1, 1, 1, 3)
 
-        # Date period row
-        tk.Label(filter_frame, text="Periodo:", anchor="w").grid(
-            row=1, column=0, sticky="w", padx=(0, 8), pady=2,
-        )
-        self._date_preset_var = tk.StringVar(value="Tutte")
-        self._date_preset_combo = ttk.Combobox(
-            filter_frame, textvariable=self._date_preset_var,
-            values=DATE_PRESETS, state="readonly", width=16,
-        )
-        self._date_preset_combo.grid(row=1, column=1, columnspan=3, sticky="w", pady=2)
-        self._date_preset_combo.bind("<<ComboboxSelected>>", self._on_date_preset_changed)
+        filter_layout.addWidget(QLabel("Dal:"), 2, 0)
+        self._date_from_entry = QLineEdit()
+        self._date_from_entry.setFixedWidth(100)
+        self._date_from_entry.setEnabled(False)
+        filter_layout.addWidget(self._date_from_entry, 2, 1)
 
-        # Date from/to on separate row
-        tk.Label(filter_frame, text="Dal:", anchor="w").grid(
-            row=2, column=0, sticky="w", padx=(0, 4), pady=2,
-        )
-        self._date_from_var = tk.StringVar()
-        self._date_from_entry = tk.Entry(filter_frame, textvariable=self._date_from_var, width=12, state=tk.DISABLED)
-        self._date_from_entry.grid(row=2, column=1, sticky="w", pady=2)
+        filter_layout.addWidget(QLabel("Al:"), 2, 2)
+        self._date_to_entry = QLineEdit()
+        self._date_to_entry.setFixedWidth(100)
+        self._date_to_entry.setEnabled(False)
+        filter_layout.addWidget(self._date_to_entry, 2, 3)
 
-        tk.Label(filter_frame, text="Al:", anchor="w").grid(
-            row=2, column=2, sticky="w", padx=(12, 4), pady=2,
-        )
-        self._date_to_var = tk.StringVar()
-        self._date_to_entry = tk.Entry(filter_frame, textvariable=self._date_to_var, width=12, state=tk.DISABLED)
-        self._date_to_entry.grid(row=2, column=3, sticky="w", pady=2)
+        right_layout.addWidget(filter_group)
 
-        # Controls (in right column, below filters, centered)
-        ctrl_frame = tk.Frame(right_col)
-        ctrl_frame.pack(pady=(8, 0))
+        # Controls
+        ctrl_layout = QHBoxLayout()
+        ctrl_layout.addStretch()
+        self._btn_load_enti = QPushButton("Carica strutture")
+        self._btn_load_enti.setToolTip("Apre il browser e carica le strutture disponibili per il paziente")
+        self._btn_load_enti.clicked.connect(self._start_ente_scan)
+        ctrl_layout.addWidget(self._btn_load_enti)
 
-        self._btn_patient_start = tk.Button(
-            ctrl_frame, text="Avvia Download", command=self._start_patient_download,
-        )
-        self._btn_patient_start.pack(side=tk.LEFT, padx=(0, 8))
+        self._btn_patient_start = QPushButton("Avvia Download")
+        self._btn_patient_start.clicked.connect(self._start_patient_download)
+        ctrl_layout.addWidget(self._btn_patient_start)
 
-        self._btn_patient_stop = tk.Button(
-            ctrl_frame, text="Interrompi", command=self._stop_patient_download, state=tk.DISABLED,
-        )
-        self._btn_patient_stop.pack(side=tk.LEFT)
+        self._btn_patient_stop = QPushButton("Interrompi")
+        self._btn_patient_stop.clicked.connect(self._stop_patient_download)
+        self._btn_patient_stop.setEnabled(False)
+        ctrl_layout.addWidget(self._btn_patient_stop)
+        ctrl_layout.addStretch()
+        right_layout.addLayout(ctrl_layout)
 
-        # Console (full width, below top_frame)
-        console_frame = tk.LabelFrame(parent, text="Console", padx=4, pady=4)
-        console_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        right_layout.addStretch()
+        top_layout.addWidget(right_widget, 1)
 
-        font_size = int(self._fields["CONSOLE_FONT_SIZE"].get() or "8")
-        console_font = ("Consolas", font_size)
-        self._patient_console = ScrolledText(console_frame, state=tk.DISABLED, wrap=tk.WORD, height=10, font=console_font)
-        self._patient_console.pack(fill=tk.BOTH, expand=True)
+        layout.addLayout(top_layout)
 
-    def _build_patient_doc_type_checkboxes(self, parent: tk.Widget) -> tuple[tk.BooleanVar, dict[str, tk.BooleanVar]]:
+        # Console
+        console_group = QGroupBox("Console")
+        console_layout = QVBoxLayout(console_group)
+        font_size = int(self._get_field("CONSOLE_FONT_SIZE") or "8")
+        self._patient_console = QTextEdit()
+        self._patient_console.setReadOnly(True)
+        self._patient_console.setFont(QFont("Consolas", font_size))
+        self._patient_console.setMinimumHeight(120)
+        console_layout.addWidget(self._patient_console)
+        layout.addWidget(console_group, 1)
+
+    def _build_patient_doc_type_checkboxes(self) -> tuple[QCheckBox, dict[str, QCheckBox]]:
         """Create Patient document type checkboxes with hierarchy."""
-        frame = tk.LabelFrame(parent, text="Tipologia documenti", padx=8, pady=4)
-        frame.pack(fill=tk.BOTH, expand=True)
+        self._patient_doc_group = QGroupBox("Tipologia documenti")
+        group_layout = QVBoxLayout(self._patient_doc_group)
+        group_layout.setSpacing(2)
 
-        tutti_var = tk.BooleanVar(value=False)
-        doc_vars: dict[str, tk.BooleanVar] = {}
-        all_cbs: list[tk.Checkbutton] = []  # all checkboxes except "Tutti"
-        referto_parent_var: tk.BooleanVar | None = None
-        referto_sub_cbs: list[tk.Checkbutton] = []
+        tutti_cb = QCheckBox("Tutti")
+        doc_cbs: dict[str, QCheckBox] = {}
+        all_cbs: list[QCheckBox] = []
+        referto_parent_cb: QCheckBox | None = None
+        referto_sub_cbs: list[QCheckBox] = []
 
-        def on_tutti_changed(*_):
-            state = tk.DISABLED if tutti_var.get() else tk.NORMAL
+        def on_tutti_changed(checked):
             for cb in all_cbs:
-                cb.configure(state=state)
-            # If Tutti is unchecked, re-apply referto parent logic
-            if not tutti_var.get() and referto_parent_var and referto_parent_var.get():
+                cb.setEnabled(not checked)
+            if not checked and referto_parent_cb and referto_parent_cb.isChecked():
                 for cb in referto_sub_cbs:
-                    cb.configure(state=tk.DISABLED)
+                    cb.setEnabled(False)
 
-        def on_referto_parent_changed(*_):
-            if tutti_var.get():
+        def on_referto_parent_changed(checked):
+            if tutti_cb.isChecked():
                 return
-            state = tk.DISABLED if referto_parent_var.get() else tk.NORMAL
             for cb in referto_sub_cbs:
-                cb.configure(state=state)
+                cb.setEnabled(not checked)
 
-        # Row 1: Tutti
-        row1 = tk.Frame(frame)
-        row1.pack(anchor="w", fill=tk.X)
-        tk.Checkbutton(row1, text="Tutti", variable=tutti_var, command=on_tutti_changed).pack(
-            side=tk.LEFT, padx=(0, 16),
-        )
+        tutti_cb.toggled.connect(on_tutti_changed)
+        group_layout.addWidget(tutti_cb)
 
-        # Row 2: Referto parent
-        row2 = tk.Frame(frame)
-        row2.pack(anchor="w", fill=tk.X)
+        # Referto parent
         for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
             if type_key == "REFERTO":
-                var = tk.BooleanVar(value=default_on)
-                referto_parent_var = var
-                cb = tk.Checkbutton(row2, text=label, variable=var, command=on_referto_parent_changed)
-                cb.pack(side=tk.LEFT, padx=(0, 16))
-                doc_vars[type_key] = var
+                cb = QCheckBox(label)
+                cb.setChecked(default_on)
+                referto_parent_cb = cb
+                cb.toggled.connect(on_referto_parent_changed)
+                group_layout.addWidget(cb)
+                doc_cbs[type_key] = cb
                 all_cbs.append(cb)
                 break
 
-        # Rows 3-4: Referto sub-types (indented), split into 2 rows of 2
+        # Referto sub-types (single indented row, compact)
         sub_items = [
             (tkey, dlabel, dfl) for tkey, dlabel, dfl in PATIENT_DOCUMENT_TYPES
             if tkey in REFERTO_SUBTYPES
         ]
-        for i in range(0, len(sub_items), 2):
-            row_sub = tk.Frame(frame)
-            row_sub.pack(anchor="w", fill=tk.X, padx=(24, 0))
-            for type_key, label, default_on in sub_items[i:i + 2]:
-                var = tk.BooleanVar(value=default_on)
-                cb = tk.Checkbutton(row_sub, text=label, variable=var)
-                # Disabled by default since parent "Tutti i referti" is checked
-                if referto_parent_var and referto_parent_var.get():
-                    cb.configure(state=tk.DISABLED)
-                cb.pack(side=tk.LEFT, padx=(0, 12))
-                doc_vars[type_key] = var
-                all_cbs.append(cb)
-                referto_sub_cbs.append(cb)
+        sub_row = QHBoxLayout()
+        sub_row.setContentsMargins(24, 0, 0, 0)
+        sub_row.setSpacing(2)
+        for type_key, label, default_on in sub_items:
+            cb = QCheckBox(label)
+            cb.setToolTip(type_key.title())
+            cb.setChecked(default_on)
+            if referto_parent_cb and referto_parent_cb.isChecked():
+                cb.setEnabled(False)
+            sub_row.addWidget(cb)
+            doc_cbs[type_key] = cb
+            all_cbs.append(cb)
+            referto_sub_cbs.append(cb)
+        sub_row.addStretch()
+        group_layout.addLayout(sub_row)
 
-        # Row 4: Other types (Lettera Dimissione, Verbale Pronto Soccorso)
-        row4 = tk.Frame(frame)
-        row4.pack(anchor="w", fill=tk.X)
+        # Other types
+        other_row = QHBoxLayout()
         for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
             if type_key not in REFERTO_SUBTYPES and type_key != "REFERTO":
-                var = tk.BooleanVar(value=default_on)
-                cb = tk.Checkbutton(row4, text=label, variable=var)
-                cb.pack(side=tk.LEFT, padx=(0, 16))
-                doc_vars[type_key] = var
+                cb = QCheckBox(label)
+                cb.setChecked(default_on)
+                other_row.addWidget(cb)
+                doc_cbs[type_key] = cb
                 all_cbs.append(cb)
+        other_row.addStretch()
+        group_layout.addLayout(other_row)
 
-        return tutti_var, doc_vars
+        return tutti_cb, doc_cbs
 
-    def _on_date_preset_changed(self, _event: tk.Event = None) -> None:
+    def _on_date_preset_changed(self, preset: str) -> None:
         """Handle date preset combobox selection change."""
-        preset = self._date_preset_var.get()
         if preset == "Tutte":
-            self._date_from_var.set("")
-            self._date_to_var.set("")
-            self._date_from_entry.configure(state=tk.DISABLED)
-            self._date_to_entry.configure(state=tk.DISABLED)
+            self._date_from_entry.clear()
+            self._date_to_entry.clear()
+            self._date_from_entry.setEnabled(False)
+            self._date_to_entry.setEnabled(False)
         elif preset == "Personalizzato":
-            self._date_from_entry.configure(state=tk.NORMAL)
-            self._date_to_entry.configure(state=tk.NORMAL)
+            self._date_from_entry.setEnabled(True)
+            self._date_to_entry.setEnabled(True)
         elif preset in DATE_PRESET_DAYS:
             days = DATE_PRESET_DAYS[preset]
             today = date.today()
             from_date = today - timedelta(days=days)
-            self._date_from_var.set(from_date.strftime("%d/%m/%Y"))
-            self._date_to_var.set(today.strftime("%d/%m/%Y"))
-            self._date_from_entry.configure(state=tk.DISABLED)
-            self._date_to_entry.configure(state=tk.DISABLED)
+            self._date_from_entry.setText(from_date.strftime("%d/%m/%Y"))
+            self._date_to_entry.setText(today.strftime("%d/%m/%Y"))
+            self._date_from_entry.setEnabled(False)
+            self._date_to_entry.setEnabled(False)
 
     def _update_ente_combobox(self, enti: list[str]) -> None:
-        """Update the Ente/Struttura combobox with values from the table (called from main thread)."""
-        self._ente_combo["values"] = enti
+        """Update the Ente/Struttura combobox with values from the table."""
+        current = self._ente_combo.currentText()
+        self._ente_combo.clear()
+        self._ente_combo.addItem("")
+        self._ente_combo.addItems(enti)
+        idx = self._ente_combo.findText(current)
+        if idx >= 0:
+            self._ente_combo.setCurrentIndex(idx)
 
-    def _build_settings_tab(self, parent: tk.Frame) -> None:
-        """Build the Settings tab content with grouped LabelFrames."""
-        # Look-up dict from SETTINGS_SPEC for defaults
+    def _build_settings_tab(self, parent: QWidget) -> None:
+        """Build the Settings tab content with grouped QGroupBoxes."""
         spec = {key: (label, default, kind) for key, label, default, kind in SETTINGS_SPEC}
 
-        # Top row: two columns side by side
-        top_frame = tk.Frame(parent)
-        top_frame.pack(fill=tk.X)
-        top_frame.columnconfigure(0, weight=1, uniform="top")
-        top_frame.columnconfigure(1, weight=1, uniform="top")
+        layout = QVBoxLayout(parent)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Top row: two columns
+        top_layout = QHBoxLayout()
 
         # ── Left column: Server Posta ──
-        mail_frame = tk.LabelFrame(top_frame, text="Server Posta", padx=8, pady=6)
-        mail_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=(0, 8))
-        mail_frame.columnconfigure(1, weight=1)
+        mail_group = QGroupBox("Server Posta")
+        mail_layout = QGridLayout(mail_group)
+        mail_layout.setColumnStretch(1, 1)
 
         mail_tooltips = {
             "IMAP_HOST": "Indirizzo del server di posta in arrivo (IMAP)",
             "IMAP_PORT": "Porta del server IMAP (993 per connessioni SSL)",
         }
+        self._settings_entries: dict[str, QLineEdit] = {}
         for r, key in enumerate(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"]):
-            label, default, kind = spec[key]
-            tk.Label(mail_frame, text=label, anchor="w").grid(
-                row=r, column=0, sticky="w", padx=(0, 8), pady=2,
-            )
-            var = tk.StringVar(value=default)
-            show = "*" if kind == "password" else ""
-            entry = tk.Entry(mail_frame, textvariable=var, show=show)
-            entry.grid(row=r, column=1, sticky="ew", pady=2)
-            self._fields[key] = var
-            if key in mail_tooltips:
-                Tooltip(entry, mail_tooltips[key])
+            label_text, default, kind = spec[key]
+            mail_layout.addWidget(QLabel(label_text), r, 0)
+            entry = QLineEdit(default)
+            if kind == "password":
+                entry.setEchoMode(QLineEdit.EchoMode.Password)
+            entry.setToolTip(mail_tooltips.get(key, ""))
+            mail_layout.addWidget(entry, r, 1)
+            self._settings_entries[key] = entry
+            self._fields[key] = default
 
         # Test connection button
-        r_test = len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"])
-        self._btn_test_imap = tk.Button(
-            mail_frame, text="Test connessione", command=self._test_imap_connection,
-        )
-        self._btn_test_imap.grid(row=r_test, column=0, columnspan=2, pady=(6, 0))
-        Tooltip(self._btn_test_imap, "Verifica connessione e login al server di posta")
+        self._btn_test_imap = QPushButton("Test connessione")
+        self._btn_test_imap.clicked.connect(self._test_imap_connection)
+        self._btn_test_imap.setToolTip("Verifica connessione e login al server di posta")
+        mail_layout.addWidget(self._btn_test_imap, len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"]), 0, 1, 2)
+
+        top_layout.addWidget(mail_group)
 
         # ── Right column: Browser e Download ──
-        br_frame = tk.LabelFrame(top_frame, text="Browser e Download", padx=8, pady=6)
-        br_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=(0, 8))
-        br_frame.columnconfigure(1, weight=1)
+        br_group = QGroupBox("Browser e Download")
+        br_layout = QGridLayout(br_group)
+        br_layout.setColumnStretch(1, 1)
 
         r = 0
-        tk.Label(br_frame, text="Browser", anchor="w").grid(
-            row=r, column=0, sticky="w", padx=(0, 8), pady=2,
+        br_layout.addWidget(QLabel("Browser"), r, 0)
+        self._build_browser_selector_row(br_layout, r, "BROWSER_CHANNEL", spec["BROWSER_CHANNEL"][1])
+
+        r += 1
+        br_layout.addWidget(QLabel("Lettore PDF"), r, 0)
+        self._build_pdf_reader_row(br_layout, r, "PDF_READER", spec["PDF_READER"][1])
+
+        r += 1
+        br_layout.addWidget(QLabel("Dir. download"), r, 0)
+        self._download_dir_entry = QLineEdit(spec["DOWNLOAD_DIR"][1])
+        br_layout.addWidget(self._download_dir_entry, r, 1)
+        browse_btn = QPushButton("...")
+        browse_btn.setFixedWidth(30)
+        browse_btn.setObjectName("browseBtn")
+        browse_btn.clicked.connect(self._browse_download_dir)
+        br_layout.addWidget(browse_btn, r, 2)
+        self._fields["DOWNLOAD_DIR"] = spec["DOWNLOAD_DIR"][1]
+
+        r += 1
+        self._cdp_cb = QCheckBox("Usa browser CDP")
+        self._cdp_cb.setChecked(spec["USE_EXISTING_BROWSER"][1].lower() == "true")
+        self._cdp_cb.setToolTip(
+            "Connettiti a un browser gia' aperto invece di avviarne uno nuovo.\n"
+            "In modalita' CDP il browser lavora in background: le azioni sono visibili\n"
+            "solo nella console dell'app. Disattiva questa opzione per vedere il browser\n"
+            "in azione durante l'automazione."
         )
-        self._build_browser_selector_row(br_frame, r, "BROWSER_CHANNEL", spec["BROWSER_CHANNEL"][1])
+        br_layout.addWidget(self._cdp_cb, r, 0, 1, 3)
+        self._fields["USE_EXISTING_BROWSER"] = spec["USE_EXISTING_BROWSER"][1]
+
+        # CDP port: hidden field for code compatibility
+        self._fields["CDP_PORT"] = spec["CDP_PORT"][1]
 
         r += 1
-        tk.Label(br_frame, text="Lettore PDF", anchor="w").grid(
-            row=r, column=0, sticky="w", padx=(0, 8), pady=2,
-        )
-        self._build_pdf_reader_row(br_frame, r, "PDF_READER", spec["PDF_READER"][1])
-
-        r += 1
-        tk.Label(br_frame, text="Dir. download", anchor="w").grid(
-            row=r, column=0, sticky="w", padx=(0, 8), pady=2,
-        )
-        var = tk.StringVar(value=spec["DOWNLOAD_DIR"][1])
-        tk.Entry(br_frame, textvariable=var).grid(row=r, column=1, sticky="ew", pady=2)
-        tk.Button(
-            br_frame, text="...",
-            command=lambda v=var: self._browse_dir(v),
-        ).grid(row=r, column=2, padx=(4, 0), pady=2)
-        self._fields["DOWNLOAD_DIR"] = var
-
-        r += 1
-        var = tk.BooleanVar(value=spec["USE_EXISTING_BROWSER"][1].lower() == "true")
-        cb_cdp = tk.Checkbutton(br_frame, text="Usa browser CDP", variable=var)
-        cb_cdp.grid(row=r, column=0, columnspan=3, sticky="w", pady=2)
-        self._fields["USE_EXISTING_BROWSER"] = var
-        Tooltip(cb_cdp, "Connettiti a un browser gia' aperto tramite Chrome DevTools Protocol, invece di avviarne uno nuovo")
-
-        # CDP port: not shown in UI, kept as hidden field for code compatibility
-        self._fields["CDP_PORT"] = tk.StringVar(value=spec["CDP_PORT"][1])
-
-        r += 1
-        self._cdp_registry_var = tk.BooleanVar(value=False)
+        self._cdp_registry_cb = QCheckBox("Abilita CDP nel registro")
         is_firefox = (
             self._default_browser_info
             and self._default_browser_info.get("channel") == "firefox"
         )
-        self._cdp_registry_cb = tk.Checkbutton(
-            br_frame,
-            text="Abilita CDP nel registro",
-            variable=self._cdp_registry_var,
-            command=self._on_cdp_registry_toggled,
-            state=tk.DISABLED if is_firefox or not self._default_browser_info else tk.NORMAL,
-        )
-        self._cdp_registry_cb.grid(row=r, column=0, columnspan=3, sticky="w", pady=2)
-        Tooltip(self._cdp_registry_cb, "Modifica il registro di Windows per avviare il browser predefinito con il supporto CDP attivo")
+        self._cdp_registry_cb.setEnabled(not is_firefox and bool(self._default_browser_info))
+        self._cdp_registry_cb.setToolTip("Modifica il registro di Windows per avviare il browser predefinito con il supporto CDP attivo")
+        self._cdp_registry_cb.toggled.connect(self._on_cdp_registry_toggled)
+        br_layout.addWidget(self._cdp_registry_cb, r, 0, 1, 3)
         self._sync_cdp_registry_checkbox()
 
+        top_layout.addWidget(br_group)
+        layout.addLayout(top_layout)
+
         # ── Bottom (full-width): Parametri ──
-        params_frame = tk.LabelFrame(parent, text="Parametri", padx=8, pady=6)
-        params_frame.pack(fill=tk.X)
-        params_frame.columnconfigure(1, weight=1)
-        params_frame.columnconfigure(3, weight=1)
-        params_frame.columnconfigure(5, weight=1)
+        params_group = QGroupBox("Parametri")
+        params_layout = QGridLayout(params_group)
+        params_layout.setColumnStretch(1, 1)
+        params_layout.setColumnStretch(3, 1)
+        params_layout.setColumnStretch(5, 1)
 
-        # Row 0: timeouts side by side
-        tk.Label(params_frame, text="Download timeout (sec)", anchor="w").grid(
-            row=0, column=0, sticky="w", padx=(0, 8), pady=2,
+        # Row 0: timeouts
+        params_layout.addWidget(QLabel("Download timeout (sec)"), 0, 0)
+        self._dl_timeout_entry = QLineEdit(spec["DOWNLOAD_TIMEOUT"][1])
+        self._dl_timeout_entry.setFixedWidth(60)
+        self._dl_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il download di un documento")
+        params_layout.addWidget(self._dl_timeout_entry, 0, 1)
+        self._fields["DOWNLOAD_TIMEOUT"] = spec["DOWNLOAD_TIMEOUT"][1]
+
+        params_layout.addWidget(QLabel("Page timeout (sec)"), 0, 2)
+        self._pg_timeout_entry = QLineEdit(spec["PAGE_TIMEOUT"][1])
+        self._pg_timeout_entry.setFixedWidth(60)
+        self._pg_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il caricamento di una pagina")
+        params_layout.addWidget(self._pg_timeout_entry, 0, 3)
+        self._fields["PAGE_TIMEOUT"] = spec["PAGE_TIMEOUT"][1]
+
+        params_layout.addWidget(QLabel("Dim. carattere console"), 0, 4)
+        self._font_size_entry = QLineEdit(spec["CONSOLE_FONT_SIZE"][1])
+        self._font_size_entry.setFixedWidth(60)
+        params_layout.addWidget(self._font_size_entry, 0, 5)
+        self._fields["CONSOLE_FONT_SIZE"] = spec["CONSOLE_FONT_SIZE"][1]
+
+        # Fields for settings persistence displayed in SISS tab
+        self._fields["MAX_EMAILS"] = spec["MAX_EMAILS"][1]
+        self._fields["MARK_AS_READ"] = spec["MARK_AS_READ"][1]
+        self._fields["DELETE_AFTER_PROCESSING"] = spec["DELETE_AFTER_PROCESSING"][1]
+
+        # Row 1: headless checkbox
+        self._headless_cb = QCheckBox("Headless browser")
+        self._headless_cb.setChecked(spec["HEADLESS"][1].lower() == "true")
+        self._headless_cb.setToolTip(
+            "Esegui il browser in background, senza finestra visibile.\n"
+            "Utile per esecuzioni non presidiate, ma impedisce il login manuale SSO.\n"
+            "Disattiva questa opzione per vedere il browser pilotato dall'app."
         )
-        var = tk.StringVar(value=spec["DOWNLOAD_TIMEOUT"][1])
-        dl_timeout_entry = tk.Entry(params_frame, textvariable=var, width=8)
-        dl_timeout_entry.grid(row=0, column=1, sticky="w", pady=2)
-        self._fields["DOWNLOAD_TIMEOUT"] = var
-        Tooltip(dl_timeout_entry, "Tempo massimo di attesa (in secondi) per il download di un documento")
+        params_layout.addWidget(self._headless_cb, 1, 0, 1, 6)
+        self._fields["HEADLESS"] = spec["HEADLESS"][1]
 
-        tk.Label(params_frame, text="Page timeout (sec)", anchor="w").grid(
-            row=0, column=2, sticky="w", padx=(16, 8), pady=2,
-        )
-        var = tk.StringVar(value=spec["PAGE_TIMEOUT"][1])
-        pg_timeout_entry = tk.Entry(params_frame, textvariable=var, width=8)
-        pg_timeout_entry.grid(row=0, column=3, sticky="w", pady=2)
-        self._fields["PAGE_TIMEOUT"] = var
-        Tooltip(pg_timeout_entry, "Tempo massimo di attesa (in secondi) per il caricamento di una pagina")
+        # Save button
+        save_btn = QPushButton("Salva Impostazioni")
+        save_btn.clicked.connect(self._save_settings)
+        params_layout.addWidget(save_btn, 2, 0, 1, 6)
 
-        # Row 0 continued: console font size
-        tk.Label(params_frame, text="Dim. carattere console", anchor="w").grid(
-            row=0, column=4, sticky="w", padx=(16, 8), pady=2,
-        )
-        var = tk.StringVar(value=spec["CONSOLE_FONT_SIZE"][1])
-        tk.Entry(params_frame, textvariable=var, width=8).grid(
-            row=0, column=5, sticky="w", pady=2,
-        )
-        self._fields["CONSOLE_FONT_SIZE"] = var
+        layout.addWidget(params_group)
+        layout.addStretch()
 
-        # Fields created here for settings persistence but displayed in SISS tab
-        var = tk.StringVar(value=spec["MAX_EMAILS"][1])
-        self._fields["MAX_EMAILS"] = var
-
-        var = tk.BooleanVar(value=spec["MARK_AS_READ"][1].lower() == "true")
-        self._fields["MARK_AS_READ"] = var
-
-        var = tk.BooleanVar(value=spec["DELETE_AFTER_PROCESSING"][1].lower() == "true")
-        self._fields["DELETE_AFTER_PROCESSING"] = var
-
-        # Row 1: checkboxes
-        var = tk.BooleanVar(value=spec["HEADLESS"][1].lower() == "true")
-        cb_headless = tk.Checkbutton(params_frame, text="Headless browser", variable=var)
-        cb_headless.grid(row=1, column=0, columnspan=6, sticky="w", pady=2)
-        self._fields["HEADLESS"] = var
-        Tooltip(cb_headless, "Esegui il browser in background, senza finestra visibile")
-
-        # Save button centered
-        tk.Button(
-            params_frame, text="Salva Impostazioni", command=self._save_settings,
-        ).grid(row=2, column=0, columnspan=6, pady=(8, 0))
-
-    def _build_pdf_reader_row(self, parent: tk.Widget, row: int, key: str, default: str) -> None:
+    def _build_pdf_reader_row(self, parent_layout: QGridLayout, row: int, key: str, default: str) -> None:
         """Build the PDF reader selection row with combobox."""
-        var = tk.StringVar(value=default)
-        self._fields[key] = var
+        self._fields[key] = default
 
-        # Build combo values and bidirectional maps (no duplicates)
+        # Build combo values and bidirectional maps
         self._pdf_reader_map: dict[str, str] = {}     # display_label -> exe_path
         self._pdf_reader_revmap: dict[str, str] = {}   # norm(exe_path) -> display_label
         self._rebuild_pdf_combo_values()
 
-        frame = tk.Frame(parent)
-        frame.grid(row=row, column=1, columnspan=2, sticky="ew", pady=2)
-        frame.columnconfigure(0, weight=1)
-
-        self._pdf_combo = ttk.Combobox(
-            frame, values=list(self._pdf_reader_map.keys()), state="readonly",
-        )
-        self._pdf_combo.grid(row=0, column=0, sticky="ew")
+        self._pdf_combo = QComboBox()
+        self._pdf_combo.addItems(list(self._pdf_reader_map.keys()))
         self._set_pdf_combo_from_value(default)
-        self._pdf_combo.bind("<<ComboboxSelected>>", self._on_pdf_reader_changed)
+        self._pdf_combo.currentTextChanged.connect(self._on_pdf_reader_changed)
+        parent_layout.addWidget(self._pdf_combo, row, 1, 1, 2)
 
-    def _build_browser_selector_row(self, parent: tk.Widget, row: int, key: str, default: str) -> None:
+    def _build_browser_selector_row(self, parent_layout: QGridLayout, row: int, key: str, default: str) -> None:
         """Build the browser selection row with combobox."""
-        var = tk.StringVar(value=default)
-        self._fields[key] = var
+        self._fields[key] = default
 
-        # Build maps: display_label -> channel_or_path
         self._browser_map: dict[str, str] = {}
-        self._browser_revmap: dict[str, str] = {}  # channel_or_path -> display_label
+        self._browser_revmap: dict[str, str] = {}
 
         for channel_or_path, display_name in self._browsers:
             self._browser_map[display_name] = channel_or_path
             self._browser_revmap[channel_or_path] = display_name
 
-        # Always add Chromium integrato as last option
         self._browser_map[BROWSER_CHROMIUM_LABEL] = BROWSER_CHROMIUM
         self._browser_revmap[BROWSER_CHROMIUM] = BROWSER_CHROMIUM_LABEL
 
-        frame = tk.Frame(parent)
-        frame.grid(row=row, column=1, columnspan=2, sticky="ew", pady=2)
-        frame.columnconfigure(0, weight=1)
+        self._browser_combo = QComboBox()
+        self._browser_combo.addItems(list(self._browser_map.keys()))
 
-        self._browser_combo = ttk.Combobox(
-            frame, values=list(self._browser_map.keys()), state="readonly",
-        )
-        self._browser_combo.grid(row=0, column=0, sticky="ew")
-
-        # Set initial value from stored channel
         label = self._browser_revmap.get(default)
         if label:
-            self._browser_combo.set(label)
+            self._browser_combo.setCurrentText(label)
         elif self._browser_map:
-            self._browser_combo.set(list(self._browser_map.keys())[0])
+            self._browser_combo.setCurrentIndex(0)
 
-        self._browser_combo.bind("<<ComboboxSelected>>", self._on_browser_changed)
+        self._browser_combo.currentTextChanged.connect(self._on_browser_changed)
+        parent_layout.addWidget(self._browser_combo, row, 1, 1, 2)
 
-    def _on_browser_changed(self, _event: tk.Event) -> None:
+    def _on_browser_changed(self, selected_label: str) -> None:
         """Handle browser combobox selection change."""
-        selected_label = self._browser_combo.get()
         channel = self._browser_map.get(selected_label, "msedge")
-        self._fields["BROWSER_CHANNEL"].set(channel)
+        self._fields["BROWSER_CHANNEL"] = channel
         self._update_browser_info_label()
 
     def _update_browser_info_label(self) -> None:
@@ -1161,61 +1323,59 @@ class FSEApp(tk.Tk):
 
         text = f"Browser predefinito: {default_name}"
 
-        # Show selected browser if different from default
         default_channel = self._default_browser_info.get("channel") if self._default_browser_info else None
-        selected_channel = self._fields["BROWSER_CHANNEL"].get()
+        selected_channel = self._fields.get("BROWSER_CHANNEL", "")
         if default_channel != selected_channel:
             selected_label = self._browser_revmap.get(selected_channel, selected_channel)
             text += f"  |  Browser selezionato: {selected_label}"
 
-        self._browser_info_label.configure(text=text)
+        if hasattr(self, "_browser_info_label"):
+            self._browser_info_label.setText(text)
 
     def _sync_cdp_registry_checkbox(self) -> None:
         """Read the current CDP registry status and update the checkbox."""
         if not self._default_browser_info:
-            self._cdp_registry_var.set(False)
+            self._cdp_registry_cb.setChecked(False)
             return
         progid = self._default_browser_info["progid"]
-        port = int(self._fields.get("CDP_PORT", tk.StringVar(value="9222")).get() or "9222")
+        port = int(self._fields.get("CDP_PORT", "9222") or "9222")
         enabled = get_cdp_registry_status(progid, port)
-        self._cdp_registry_var.set(enabled)
+        self._cdp_registry_cb.blockSignals(True)
+        self._cdp_registry_cb.setChecked(enabled)
+        self._cdp_registry_cb.blockSignals(False)
 
-    def _on_cdp_registry_toggled(self) -> None:
+    def _on_cdp_registry_toggled(self, checked: bool) -> None:
         """Handle CDP registry checkbox toggle."""
         if not self._default_browser_info:
             return
         progid = self._default_browser_info["progid"]
-        port = int(self._fields.get("CDP_PORT", tk.StringVar(value="9222")).get() or "9222")
+        port = int(self._fields.get("CDP_PORT", "9222") or "9222")
 
         try:
-            if self._cdp_registry_var.get():
+            if checked:
                 enable_cdp_in_registry(progid, port)
                 self._log(f"CDP abilitato nel registro per {progid} (porta {port})")
             else:
                 disable_cdp_in_registry(progid)
                 self._log(f"CDP disabilitato nel registro per {progid}")
         except Exception as e:
-            messagebox.showerror("Errore", f"Impossibile modificare il registro:\n{e}")
-            # Revert checkbox
+            QMessageBox.critical(self, "Errore", f"Impossibile modificare il registro:\n{e}")
             self._sync_cdp_registry_checkbox()
 
     def _rebuild_pdf_combo_values(self, extra_exe: str | None = None) -> None:
-        """Rebuild the combobox value maps from scratch (prevents duplicates)."""
+        """Rebuild the combobox value maps from scratch."""
         self._pdf_reader_map.clear()
         self._pdf_reader_revmap.clear()
 
-        # 1. Default
         self._pdf_reader_map[PDF_READER_DEFAULT_LABEL] = PDF_READER_DEFAULT
         self._pdf_reader_revmap[_norm(PDF_READER_DEFAULT)] = PDF_READER_DEFAULT_LABEL
 
-        # 2. Detected readers
         for exe_path, display_name in self._pdf_readers:
             nk = _norm(exe_path)
             if nk not in self._pdf_reader_revmap:
                 self._pdf_reader_map[display_name] = exe_path
                 self._pdf_reader_revmap[nk] = display_name
 
-        # 3. Extra custom exe (from saved settings, not in detected list)
         if extra_exe and extra_exe != PDF_READER_DEFAULT:
             nk = _norm(extra_exe)
             if nk not in self._pdf_reader_revmap and Path(extra_exe).exists():
@@ -1223,127 +1383,118 @@ class FSEApp(tk.Tk):
                 self._pdf_reader_map[display] = extra_exe
                 self._pdf_reader_revmap[nk] = display
 
-        # 4. Custom option (always last)
         self._pdf_reader_map[PDF_READER_CUSTOM_LABEL] = PDF_READER_CUSTOM
 
-        # Update combobox if it exists
         if hasattr(self, "_pdf_combo"):
-            self._pdf_combo["values"] = list(self._pdf_reader_map.keys())
+            self._pdf_combo.blockSignals(True)
+            self._pdf_combo.clear()
+            self._pdf_combo.addItems(list(self._pdf_reader_map.keys()))
+            self._pdf_combo.blockSignals(False)
 
     def _set_pdf_combo_from_value(self, value: str) -> None:
-        """Set the combobox selection from a stored value (exe path or 'default')."""
+        """Set the combobox selection from a stored value."""
         if not value or value == PDF_READER_DEFAULT:
-            self._pdf_combo.set(PDF_READER_DEFAULT_LABEL)
+            self._pdf_combo.setCurrentText(PDF_READER_DEFAULT_LABEL)
             return
         nk = _norm(value)
         if nk in self._pdf_reader_revmap:
-            self._pdf_combo.set(self._pdf_reader_revmap[nk])
+            self._pdf_combo.setCurrentText(self._pdf_reader_revmap[nk])
             return
-        # Unknown path - rebuild with extra value
         self._rebuild_pdf_combo_values(extra_exe=value)
         if nk in self._pdf_reader_revmap:
-            self._pdf_combo.set(self._pdf_reader_revmap[nk])
+            self._pdf_combo.setCurrentText(self._pdf_reader_revmap[nk])
         else:
-            self._pdf_combo.set(PDF_READER_DEFAULT_LABEL)
+            self._pdf_combo.setCurrentText(PDF_READER_DEFAULT_LABEL)
 
-    def _on_pdf_reader_changed(self, _event: tk.Event) -> None:
+    def _on_pdf_reader_changed(self, selected_label: str) -> None:
         """Handle combobox selection change."""
-        selected_label = self._pdf_combo.get()
         exe_path = self._pdf_reader_map.get(selected_label, PDF_READER_DEFAULT)
 
         if exe_path == PDF_READER_CUSTOM:
             self._show_pdf_picker_dialog()
         else:
-            self._fields["PDF_READER"].set(exe_path)
+            self._fields["PDF_READER"] = exe_path
 
     def _show_pdf_picker_dialog(self) -> None:
-        """Show a dialog listing all detected PDF readers, like Windows 'Open with'."""
-        dlg = tk.Toplevel(self)
-        dlg.title("Scegli lettore PDF")
-        dlg.geometry("480x350")
-        dlg.resizable(True, True)
-        dlg.transient(self)
-        dlg.grab_set()
+        """Show a dialog listing all detected PDF readers."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Scegli lettore PDF")
+        dlg.resize(480, 350)
+        dlg.setModal(True)
 
-        tk.Label(
-            dlg, text="Seleziona un'applicazione per aprire i file PDF:",
-            anchor="w", padx=8, pady=8,
-        ).pack(fill=tk.X)
+        layout = QVBoxLayout(dlg)
 
-        # Listbox with all detected readers
-        list_frame = tk.Frame(dlg)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=8)
+        layout.addWidget(QLabel("Seleziona un'applicazione per aprire i file PDF:"))
 
-        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL)
-        listbox = tk.Listbox(
-            list_frame, yscrollcommand=scrollbar.set,
-            font=("Segoe UI", 10), activestyle="dotbox",
-        )
-        scrollbar.config(command=listbox.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Populate with all detected readers
-        items: list[tuple[str, str]] = []  # (display, exe_path)
+        listbox = QListWidget()
+        listbox.setFont(QFont("Segoe UI", 10))
+        items: list[tuple[str, str]] = []
         for exe_path, display_name in self._pdf_readers:
             items.append((display_name, exe_path))
-            listbox.insert(tk.END, display_name)
+            listbox.addItem(display_name)
 
-        # Pre-select current value if it's in the list
-        current = self._fields["PDF_READER"].get()
+        # Pre-select current value
+        current = self._fields.get("PDF_READER", PDF_READER_DEFAULT)
         if current and current != PDF_READER_DEFAULT:
             for idx, (_, exe) in enumerate(items):
                 if _norm(exe) == _norm(current):
-                    listbox.selection_set(idx)
-                    listbox.see(idx)
+                    listbox.setCurrentRow(idx)
                     break
+
+        layout.addWidget(listbox)
 
         result = {"exe": None}
 
-        def on_ok() -> None:
-            sel = listbox.curselection()
-            if sel:
-                result["exe"] = items[sel[0]][1]
-            dlg.destroy()
+        def on_ok():
+            sel = listbox.currentRow()
+            if sel >= 0:
+                result["exe"] = items[sel][1]
+            dlg.accept()
 
-        def on_browse() -> None:
-            path = filedialog.askopenfilename(
-                parent=dlg,
-                title="Seleziona lettore PDF",
-                filetypes=[("Eseguibili", "*.exe"), ("Tutti i file", "*.*")],
+        def on_browse():
+            path, _ = QFileDialog.getOpenFileName(
+                dlg, "Seleziona lettore PDF", "",
+                "Eseguibili (*.exe);;Tutti i file (*.*)",
             )
             if path:
                 result["exe"] = path
-                dlg.destroy()
+                dlg.accept()
 
-        # Buttons
-        btn_frame = tk.Frame(dlg, pady=8)
-        btn_frame.pack(fill=tk.X, padx=8)
+        btn_layout = QHBoxLayout()
+        browse_btn = QPushButton("Sfoglia...")
+        browse_btn.clicked.connect(on_browse)
+        btn_layout.addWidget(browse_btn)
+        btn_layout.addStretch()
 
-        tk.Button(btn_frame, text="Sfoglia...", command=on_browse).pack(side=tk.LEFT)
-        tk.Button(btn_frame, text="Annulla", command=dlg.destroy).pack(side=tk.RIGHT, padx=(4, 0))
-        tk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
+        ok_btn = QPushButton("OK")
+        ok_btn.setFixedWidth(80)
+        ok_btn.clicked.connect(on_ok)
+        btn_layout.addWidget(ok_btn)
 
-        # Double-click to select
-        listbox.bind("<Double-Button-1>", lambda _e: on_ok())
+        cancel_btn = QPushButton("Annulla")
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_layout.addWidget(cancel_btn)
 
-        dlg.wait_window()
+        layout.addLayout(btn_layout)
 
-        if result["exe"]:
+        listbox.itemDoubleClicked.connect(lambda: on_ok())
+
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+
+        if accepted and result["exe"]:
             chosen = result["exe"]
-            self._fields["PDF_READER"].set(chosen)
+            self._fields["PDF_READER"] = chosen
             self._rebuild_pdf_combo_values(extra_exe=chosen)
             self._set_pdf_combo_from_value(chosen)
         else:
             # Cancelled - revert combo to current stored value
-            self._set_pdf_combo_from_value(self._fields["PDF_READER"].get())
+            self._set_pdf_combo_from_value(self._fields.get("PDF_READER", PDF_READER_DEFAULT))
 
     # ---- Helpers ----
 
     def _open_guide(self) -> None:
         """Open the user guide HTML file in the default browser."""
         guide_name = "guida_utente.html"
-        # In frozen mode, datas are in sys._MEIPASS (_internal); also check app_dir
         candidates = [paths.app_dir / guide_name]
         if getattr(sys, "frozen", False):
             candidates.insert(0, Path(sys._MEIPASS) / guide_name)
@@ -1351,37 +1502,47 @@ class FSEApp(tk.Tk):
             if guide.exists():
                 webbrowser.open(guide.as_uri())
                 return
-        messagebox.showwarning("Guida non trovata", f"Il file guida non è stato trovato:\n{candidates[0]}")
+        QMessageBox.warning(self, "Guida non trovata", f"Il file guida non è stato trovato:\n{candidates[0]}")
 
-    def _browse_dir(self, var: tk.StringVar) -> None:
-        path = filedialog.askdirectory(initialdir=var.get() or ".")
+    def _browse_download_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Seleziona directory", self._download_dir_entry.text() or ".")
         if path:
-            var.set(path)
-
-    def _browse_exe(self, var: tk.StringVar) -> None:
-        path = filedialog.askopenfilename(
-            initialdir=str(Path(var.get()).parent) if var.get() else ".",
-            filetypes=[("Eseguibili", "*.exe"), ("Tutti i file", "*.*")],
-        )
-        if path:
-            var.set(path)
+            self._download_dir_entry.setText(path)
 
     def _log(self, msg: str) -> None:
         """Append a message to the console (main-thread safe)."""
-        self._console.configure(state=tk.NORMAL)
-        self._console.insert(tk.END, msg + "\n")
-        self._console.see(tk.END)
-        self._console.configure(state=tk.DISABLED)
+        self._bridge.append_text.emit(self._console, msg)
+
+    def _patient_log(self, msg: str) -> None:
+        """Append a message to the patient console (main-thread safe)."""
+        self._bridge.append_text.emit(self._patient_console, msg)
+
+    def _sync_fields_from_widgets(self) -> None:
+        """Read current widget values into _fields dict."""
+        for key, entry in self._settings_entries.items():
+            self._fields[key] = entry.text()
+        self._fields["DOWNLOAD_DIR"] = self._download_dir_entry.text()
+        self._fields["DOWNLOAD_TIMEOUT"] = self._dl_timeout_entry.text()
+        self._fields["PAGE_TIMEOUT"] = self._pg_timeout_entry.text()
+        self._fields["CONSOLE_FONT_SIZE"] = self._font_size_entry.text()
+        self._fields["HEADLESS"] = "true" if self._headless_cb.isChecked() else "false"
+        self._fields["USE_EXISTING_BROWSER"] = "true" if self._cdp_cb.isChecked() else "false"
+        # BROWSER_CHANNEL and PDF_READER are already updated via combobox handlers
+        # Sync fields from SISS tab widgets
+        self._fields["MAX_EMAILS"] = self._max_email_entry.text()
+        self._fields["MARK_AS_READ"] = "true" if self._siss_mark_cb.isChecked() else "false"
+        self._fields["DELETE_AFTER_PROCESSING"] = "true" if self._siss_delete_cb.isChecked() else "false"
 
     def _get_field_values(self) -> dict[str, str]:
         """Collect current field values as strings for env file."""
+        self._sync_fields_from_widgets()
         values: dict[str, str] = {}
         for key, _, _, kind in SETTINGS_SPEC:
-            var = self._fields[key]
-            if kind == "bool":
-                values[key] = "true" if var.get() else "false"
+            val = self._fields.get(key, "")
+            if isinstance(val, bool):
+                values[key] = "true" if val else "false"
             else:
-                values[key] = var.get()
+                values[key] = str(val)
         return values
 
     # ---- Settings ----
@@ -1390,32 +1551,52 @@ class FSEApp(tk.Tk):
         env_vals = _load_env_values()
         for key, _, default, kind in SETTINGS_SPEC:
             val = env_vals.get(key, default)
-            var = self._fields[key]
-            if kind == "bool":
-                var.set(val.lower() == "true")
-            elif kind == "pdf_reader":
-                var.set(val)
-                self._set_pdf_combo_from_value(val)
-            elif kind == "browser_selector":
-                var.set(val)
+            self._fields[key] = val
+
+            # Update widgets
+            if key in self._settings_entries:
+                self._settings_entries[key].setText(val)
+            elif key == "DOWNLOAD_DIR":
+                self._download_dir_entry.setText(val)
+            elif key == "DOWNLOAD_TIMEOUT":
+                self._dl_timeout_entry.setText(val)
+            elif key == "PAGE_TIMEOUT":
+                self._pg_timeout_entry.setText(val)
+            elif key == "CONSOLE_FONT_SIZE":
+                self._font_size_entry.setText(val)
+            elif key == "HEADLESS":
+                self._headless_cb.setChecked(val.lower() == "true")
+            elif key == "USE_EXISTING_BROWSER":
+                self._cdp_cb.setChecked(val.lower() == "true")
+            elif key == "BROWSER_CHANNEL":
                 label = self._browser_revmap.get(val)
                 if label:
-                    self._browser_combo.set(label)
-            else:
-                var.set(val)
+                    self._browser_combo.setCurrentText(label)
+            elif key == "PDF_READER":
+                self._set_pdf_combo_from_value(val)
+            elif key == "MAX_EMAILS":
+                self._max_email_entry.setText(val)
+            elif key == "MARK_AS_READ":
+                self._siss_mark_cb.setChecked(val.lower() == "true")
+            elif key == "DELETE_AFTER_PROCESSING":
+                self._siss_delete_cb.setChecked(val.lower() == "true")
+
+        # Apply initial state for delete toggle
+        self._on_delete_toggled(self._siss_delete_cb.isChecked())
 
     def _save_settings(self) -> None:
         values = self._get_field_values()
         try:
             _save_env_values(values)
-            self._log("Impostazioni salvate in " + ENV_FILE)
+            QMessageBox.information(self, "Impostazioni", "Impostazioni salvate correttamente.")
         except Exception as e:
-            messagebox.showerror("Errore", f"Impossibile salvare: {e}")
+            QMessageBox.critical(self, "Errore", f"Impossibile salvare: {e}")
 
     # ---- Test IMAP connection ----
 
     def _test_imap_connection(self) -> None:
-        self._btn_test_imap.configure(state=tk.DISABLED, text="Test in corso...")
+        self._btn_test_imap.setEnabled(False)
+        self._btn_test_imap.setText("Test in corso...")
         threading.Thread(target=self._test_imap_worker, daemon=True).start()
 
     def _test_imap_worker(self) -> None:
@@ -1426,28 +1607,26 @@ class FSEApp(tk.Tk):
             client = EmailClient(config, logger)
             client.connect()
             client.disconnect()
-            self.after(0, lambda: messagebox.showinfo(
+            self._bridge.show_info.emit(
                 "Test connessione",
                 f"Connessione riuscita!\n\n"
                 f"Server: {config.imap_host}:{config.imap_port}\n"
                 f"Utente: {config.email_user}",
-            ))
+            )
         except Exception as e:
             err_msg = str(e) if str(e) and str(e) != "None" else (
                 f"{type(e).__name__}: {e.args}" if e.args else type(e).__name__
             )
-            self.after(0, lambda m=err_msg: messagebox.showerror(
-                "Test connessione", f"Connessione fallita:\n\n{m}",
-            ))
+            self._bridge.show_error.emit("Test connessione", f"Connessione fallita:\n\n{err_msg}")
         finally:
-            self.after(0, lambda: self._btn_test_imap.configure(
-                state=tk.NORMAL, text="Test connessione",
-            ))
+            self._bridge.call_on_main.emit(
+                lambda: (self._btn_test_imap.setEnabled(True), self._btn_test_imap.setText("Test connessione"))
+            )
 
     # ---- Check email ----
 
     def _check_email(self) -> None:
-        self._btn_check.configure(state=tk.DISABLED)
+        self._btn_check.setEnabled(False)
         self._log("Connessione IMAP per conteggio email...")
         threading.Thread(target=self._check_email_worker, daemon=True).start()
 
@@ -1470,17 +1649,17 @@ class FSEApp(tk.Tk):
                 )
             else:
                 msg = f"{count} email con referti da scaricare"
-            self.after(0, self._log, msg)
-            self.after(0, lambda: messagebox.showinfo("Conteggio Email", msg))
+            self._bridge.append_text.emit(self._console, msg)
+            self._bridge.show_info.emit("Conteggio Email", msg)
         except Exception as e:
             err_msg = str(e) if str(e) and str(e) != "None" else (
                 f"{type(e).__name__}: {e.args}" if e.args else type(e).__name__
             )
             tb = traceback.format_exc()
-            self.after(0, self._log, f"Errore: {err_msg}\n{tb}")
-            self.after(0, lambda m=err_msg: messagebox.showerror("Errore", m))
+            self._bridge.append_text.emit(self._console, f"Errore: {err_msg}\n{tb}")
+            self._bridge.show_error.emit("Errore", err_msg)
         finally:
-            self.after(0, lambda: self._btn_check.configure(state=tk.NORMAL))
+            self._bridge.call_on_main.emit(lambda: self._btn_check.setEnabled(True))
 
     def _save_settings_quietly(self) -> None:
         """Save current settings without user feedback."""
@@ -1491,90 +1670,153 @@ class FSEApp(tk.Tk):
 
     def _start_processing(self) -> None:
         if self._worker and self._worker.is_alive():
-            messagebox.showwarning("Attenzione", "Processamento gia' in corso")
+            QMessageBox.warning(self, "Attenzione", "Processamento gia' in corso")
             return
         if self._patient_worker and self._patient_worker.is_alive():
-            messagebox.showwarning("Attenzione", "Download paziente in corso, attendere il completamento")
+            QMessageBox.warning(self, "Attenzione", "Download paziente in corso, attendere il completamento")
             return
 
-        selected = self._get_selected_types(self._siss_tutti_var, self._siss_doc_vars)
+        selected = self._get_selected_types(self._siss_tutti_cb, self._siss_doc_cbs)
         if selected is not None and not selected:
-            messagebox.showwarning("Errore", "Seleziona almeno una tipologia di documento")
+            QMessageBox.warning(self, "Errore", "Seleziona almeno una tipologia di documento")
             return
 
         self._save_settings_quietly()
         self._stop_event.clear()
-        self._btn_start.configure(state=tk.DISABLED)
-        self._btn_stop.configure(state=tk.NORMAL)
+        self._btn_start.setEnabled(False)
+        self._btn_stop.setEnabled(True)
         self._log("--- Avvio processamento ---")
 
         self._worker = threading.Thread(target=self._processing_worker, args=(selected,), daemon=True)
         self._worker.start()
-        self._poll_worker()
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_worker)
+        self._poll_timer.start(500)
 
     def _processing_worker(self, allowed_types: set[str] | None) -> None:
         try:
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
-            # Attach GUI handler to the underlying logger
-            handler = TextHandler(self._console)
+            handler = TextHandler(self._console, self._bridge)
             handler.setLevel(logging.INFO)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
             run_processing(config, logger, self._stop_event, allowed_types=allowed_types)
         except Exception as e:
-            self.after(0, self._log, f"Errore fatale: {e}")
+            self._bridge.append_text.emit(self._console, f"Errore fatale: {e}")
 
     def _poll_worker(self) -> None:
         if self._worker and self._worker.is_alive():
-            self.after(500, self._poll_worker)
-        else:
-            self._btn_start.configure(state=tk.NORMAL)
-            self._btn_stop.configure(state=tk.DISABLED)
-            self._log("--- Processamento terminato ---")
+            return  # Timer continues
+        self._poll_timer.stop()
+        self._btn_start.setEnabled(True)
+        self._btn_stop.setEnabled(False)
+        self._log("--- Processamento terminato ---")
 
     def _stop_processing(self) -> None:
         self._stop_event.set()
         self._log("Richiesta interruzione inviata...")
-        self._btn_stop.configure(state=tk.DISABLED)
+        self._btn_stop.setEnabled(False)
+
+    # ---- Patient ente scan ----
+
+    def _start_ente_scan(self) -> None:
+        if self._ente_scan_worker and self._ente_scan_worker.is_alive():
+            QMessageBox.warning(self, "Attenzione", "Scansione strutture gia' in corso")
+            return
+        if self._patient_worker and self._patient_worker.is_alive():
+            QMessageBox.warning(self, "Attenzione", "Download paziente in corso, attendere il completamento")
+            return
+
+        cf = self._cf_entry.text().strip().upper()
+        if not re.match(r"^[A-Z0-9]{16}$", cf):
+            QMessageBox.warning(self, "Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
+            return
+
+        self._btn_load_enti.setEnabled(False)
+        self._btn_patient_start.setEnabled(False)
+        self._btn_patient_stop.setEnabled(True)
+        self._patient_stop_event.clear()
+        self._patient_log("--- Scansione strutture in corso... ---")
+
+        self._ente_scan_worker = threading.Thread(
+            target=self._ente_scan_worker_fn,
+            args=(cf,),
+            daemon=True,
+        )
+        self._ente_scan_worker.start()
+        self._ente_scan_poll_timer = QTimer(self)
+        self._ente_scan_poll_timer.timeout.connect(self._poll_ente_scan)
+        self._ente_scan_poll_timer.start(500)
+
+    def _ente_scan_worker_fn(self, codice_fiscale: str) -> None:
+        try:
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            handler = TextHandler(self._patient_console, self._bridge)
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+            logger._logger.addHandler(handler)
+
+            browser = FSEBrowser(config, logger)
+            browser.start()
+            browser.wait_for_manual_login(stop_event=self._patient_stop_event)
+
+            enti = browser.scan_patient_enti(codice_fiscale)
+            if enti:
+                self._bridge.call_on_main.emit(lambda e=enti: self._update_ente_combobox(e))
+                self._bridge.append_text.emit(
+                    self._patient_console, f"Trovate {len(enti)} strutture"
+                )
+            else:
+                self._bridge.append_text.emit(
+                    self._patient_console, "Nessuna struttura trovata"
+                )
+
+            # Save the browser for reuse by download worker
+            self._patient_browser = browser
+        except Exception as e:
+            self._bridge.append_text.emit(self._patient_console, f"Errore scansione strutture: {e}")
+
+    def _poll_ente_scan(self) -> None:
+        if self._ente_scan_worker and self._ente_scan_worker.is_alive():
+            return
+        self._ente_scan_poll_timer.stop()
+        self._btn_load_enti.setEnabled(True)
+        self._btn_patient_start.setEnabled(True)
+        self._btn_patient_stop.setEnabled(False)
+        self._patient_log("--- Scansione strutture terminata ---")
 
     # ---- Patient download ----
 
-    def _patient_log(self, msg: str) -> None:
-        """Append a message to the patient console (main-thread safe)."""
-        self._patient_console.configure(state=tk.NORMAL)
-        self._patient_console.insert(tk.END, msg + "\n")
-        self._patient_console.see(tk.END)
-        self._patient_console.configure(state=tk.DISABLED)
-
     def _start_patient_download(self) -> None:
         if self._patient_worker and self._patient_worker.is_alive():
-            messagebox.showwarning("Attenzione", "Download paziente gia' in corso")
+            QMessageBox.warning(self, "Attenzione", "Download paziente gia' in corso")
             return
         if self._worker and self._worker.is_alive():
-            messagebox.showwarning("Attenzione", "Processamento SISS in corso, attendere il completamento")
+            QMessageBox.warning(self, "Attenzione", "Processamento SISS in corso, attendere il completamento")
             return
 
-        cf = self._cf_var.get().strip().upper()
+        cf = self._cf_entry.text().strip().upper()
         if not re.match(r"^[A-Z0-9]{16}$", cf):
-            messagebox.showwarning("Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
+            QMessageBox.warning(self, "Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
             return
 
-        selected = self._get_selected_types(self._patient_tutti_var, self._patient_doc_vars)
+        selected = self._get_selected_types(self._patient_tutti_cb, self._patient_doc_cbs)
         if selected is not None and not selected:
-            messagebox.showwarning("Errore", "Seleziona almeno una tipologia di documento")
+            QMessageBox.warning(self, "Errore", "Seleziona almeno una tipologia di documento")
             return
 
-        # Collect filters
-        ente_filter = self._ente_var.get().strip()
-        date_from = self._parse_user_date(self._date_from_var.get())
-        date_to = self._parse_user_date(self._date_to_var.get())
+        ente_filter = self._ente_combo.currentText().strip()
+        date_from = self._parse_user_date(self._date_from_entry.text())
+        date_to = self._parse_user_date(self._date_to_entry.text())
 
         self._save_settings_quietly()
         self._patient_stop_event.clear()
-        self._btn_patient_start.configure(state=tk.DISABLED)
-        self._btn_patient_stop.configure(state=tk.NORMAL)
+        self._btn_patient_start.setEnabled(False)
+        self._btn_patient_stop.setEnabled(True)
+        self._btn_load_enti.setEnabled(False)
         self._patient_log(f"--- Avvio download per CF: {cf} ---")
 
         self._patient_worker = threading.Thread(
@@ -1583,7 +1825,9 @@ class FSEApp(tk.Tk):
             daemon=True,
         )
         self._patient_worker.start()
-        self._poll_patient_worker()
+        self._patient_poll_timer = QTimer(self)
+        self._patient_poll_timer.timeout.connect(self._poll_patient_worker)
+        self._patient_poll_timer.start(500)
 
     @staticmethod
     def _parse_user_date(text: str) -> date | None:
@@ -1605,19 +1849,32 @@ class FSEApp(tk.Tk):
         try:
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
-            handler = TextHandler(self._patient_console)
+            handler = TextHandler(self._patient_console, self._bridge)
             handler.setLevel(logging.INFO)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
             file_manager = FileManager(config, logger)
-            browser = FSEBrowser(config, logger)
-            try:
-                browser.start()
-                browser.wait_for_manual_login()
 
+            # Reuse browser from ente scan if still alive
+            reused = False
+            if self._patient_browser is not None:
+                try:
+                    if self._patient_browser._is_alive():
+                        browser = self._patient_browser
+                        self._patient_browser = None
+                        reused = True
+                        logger.info("Riutilizzo browser dalla scansione strutture")
+                except Exception:
+                    pass
+            if not reused:
+                browser = FSEBrowser(config, logger)
+                browser.start()
+                browser.wait_for_manual_login(stop_event=self._patient_stop_event)
+
+            try:
                 def on_enti_found(enti):
-                    self.after(0, self._update_ente_combobox, enti)
+                    self._bridge.call_on_main.emit(lambda e=enti: self._update_ente_combobox(e))
 
                 doc_results = browser.process_patient_all_dates(
                     codice_fiscale, self._patient_stop_event, allowed_types,
@@ -1626,8 +1883,14 @@ class FSEApp(tk.Tk):
                 )
 
                 downloaded = 0
+                skipped = 0
+                errors = 0
                 for result in doc_results:
-                    if result.skipped or result.error or not result.download_path:
+                    if result.skipped:
+                        skipped += 1
+                        continue
+                    if result.error or not result.download_path:
+                        errors += 1
                         continue
                     downloaded += 1
                     file_manager.rename_download(
@@ -1638,27 +1901,43 @@ class FSEApp(tk.Tk):
                         fse_link=f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}",
                     )
 
-                logger.info(f"Download completato: {downloaded} documenti scaricati")
+                logger.info("--- Riepilogo ---")
+                logger.info(f"Scaricati: {downloaded}")
+                logger.info(f"Saltati (filtro): {skipped}")
+                logger.info(f"Errori: {errors}")
                 file_manager.save_mappings()
             finally:
                 browser.stop()
         except Exception as e:
-            self.after(0, self._patient_log, f"Errore fatale: {e}")
+            self._bridge.append_text.emit(self._patient_console, f"Errore fatale: {e}")
 
     def _poll_patient_worker(self) -> None:
         if self._patient_worker and self._patient_worker.is_alive():
-            self.after(500, self._poll_patient_worker)
-        else:
-            self._btn_patient_start.configure(state=tk.NORMAL)
-            self._btn_patient_stop.configure(state=tk.DISABLED)
-            self._patient_log("--- Download terminato ---")
+            return
+        self._patient_poll_timer.stop()
+        self._btn_patient_start.setEnabled(True)
+        self._btn_patient_stop.setEnabled(False)
+        self._btn_load_enti.setEnabled(True)
+        self._patient_log("--- Download terminato ---")
 
     def _stop_patient_download(self) -> None:
         self._patient_stop_event.set()
         self._patient_log("Richiesta interruzione inviata...")
-        self._btn_patient_stop.configure(state=tk.DISABLED)
+        self._btn_patient_stop.setEnabled(False)
+
+    def closeEvent(self, event) -> None:
+        if self._patient_browser is not None:
+            try:
+                self._patient_browser.stop()
+            except Exception:
+                pass
+            self._patient_browser = None
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":
-    app = FSEApp()
-    app.mainloop()
+    app = QApplication(sys.argv)
+    app.setStyleSheet(APP_STYLE)
+    window = FSEApp()
+    window.show()
+    sys.exit(app.exec())
