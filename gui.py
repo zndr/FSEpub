@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from app_paths import paths
+from credential_manager import encrypt_password, decrypt_password, is_encrypted, verify_password
 from version import __version__
 from browser_automation import (
     FSEBrowser,
@@ -1160,8 +1161,19 @@ class FSEApp(QMainWindow):
             entry = QLineEdit(default)
             if kind == "password":
                 entry.setEchoMode(QLineEdit.EchoMode.Password)
-            entry.setToolTip(mail_tooltips.get(key, ""))
-            mail_layout.addWidget(entry, r, 1)
+                entry.setReadOnly(True)
+                entry.setToolTip("Usa il pulsante 'Cambia...' per modificare la password")
+                # Password row: entry + "Cambia..." button
+                pass_row = QHBoxLayout()
+                pass_row.addWidget(entry)
+                btn_change_pass = QPushButton("Cambia...")
+                btn_change_pass.setToolTip("Cambia la password email")
+                btn_change_pass.clicked.connect(self._show_change_password_dialog)
+                pass_row.addWidget(btn_change_pass)
+                mail_layout.addLayout(pass_row, r, 1)
+            else:
+                entry.setToolTip(mail_tooltips.get(key, ""))
+                mail_layout.addWidget(entry, r, 1)
             self._settings_entries[key] = entry
             self._fields[key] = default
 
@@ -1835,14 +1847,27 @@ class FSEApp(QMainWindow):
                 values[key] = "true" if val else "false"
             else:
                 values[key] = str(val)
+        # Encrypt password before saving to disk
+        raw_pass = values.get("EMAIL_PASS", "")
+        if raw_pass and not is_encrypted(raw_pass):
+            values["EMAIL_PASS"] = encrypt_password(raw_pass)
         return values
 
     # ---- Settings ----
 
     def _load_settings(self) -> None:
         env_vals = _load_env_values()
+        need_migration = False
         for key, _, default, kind in SETTINGS_SPEC:
             val = env_vals.get(key, default)
+
+            # Decrypt EMAIL_PASS for in-memory / widget use
+            if key == "EMAIL_PASS":
+                raw_val = val
+                val = decrypt_password(val)
+                if raw_val and not is_encrypted(raw_val):
+                    need_migration = True
+
             self._fields[key] = val
 
             # Update widgets
@@ -1877,6 +1902,83 @@ class FSEApp(QMainWindow):
 
         # Apply initial state for delete toggle
         self._on_delete_toggled(self._siss_delete_cb.isChecked())
+
+        # Auto-migrate plain-text password to encrypted form
+        if need_migration:
+            self._save_settings_quietly()
+
+    def _show_change_password_dialog(self) -> None:
+        """Show a modal dialog to change the email password."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Cambia password email")
+        dlg.setMinimumWidth(360)
+        layout = QVBoxLayout(dlg)
+
+        # Read current stored value from env file to verify old password
+        env_vals = _load_env_values()
+        stored_pass = env_vals.get("EMAIL_PASS", "")
+        has_existing = bool(stored_pass)
+
+        error_label = QLabel("")
+        error_label.setStyleSheet("color: red;")
+        error_label.setWordWrap(True)
+        error_label.hide()
+        layout.addWidget(error_label)
+
+        # Current password (only if one is already saved)
+        current_entry = None
+        if has_existing:
+            layout.addWidget(QLabel("Password attuale:"))
+            current_entry = QLineEdit()
+            current_entry.setEchoMode(QLineEdit.EchoMode.Password)
+            layout.addWidget(current_entry)
+
+        layout.addWidget(QLabel("Nuova password:"))
+        new_entry = QLineEdit()
+        new_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(new_entry)
+
+        layout.addWidget(QLabel("Conferma nuova password:"))
+        confirm_entry = QLineEdit()
+        confirm_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(confirm_entry)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        layout.addWidget(buttons)
+
+        def on_accept():
+            error_label.hide()
+
+            # Verify current password if one exists
+            if has_existing and current_entry is not None:
+                if not verify_password(current_entry.text(), stored_pass):
+                    error_label.setText("La password attuale non e' corretta.")
+                    error_label.show()
+                    return
+
+            new_pass = new_entry.text()
+            confirm_pass = confirm_entry.text()
+
+            if not new_pass:
+                error_label.setText("La nuova password non puo' essere vuota.")
+                error_label.show()
+                return
+
+            if new_pass != confirm_pass:
+                error_label.setText("Le password non coincidono.")
+                error_label.show()
+                return
+
+            # Update the field and save
+            self._fields["EMAIL_PASS"] = new_pass
+            self._settings_entries["EMAIL_PASS"].setText(new_pass)
+            self._save_settings_quietly()
+            dlg.accept()
+            QMessageBox.information(self, "Password", "Password aggiornata correttamente.")
+
+        buttons.accepted.connect(on_accept)
+        buttons.rejected.connect(dlg.reject)
+        dlg.exec()
 
     def _save_settings(self) -> None:
         values = self._get_field_values()

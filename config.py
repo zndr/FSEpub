@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 from app_paths import paths
+from credential_manager import decrypt_password
 
 
 @dataclass
@@ -41,7 +42,7 @@ class Config:
         load_dotenv(env_file, override=True)
 
         email_user = os.getenv("EMAIL_USER", "")
-        email_pass = os.getenv("EMAIL_PASS", "")
+        email_pass = decrypt_password(os.getenv("EMAIL_PASS", ""))
         imap_host = os.getenv("IMAP_HOST", "mail-crs-lombardia.fastweb360.it")
 
         if not email_user or not email_pass:
