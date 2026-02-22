@@ -13,7 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -105,6 +105,127 @@ REFERTO_SUBTYPES = {
 
 DATE_PRESETS = ["Tutte", "Ultima settimana", "Ultimo mese", "Ultimo anno", "Personalizzato"]
 DATE_PRESET_DAYS = {"Ultima settimana": 7, "Ultimo mese": 30, "Ultimo anno": 365}
+
+APP_STYLE = """
+/* ---------- QGroupBox ---------- */
+QGroupBox {
+    border: 1px solid #3b7dd8;
+    border-radius: 4px;
+    margin-top: 14px;
+    padding-top: 14px;
+    font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 2px 8px;
+    color: #1a4a8a;
+}
+
+/* ---------- QPushButton ---------- */
+QPushButton {
+    background-color: #2b6cb0;
+    color: white;
+    border: 1px solid #1e5a9a;
+    border-radius: 4px;
+    padding: 5px 14px;
+    min-height: 20px;
+}
+QPushButton:hover {
+    background-color: #1e5a9a;
+}
+QPushButton:pressed {
+    background-color: #174a7a;
+}
+QPushButton:disabled {
+    background-color: #e0e0e0;
+    color: #a0a0a0;
+    border-color: #c0c0c0;
+}
+
+/* ---------- QTabWidget / QTabBar ---------- */
+QTabWidget::pane {
+    border: 1px solid #3b7dd8;
+    border-top: 2px solid #2b6cb0;
+}
+QTabBar::tab {
+    background-color: #e8eef4;
+    color: #333333;
+    border: 1px solid #b0c4de;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    padding: 6px 16px;
+    margin-right: 2px;
+}
+QTabBar::tab:selected {
+    background-color: #2b6cb0;
+    color: white;
+    border-color: #2b6cb0;
+}
+QTabBar::tab:hover:!selected {
+    background-color: #d0dcea;
+}
+
+/* ---------- QTextEdit (console) ---------- */
+QTextEdit {
+    background-color: #f0f4f8;
+    border: 1px solid #c0d0e0;
+    border-radius: 3px;
+}
+
+/* ---------- QLineEdit ---------- */
+QLineEdit {
+    border: 1px solid #b0c4de;
+    border-radius: 3px;
+    padding: 3px 6px;
+}
+QLineEdit:focus {
+    border: 1px solid #2b6cb0;
+}
+
+/* ---------- QComboBox ---------- */
+QComboBox {
+    border: 1px solid #b0c4de;
+    border-radius: 3px;
+    padding: 3px 6px;
+}
+QComboBox:focus {
+    border: 1px solid #2b6cb0;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border-left: 1px solid #b0c4de;
+    width: 20px;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 6px solid #555555;
+    width: 0;
+    height: 0;
+}
+
+/* ---------- QCheckBox ---------- */
+QCheckBox::indicator:checked {
+    background-color: #2b6cb0;
+    border: 1px solid #1e5a9a;
+    border-radius: 2px;
+}
+QCheckBox::indicator:unchecked {
+    border: 1px solid #b0c4de;
+    border-radius: 2px;
+    background-color: white;
+}
+
+/* ---------- Utility ---------- */
+.subtle-label {
+    color: #6b7b8d;
+}
+"""
 
 
 def _norm(path: str) -> str:
@@ -613,6 +734,24 @@ class FSEApp(QMainWindow):
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(10, 10, 10, 10)
 
+        # Menu bar
+        menu_bar = self.menuBar()
+        file_menu = menu_bar.addMenu("File")
+
+        act_settings = QAction("Impostazioni", self)
+        act_settings.triggered.connect(lambda: self._notebook.setCurrentIndex(2))
+        file_menu.addAction(act_settings)
+
+        file_menu.addSeparator()
+
+        act_exit = QAction("Esci", self)
+        act_exit.triggered.connect(self.close)
+        file_menu.addAction(act_exit)
+
+        act_guide = QAction("Guida", self)
+        act_guide.triggered.connect(self._open_guide)
+        menu_bar.addAction(act_guide)
+
         # Tabbed notebook
         self._notebook = QTabWidget()
         main_layout.addWidget(self._notebook)
@@ -634,6 +773,22 @@ class FSEApp(QMainWindow):
         self._build_siss_tab(siss_tab)
         self._build_patient_tab(patient_tab)
 
+        # Bottom bar: Reset console (right-aligned)
+        bottom_row = QHBoxLayout()
+        bottom_row.addStretch()
+        self._btn_reset_console = QPushButton("Reset console")
+        self._btn_reset_console.clicked.connect(self._reset_active_console)
+        bottom_row.addWidget(self._btn_reset_console)
+        main_layout.addLayout(bottom_row)
+
+    def _reset_active_console(self) -> None:
+        """Clear the console of the currently active tab."""
+        idx = self._notebook.currentIndex()
+        if idx == 0:
+            self._console.clear()
+        elif idx == 1:
+            self._patient_console.clear()
+
     def _build_siss_tab(self, parent: QWidget) -> None:
         """Build the SISS Integration tab content."""
         layout = QVBoxLayout(parent)
@@ -641,7 +796,7 @@ class FSEApp(QMainWindow):
 
         # Browser info line
         self._browser_info_label = QLabel("")
-        self._browser_info_label.setStyleSheet("color: gray;")
+        self._browser_info_label.setProperty("class", "subtle-label")
         layout.addWidget(self._browser_info_label)
         self._update_browser_info_label()
 
@@ -665,16 +820,6 @@ class FSEApp(QMainWindow):
         btn_row.addWidget(self._btn_stop)
 
         btn_row.addStretch()
-
-        btn_guide = QPushButton("Guida")
-        btn_guide.clicked.connect(self._open_guide)
-        btn_guide.setToolTip("Apri la guida utente nel browser")
-        btn_row.addWidget(btn_guide)
-
-        btn_exit = QPushButton("Esci")
-        btn_exit.clicked.connect(self.close)
-        btn_row.addWidget(btn_exit)
-
         ctrl_layout.addLayout(btn_row)
 
         # Max email row
@@ -716,13 +861,6 @@ class FSEApp(QMainWindow):
         self._console.setFont(QFont("Consolas", font_size))
         self._console.setMinimumHeight(200)
         console_layout.addWidget(self._console)
-        btn_clear_console = QPushButton("Pulisci")
-        btn_clear_console.setFixedWidth(80)
-        btn_clear_console.clicked.connect(self._console.clear)
-        console_btn_layout = QHBoxLayout()
-        console_btn_layout.addStretch()
-        console_btn_layout.addWidget(btn_clear_console)
-        console_layout.addLayout(console_btn_layout)
         layout.addWidget(console_group, 1)  # stretch factor
 
     def _build_siss_doc_type_checkboxes(self, parent_layout: QVBoxLayout) -> tuple[QCheckBox, dict[str, QCheckBox]]:
@@ -861,13 +999,6 @@ class FSEApp(QMainWindow):
         self._patient_console.setFont(QFont("Consolas", font_size))
         self._patient_console.setMinimumHeight(120)
         console_layout.addWidget(self._patient_console)
-        btn_clear_patient = QPushButton("Pulisci")
-        btn_clear_patient.setFixedWidth(80)
-        btn_clear_patient.clicked.connect(self._patient_console.clear)
-        patient_btn_layout = QHBoxLayout()
-        patient_btn_layout.addStretch()
-        patient_btn_layout.addWidget(btn_clear_patient)
-        console_layout.addLayout(patient_btn_layout)
         layout.addWidget(console_group, 1)
 
     def _build_patient_doc_type_checkboxes(self) -> tuple[QCheckBox, dict[str, QCheckBox]]:
@@ -1786,6 +1917,7 @@ class FSEApp(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyleSheet(APP_STYLE)
     window = FSEApp()
     window.show()
     sys.exit(app.exec())
