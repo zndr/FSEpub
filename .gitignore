@@ -7,6 +7,12 @@ __pycache__/
 *.pyc
 .venv/
 
+# Screenshots
+*.png
+
+# Playwright
+playwright_browsers/
+
 # Build artifacts
 dist/
 build/
