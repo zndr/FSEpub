@@ -1,8 +1,8 @@
 {
-    "Version": "2.3.1",
-    "ReleaseNotes": "Fix installazione Chromium su sistemi nuovi (--with-deps + error reporting).",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.1/FSE_Processor_Setup_2.3.1_QT6.exe",
+    "Version": "2.3.2",
+    "ReleaseNotes": "Fix verifica aggiornamenti SSL su sistemi nuovi.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.2/FSE_Processor_Setup_2.3.2_QT6.exe",
     "ReleaseDate": "2026-02-22",
-    "Sha256Hash": "0fe8ed9da7acdc3c61597d868c0138755421b0fb37f514921f770b2dc1d9ce66",
-    "FileSize": 61241906
+    "Sha256Hash": "ccd0c8f1fc73c6420642286f56ed74d565691d973d5ddbb79f77ae18bd5411cb",
+    "FileSize": 61234470
 }

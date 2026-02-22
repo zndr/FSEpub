@@ -7,6 +7,7 @@ import logging
 import os
 import platform
 import re
+import ssl
 import subprocess
 import sys
 import threading
@@ -1835,7 +1836,9 @@ class FSEApp(QMainWindow):
         def worker():
             try:
                 req = urllib.request.Request(VERSION_URL, headers={"User-Agent": "FSE-Processor"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_ctx.load_default_certs(purpose=ssl.Purpose.SERVER_AUTH)
+                with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 remote_version = data.get("Version", "")
                 download_url = data.get("DownloadUrl", "")
