@@ -329,7 +329,7 @@ if defined ISCC (
 :: ---- Step 8: Summary ----
 echo.
 echo ============================================
-echo   Build completato con successo! v!VERSION!
+echo   Build completato con successo - v!VERSION!
 echo ============================================
 echo   Eseguibile: dist\FSE Processor\FSE Processor.exe
 if defined ISCC (
