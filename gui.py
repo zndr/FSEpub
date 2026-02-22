@@ -143,6 +143,16 @@ QPushButton:disabled {
     color: #a0a0a0;
     border-color: #c0c0c0;
 }
+QPushButton#browseBtn {
+    background-color: #e8eef4;
+    color: #333333;
+    border: 1px solid #b0c4de;
+    font-weight: bold;
+    padding: 2px;
+}
+QPushButton#browseBtn:hover {
+    background-color: #d0dcea;
+}
 
 /* ---------- QTabWidget / QTabBar ---------- */
 QTabWidget::pane {
@@ -194,21 +204,6 @@ QComboBox {
 QComboBox:focus {
     border: 1px solid #2b6cb0;
 }
-QComboBox::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: center right;
-    border-left: 1px solid #b0c4de;
-    width: 20px;
-}
-QComboBox::down-arrow {
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 6px solid #555555;
-    width: 0;
-    height: 0;
-}
-
 /* ---------- QCheckBox ---------- */
 QCheckBox::indicator:checked {
     background-color: #2b6cb0;
@@ -773,12 +768,15 @@ class FSEApp(QMainWindow):
         self._build_siss_tab(siss_tab)
         self._build_patient_tab(patient_tab)
 
-        # Bottom bar: Reset console (right-aligned)
+        # Bottom bar: Reset console (left) — Apri cartella download (right)
         bottom_row = QHBoxLayout()
-        bottom_row.addStretch()
         self._btn_reset_console = QPushButton("Reset console")
         self._btn_reset_console.clicked.connect(self._reset_active_console)
         bottom_row.addWidget(self._btn_reset_console)
+        bottom_row.addStretch()
+        btn_open_dl = QPushButton("Apri cartella download")
+        btn_open_dl.clicked.connect(self._open_download_dir)
+        bottom_row.addWidget(btn_open_dl)
         main_layout.addLayout(bottom_row)
 
     def _reset_active_console(self) -> None:
@@ -788,6 +786,15 @@ class FSEApp(QMainWindow):
             self._console.clear()
         elif idx == 1:
             self._patient_console.clear()
+
+    def _open_download_dir(self) -> None:
+        """Open the configured download directory in the file explorer."""
+        dl_dir = self._download_dir_entry.text() or str(paths.default_download_dir)
+        p = Path(dl_dir)
+        if p.is_dir():
+            os.startfile(p)
+        else:
+            QMessageBox.warning(self, "Cartella non trovata", f"La cartella non esiste:\n{dl_dir}")
 
     def _build_siss_tab(self, parent: QWidget) -> None:
         """Build the SISS Integration tab content."""
@@ -810,7 +817,7 @@ class FSEApp(QMainWindow):
         self._btn_check.setToolTip("Conta le email con referti da scaricare, senza avviare il download")
         btn_row.addWidget(self._btn_check)
 
-        self._btn_start = QPushButton("Avvia")
+        self._btn_start = QPushButton("Avvia download")
         self._btn_start.clicked.connect(self._start_processing)
         btn_row.addWidget(self._btn_start)
 
@@ -824,7 +831,7 @@ class FSEApp(QMainWindow):
 
         # Max email row
         max_row = QHBoxLayout()
-        max_row.addWidget(QLabel("Max email (0=tutte):"))
+        max_row.addWidget(QLabel("Num. max email da scaricare (0=tutte):"))
         self._max_email_entry = QLineEdit()
         self._max_email_entry.setFixedWidth(60)
         self._max_email_entry.setText(self._get_field("MAX_EMAILS") or "3")
@@ -1163,6 +1170,7 @@ class FSEApp(QMainWindow):
         br_layout.addWidget(self._download_dir_entry, r, 1)
         browse_btn = QPushButton("...")
         browse_btn.setFixedWidth(30)
+        browse_btn.setObjectName("browseBtn")
         browse_btn.clicked.connect(self._browse_download_dir)
         br_layout.addWidget(browse_btn, r, 2)
         self._fields["DOWNLOAD_DIR"] = spec["DOWNLOAD_DIR"][1]
@@ -1170,7 +1178,12 @@ class FSEApp(QMainWindow):
         r += 1
         self._cdp_cb = QCheckBox("Usa browser CDP")
         self._cdp_cb.setChecked(spec["USE_EXISTING_BROWSER"][1].lower() == "true")
-        self._cdp_cb.setToolTip("Connettiti a un browser gia' aperto tramite Chrome DevTools Protocol, invece di avviarne uno nuovo")
+        self._cdp_cb.setToolTip(
+            "Connettiti a un browser gia' aperto invece di avviarne uno nuovo.\n"
+            "In modalita' CDP il browser lavora in background: le azioni sono visibili\n"
+            "solo nella console dell'app. Disattiva questa opzione per vedere il browser\n"
+            "in azione durante l'automazione."
+        )
         br_layout.addWidget(self._cdp_cb, r, 0, 1, 3)
         self._fields["USE_EXISTING_BROWSER"] = spec["USE_EXISTING_BROWSER"][1]
 
@@ -1228,7 +1241,11 @@ class FSEApp(QMainWindow):
         # Row 1: headless checkbox
         self._headless_cb = QCheckBox("Headless browser")
         self._headless_cb.setChecked(spec["HEADLESS"][1].lower() == "true")
-        self._headless_cb.setToolTip("Esegui il browser in background, senza finestra visibile")
+        self._headless_cb.setToolTip(
+            "Esegui il browser in background, senza finestra visibile.\n"
+            "Utile per esecuzioni non presidiate, ma impedisce il login manuale SSO.\n"
+            "Disattiva questa opzione per vedere il browser pilotato dall'app."
+        )
         params_layout.addWidget(self._headless_cb, 1, 0, 1, 6)
         self._fields["HEADLESS"] = spec["HEADLESS"][1]
 

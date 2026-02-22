@@ -355,6 +355,9 @@
   <tr><td>Browser</td><td>Scelta del browser per l'automazione: <strong>Edge</strong>, <strong>Chrome</strong>, <strong>Firefox</strong>, <strong>Brave</strong> o <strong>Chromium integrato</strong></td></tr>
   <tr><td>Directory download</td><td>Cartella di destinazione per i PDF scaricati (default: <code>Documenti\FSE Downloads</code>)</td></tr>
   <tr><td>Lettore PDF</td><td>Applicazione per aprire i referti: predefinito di sistema oppure un eseguibile personalizzato</td></tr>
+  <tr><td>Usa browser CDP</td><td>Si collega a un browser gi&agrave; aperto invece di aprirne uno nuovo.
+    In questa modalit&agrave; l'automazione avviene in background e lo stato &egrave; visibile solo nella console.
+    Disattivare per vedere il browser in azione (vedi <a href="#avanzate">Funzionalit&agrave; avanzate</a>)</td></tr>
 </table>
 
 <h3>Parametri</h3>
@@ -362,7 +365,8 @@
   <tr><th>Campo</th><th>Descrizione</th><th>Default</th></tr>
   <tr><td>Timeout download</td><td>Secondi massimi di attesa per il completamento di un singolo download</td><td>60</td></tr>
   <tr><td>Timeout pagina</td><td>Secondi massimi di attesa per il caricamento di una pagina</td><td>30</td></tr>
-  <tr><td>Headless</td><td>Esegui il browser in background senza finestra visibile</td><td>Disattivato</td></tr>
+  <tr><td>Headless</td><td>Esegui il browser in background senza finestra visibile.
+    Disattivare per vedere il browser in azione (vedi <a href="#avanzate">Funzionalit&agrave; avanzate</a>)</td><td>Disattivato</td></tr>
   <tr><td>Dimensione font console</td><td>Dimensione in pixel del testo nella console dell'app</td><td>8</td></tr>
 </table>
 
@@ -608,11 +612,52 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
   </div>
 </details>
 
-<h3>Modalit&agrave; Headless</h3>
-<p>La modalit&agrave; <strong>Headless</strong> esegue il browser in background senza mostrare alcuna
-  finestra. Pu&ograve; essere utile per esecuzioni non presidiate, ma rende impossibile il login
-  manuale SSO. Si consiglia di utilizzarla solo dopo aver stabilito una sessione attiva
-  (ad esempio in combinazione con la modalit&agrave; CDP).</p>
+<h3>Visibilit&agrave; del browser: vedere l'automazione in azione</h3>
+
+<p>L'app pu&ograve; lavorare in due modi: mostrando il browser sullo schermo oppure
+  operando in background (solo console). La scelta dipende da due impostazioni
+  nel tab <strong>Impostazioni</strong>:</p>
+
+<table>
+  <tr>
+    <th>Modalit&agrave;</th>
+    <th>Usa browser CDP</th>
+    <th>Headless</th>
+    <th>Cosa succede</th>
+  </tr>
+  <tr>
+    <td><strong>Browser visibile</strong></td>
+    <td>&#9744; spento</td>
+    <td>&#9744; spento</td>
+    <td>L'app apre una finestra del browser: si vedono le pagine che vengono navigate,
+      i clic e i download in tempo reale. Ideale per capire cosa sta facendo l'app
+      e per completare il login SSO.</td>
+  </tr>
+  <tr>
+    <td><strong>Solo console (CDP)</strong></td>
+    <td>&#9745; acceso</td>
+    <td>&#9744; spento</td>
+    <td>L'app si collega a un browser gi&agrave; aperto e lavora in un tab separato.
+      L'automazione avviene in background: lo stato &egrave; visibile solo nella
+      console dell'app.</td>
+  </tr>
+  <tr>
+    <td><strong>Solo console (headless)</strong></td>
+    <td>&#9744; spento</td>
+    <td>&#9745; acceso</td>
+    <td>Il browser viene avviato senza alcuna finestra. Utile per esecuzioni non
+      presidiate, ma <strong>impedisce il login manuale SSO</strong>.
+      Usare solo se la sessione SSO &egrave; ancora valida.</td>
+  </tr>
+</table>
+
+<div class="box box-tip">
+  <strong>Consiglio</strong>
+  Per vedere il browser pilotato dall'app, assicurati che <strong>entrambe</strong> le
+  caselle &ldquo;Usa browser CDP&rdquo; e &ldquo;Headless&rdquo; siano
+  <strong>disattivate</strong>. In questo modo l'app apre una nuova finestra del browser
+  e potrai seguire ogni operazione sullo schermo.
+</div>
 
 <h3>Chromium integrato vs browser di sistema</h3>
 <table>
