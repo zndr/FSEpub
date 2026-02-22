@@ -1575,7 +1575,7 @@ class FSEApp(QMainWindow):
         When *silent* is True (startup check), no feedback is shown if the app
         is already up-to-date or if the network request fails.
         """
-        VERSION_URL = "https://raw.githubusercontent.com/zndr/FSE/main/version.json"
+        VERSION_URL = "https://raw.githubusercontent.com/zndr/FSEpub/main/version.json"
 
         def worker():
             try:

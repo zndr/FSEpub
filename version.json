@@ -1,8 +1,8 @@
 {
     "Version": "2.2.1",
     "ReleaseNotes": "Controllo automatico aggiornamenti all'avvio dell'applicazione.",
-    "DownloadUrl": "https://github.com/zndr/FSE/releases/download/v2.2.1/FSE_Processor_Setup_2.2.1_QT6.exe",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.2.1/FSE_Processor_Setup_2.2.1_QT6.exe",
     "ReleaseDate": "2026-02-22",
-    "Sha256Hash": "9a630884880f4d1240d6e3577673e1d726e4a523c391e3937341020d5ddc4953",
-    "FileSize": 61236841
+    "Sha256Hash": "58c45e35acb5246c238e0c83a707948871bb9eb432ce0f46c3b20c46e2f967b3",
+    "FileSize": 61224774
 }
