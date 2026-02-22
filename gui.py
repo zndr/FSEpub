@@ -696,7 +696,7 @@ def _is_millewin_installed() -> bool:
             ["sc", "query", "pgmille"],
             capture_output=True, text=True, timeout=5,
         )
-        service_exists = "SERVICE_NAME" in result.stdout
+        service_exists = result.returncode == 0
     except Exception:
         pass
     return exe_exists and service_exists
