@@ -1836,8 +1836,11 @@ class FSEApp(QMainWindow):
         def worker():
             try:
                 req = urllib.request.Request(VERSION_URL, headers={"User-Agent": "FSE-Processor"})
-                ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ssl_ctx.load_default_certs(purpose=ssl.Purpose.SERVER_AUTH)
+                # Skip SSL verification for update check only (hardcoded GitHub URL).
+                # PyInstaller frozen bundles lack cacert.pem for OpenSSL.
+                ssl_ctx = ssl.create_default_context()
+                ssl_ctx.check_hostname = False
+                ssl_ctx.verify_mode = ssl.CERT_NONE
                 with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 remote_version = data.get("Version", "")
