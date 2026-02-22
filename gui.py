@@ -822,13 +822,9 @@ class FSEApp(QMainWindow):
         self._build_patient_tab(patient_tab)
         self._build_millewin_tab(mw_tab)
 
-        # Disable Millewin tab if Millewin is not installed
-        self._mw_tab_index = 2
+        # Hide Millewin tab if Millewin is not installed
         if not _is_millewin_installed():
-            self._notebook.setTabEnabled(self._mw_tab_index, False)
-            self._notebook.setTabToolTip(
-                self._mw_tab_index, "Millewin non rilevato nel sistema"
-            )
+            self._notebook.removeTab(2)
 
         # Bottom bar: Reset console (left) — Apri cartella download (right)
         bottom_row = QHBoxLayout()
