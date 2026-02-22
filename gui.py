@@ -714,6 +714,13 @@ class FSEApp(QMainWindow):
         self._console.setFont(QFont("Consolas", font_size))
         self._console.setMinimumHeight(200)
         console_layout.addWidget(self._console)
+        btn_clear_console = QPushButton("Pulisci")
+        btn_clear_console.setFixedWidth(80)
+        btn_clear_console.clicked.connect(self._console.clear)
+        console_btn_layout = QHBoxLayout()
+        console_btn_layout.addStretch()
+        console_btn_layout.addWidget(btn_clear_console)
+        console_layout.addLayout(console_btn_layout)
         layout.addWidget(console_group, 1)  # stretch factor
 
     def _build_siss_doc_type_checkboxes(self, parent_layout: QVBoxLayout) -> tuple[QCheckBox, dict[str, QCheckBox]]:
@@ -791,6 +798,7 @@ class FSEApp(QMainWindow):
         filter_layout.addWidget(QLabel("Ente/Struttura:"), 0, 0)
         self._ente_combo = QComboBox()
         self._ente_combo.setEditable(True)
+        self._ente_combo.addItem("")
         self._ente_combo.setToolTip("Filtra i documenti per ente o struttura sanitaria di provenienza")
         filter_layout.addWidget(self._ente_combo, 0, 1, 1, 3)
 
@@ -843,6 +851,13 @@ class FSEApp(QMainWindow):
         self._patient_console.setFont(QFont("Consolas", font_size))
         self._patient_console.setMinimumHeight(120)
         console_layout.addWidget(self._patient_console)
+        btn_clear_patient = QPushButton("Pulisci")
+        btn_clear_patient.setFixedWidth(80)
+        btn_clear_patient.clicked.connect(self._patient_console.clear)
+        patient_btn_layout = QHBoxLayout()
+        patient_btn_layout.addStretch()
+        patient_btn_layout.addWidget(btn_clear_patient)
+        console_layout.addLayout(patient_btn_layout)
         layout.addWidget(console_group, 1)
 
     def _build_patient_doc_type_checkboxes(self) -> tuple[QCheckBox, dict[str, QCheckBox]]:
@@ -939,8 +954,13 @@ class FSEApp(QMainWindow):
 
     def _update_ente_combobox(self, enti: list[str]) -> None:
         """Update the Ente/Struttura combobox with values from the table."""
+        current = self._ente_combo.currentText()
         self._ente_combo.clear()
+        self._ente_combo.addItem("")
         self._ente_combo.addItems(enti)
+        idx = self._ente_combo.findText(current)
+        if idx >= 0:
+            self._ente_combo.setCurrentIndex(idx)
 
     def _build_settings_tab(self, parent: QWidget) -> None:
         """Build the Settings tab content with grouped QGroupBoxes."""
@@ -1620,8 +1640,14 @@ class FSEApp(QMainWindow):
                 )
 
                 downloaded = 0
+                skipped = 0
+                errors = 0
                 for result in doc_results:
-                    if result.skipped or result.error or not result.download_path:
+                    if result.skipped:
+                        skipped += 1
+                        continue
+                    if result.error or not result.download_path:
+                        errors += 1
                         continue
                     downloaded += 1
                     file_manager.rename_download(
@@ -1632,7 +1658,10 @@ class FSEApp(QMainWindow):
                         fse_link=f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}",
                     )
 
-                logger.info(f"Download completato: {downloaded} documenti scaricati")
+                logger.info("--- Riepilogo ---")
+                logger.info(f"Scaricati: {downloaded}")
+                logger.info(f"Saltati (filtro): {skipped}")
+                logger.info(f"Errori: {errors}")
                 file_manager.save_mappings()
             finally:
                 browser.stop()

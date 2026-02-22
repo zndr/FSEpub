@@ -970,44 +970,45 @@ class FSEBrowser:
 
             # Phase 2: Filter and download
             ente_filter_upper = ente_filter.strip().upper()
+
+            # Pre-filter to identify matching rows and count
+            rows_to_download: list[tuple[int, str, str, str]] = []
             for i, date_text, tipo_text, ente_text in row_info:
-                if stop_event is not None and stop_event.is_set():
-                    self._logger.info("Download interrotto dall'utente")
-                    break
-
-                # Filter: tipologia
                 if not _is_tipologia_valida(tipo_text, allowed_types):
-                    self._logger.info(f"Riga {i + 1}: tipologia '{tipo_text}' non di interesse, saltata")
                     results.append(DocumentResult(
                         disciplina=tipo_text, skipped=True, download_path=None, error=None
                     ))
                     continue
-
-                # Filter: ente
                 if ente_filter_upper and ente_filter_upper not in ente_text.upper():
-                    self._logger.info(f"Riga {i + 1}: ente '{ente_text}' non corrisponde al filtro, saltata")
                     results.append(DocumentResult(
                         disciplina=tipo_text, skipped=True, download_path=None, error=None
                     ))
                     continue
-
-                # Filter: date range
                 if date_from or date_to:
                     parsed = _parse_table_date(date_text)
                     if parsed:
                         if date_from and parsed < date_from:
-                            self._logger.info(f"Riga {i + 1}: data '{date_text}' fuori intervallo, saltata")
                             results.append(DocumentResult(
                                 disciplina=tipo_text, skipped=True, download_path=None, error=None
                             ))
                             continue
                         if date_to and parsed > date_to:
-                            self._logger.info(f"Riga {i + 1}: data '{date_text}' fuori intervallo, saltata")
                             results.append(DocumentResult(
                                 disciplina=tipo_text, skipped=True, download_path=None, error=None
                             ))
                             continue
+                rows_to_download.append((i, date_text, tipo_text, ente_text))
 
+            total_match = len(rows_to_download)
+            total_rows = len(row_info)
+            self._logger.info(f"Trovati {total_match} documenti corrispondenti ai filtri (su {total_rows} totali)")
+
+            for dl_idx, (i, date_text, tipo_text, ente_text) in enumerate(rows_to_download, 1):
+                if stop_event is not None and stop_event.is_set():
+                    self._logger.info("Download interrotto dall'utente")
+                    break
+
+                self._logger.info(f"Download {dl_idx}/{total_match}: {tipo_text}")
                 result = self._download_document(i, tipo_text, patient_name, visualizza_col, data_rows)
                 results.append(result)
 
