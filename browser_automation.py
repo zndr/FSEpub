@@ -533,7 +533,16 @@ class FSEBrowser:
             node_exe = os.path.join(bundle_dir, "playwright", "driver", "node.exe")
             cli_js = os.path.join(bundle_dir, "playwright", "driver", "package", "cli.js")
             if os.path.exists(node_exe) and os.path.exists(cli_js):
-                subprocess.run([node_exe, cli_js, "install", "chromium"], check=True)
+                result = subprocess.run(
+                    [node_exe, cli_js, "install", "--with-deps", "chromium"],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "").strip()
+                    raise RuntimeError(
+                        f"Installazione Chromium fallita (exit {result.returncode}). "
+                        f"Dettagli: {detail}"
+                    )
             else:
                 raise RuntimeError(
                     f"Driver Playwright non trovato nel bundle. "
@@ -541,7 +550,10 @@ class FSEBrowser:
                 )
         else:
             # Dev mode: use Python
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+                check=True,
+            )
 
     def _resolve_exe_from_channel(self, channel: str) -> str | None:
         """Resolve a Playwright channel name to an exe path via App Paths registry."""
