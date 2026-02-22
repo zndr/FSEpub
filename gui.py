@@ -1,12 +1,15 @@
 """GUI PySide6 per FSE Processor."""
 
 import ctypes
+import json
 import logging
 import os
+import platform
 import re
 import sys
 import threading
 import traceback
+import urllib.request
 import webbrowser
 import winreg
 from datetime import date, timedelta
@@ -743,9 +746,28 @@ class FSEApp(QMainWindow):
         act_exit.triggered.connect(self.close)
         file_menu.addAction(act_exit)
 
+        # Help menu
+        help_menu = menu_bar.addMenu("Aiuto")
+
         act_guide = QAction("Guida", self)
         act_guide.triggered.connect(self._open_guide)
-        menu_bar.addAction(act_guide)
+        help_menu.addAction(act_guide)
+
+        help_menu.addSeparator()
+
+        act_updates = QAction("Controlla aggiornamenti", self)
+        act_updates.triggered.connect(self._check_updates)
+        help_menu.addAction(act_updates)
+
+        act_debug = QAction("Debug", self)
+        act_debug.triggered.connect(self._show_debug_info)
+        help_menu.addAction(act_debug)
+
+        help_menu.addSeparator()
+
+        act_about = QAction("About", self)
+        act_about.triggered.connect(self._show_about)
+        help_menu.addAction(act_about)
 
         # Tabbed notebook
         self._notebook = QTabWidget()
@@ -1503,6 +1525,118 @@ class FSEApp(QMainWindow):
                 webbrowser.open(guide.as_uri())
                 return
         QMessageBox.warning(self, "Guida non trovata", f"Il file guida non è stato trovato:\n{candidates[0]}")
+
+    def _check_updates(self) -> None:
+        """Check for updates by fetching version.json from GitHub."""
+        VERSION_URL = "https://raw.githubusercontent.com/zndr/FSEpub/main/version.json"
+
+        def worker():
+            try:
+                req = urllib.request.Request(VERSION_URL, headers={"User-Agent": "FSE-Processor"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                remote_version = data.get("Version", "")
+                download_url = data.get("DownloadUrl", "")
+                release_notes = data.get("ReleaseNotes", "")
+
+                if remote_version and remote_version != __version__:
+                    msg = (
+                        f"Nuova versione disponibile: v{remote_version}\n"
+                        f"Versione attuale: v{__version__}\n\n"
+                    )
+                    if release_notes:
+                        msg += f"{release_notes}\n\n"
+                    if download_url:
+                        msg += "Vuoi aprire la pagina di download?"
+                    self._bridge.call_on_main.emit(lambda: self._prompt_update(msg, download_url))
+                else:
+                    self._bridge.show_info.emit(
+                        "Aggiornamenti",
+                        f"Nessun aggiornamento disponibile.\n\nVersione attuale: v{__version__}",
+                    )
+            except Exception as e:
+                self._bridge.show_error.emit(
+                    "Aggiornamenti",
+                    f"Impossibile verificare gli aggiornamenti:\n{e}",
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _prompt_update(self, msg: str, download_url: str) -> None:
+        """Show update dialog and optionally open download URL."""
+        if download_url:
+            reply = QMessageBox.question(self, "Aggiornamento disponibile", msg)
+            if reply == QMessageBox.StandardButton.Yes:
+                webbrowser.open(download_url)
+        else:
+            QMessageBox.information(self, "Aggiornamento disponibile", msg)
+
+    def _show_debug_info(self) -> None:
+        """Show debug information dialog."""
+        import PySide6
+
+        browser_channel = self._fields.get("BROWSER_CHANNEL", "N/A")
+        browser_label = self._browser_revmap.get(browser_channel, browser_channel)
+        cdp_enabled = self._fields.get("USE_EXISTING_BROWSER", "false")
+        headless = self._fields.get("HEADLESS", "false")
+
+        info = (
+            f"FSE Processor v{__version__}\n"
+            f"{'=' * 40}\n\n"
+            f"Sistema operativo: {platform.platform()}\n"
+            f"Python: {sys.version}\n"
+            f"PySide6: {PySide6.__version__}\n\n"
+            f"Directory app: {paths.app_dir}\n"
+            f"Directory browser: {paths.browser_data_dir}\n"
+            f"Directory download: {self._download_dir_entry.text()}\n"
+            f"File impostazioni: {ENV_FILE}\n"
+            f"Directory log: {paths.log_dir}\n\n"
+            f"Browser selezionato: {browser_label}\n"
+            f"CDP abilitato: {cdp_enabled}\n"
+            f"Headless: {headless}\n"
+            f"Frozen (PyInstaller): {getattr(sys, 'frozen', False)}\n"
+        )
+
+        if getattr(sys, "frozen", False):
+            info += f"MEIPASS: {getattr(sys, '_MEIPASS', 'N/A')}\n"
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Debug Info")
+        dlg.resize(520, 400)
+        layout = QVBoxLayout(dlg)
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setFont(QFont("Consolas", 9))
+        text.setPlainText(info)
+        layout.addWidget(text)
+
+        btn_layout = QHBoxLayout()
+        copy_btn = QPushButton("Copia")
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(info))
+        btn_layout.addWidget(copy_btn)
+        btn_layout.addStretch()
+        close_btn = QPushButton("Chiudi")
+        close_btn.clicked.connect(dlg.accept)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        dlg.exec()
+
+    def _show_about(self) -> None:
+        """Show the About dialog."""
+        QMessageBox.about(
+            self,
+            "About FSE Processor",
+            f"<h3>FSE Processor v{__version__}</h3>"
+            f"<p>Strumento per il download automatico dei referti "
+            f"dal Fascicolo Sanitario Elettronico (FSE) della Regione Lombardia.</p>"
+            f"<p>Interfaccia grafica basata su Qt6 (PySide6).</p>"
+            f"<hr>"
+            f"<p style='color: gray; font-size: small;'>"
+            f"Python {platform.python_version()} | "
+            f"{platform.system()} {platform.release()}</p>",
+        )
 
     def _browse_download_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Seleziona directory", self._download_dir_entry.text() or ".")

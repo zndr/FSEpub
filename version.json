@@ -1,7 +1,7 @@
 {
     "Version": "2.1.0",
     "ReleaseNotes": "Tema blu professionale, miglioramenti UI, fix connessione CDP e nuove funzionalita tab paziente.",
-    "DownloadUrl": "https://github.com/zndr/FSE/releases/download/v2.1.0/FSE_Processor_Setup_2.1.0_QT6.exe",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.1.0/FSE_Processor_Setup_2.1.0_QT6.exe",
     "ReleaseDate": "2026-02-22",
     "Sha256Hash": "e50602753c2f3303bc5ba1d03d168d18d5e6d1d658bfeead6a44f11a437f2d9a",
     "FileSize": 59053999
