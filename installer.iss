@@ -24,6 +24,8 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableDirPage=yes
+CloseApplications=force
+CloseApplicationsFilter=*.exe
 
 [Languages]
 Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
