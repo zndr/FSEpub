@@ -7,6 +7,7 @@ import logging
 import os
 import platform
 import re
+import subprocess
 import sys
 import threading
 import traceback
@@ -686,6 +687,21 @@ class TextHandler(logging.Handler):
         self._bridge.append_text.emit(self._widget, msg)
 
 
+def _is_millewin_installed() -> bool:
+    """Check if Millewin is installed on the system."""
+    exe_exists = Path(r"C:\Program Files (x86)\Millewin\millewin.exe").exists()
+    service_exists = False
+    try:
+        result = subprocess.run(
+            ["sc", "query", "pgmille"],
+            capture_output=True, text=True, timeout=5,
+        )
+        service_exists = "SERVICE_NAME" in result.stdout
+    except Exception:
+        pass
+    return exe_exists and service_exists
+
+
 class FSEApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -704,6 +720,8 @@ class FSEApp(QMainWindow):
         self._mw_stop_event = threading.Event()
         self._mw_worker: threading.Thread | None = None
         self._mw_browser: FSEBrowser | None = None
+        self._mw_auto_timer: QTimer | None = None
+        self._mw_last_cf: str | None = None
         self._fields: dict[str, str | bool] = {}  # key -> current value
 
         # Signal bridge for thread-safe GUI updates
@@ -803,6 +821,14 @@ class FSEApp(QMainWindow):
         self._build_siss_tab(siss_tab)
         self._build_patient_tab(patient_tab)
         self._build_millewin_tab(mw_tab)
+
+        # Disable Millewin tab if Millewin is not installed
+        self._mw_tab_index = 2
+        if not _is_millewin_installed():
+            self._notebook.setTabEnabled(self._mw_tab_index, False)
+            self._notebook.setTabToolTip(
+                self._mw_tab_index, "Millewin non rilevato nel sistema"
+            )
 
         # Bottom bar: Reset console (left) — Apri cartella download (right)
         bottom_row = QHBoxLayout()
@@ -1136,7 +1162,7 @@ class FSEApp(QMainWindow):
         ctrl_layout = QHBoxLayout(ctrl_group)
 
         self._btn_mw_start = QPushButton("Leggi Millewin e vai al FSE")
-        self._btn_mw_start.clicked.connect(self._start_mw_workflow)
+        self._btn_mw_start.clicked.connect(lambda: self._start_mw_workflow())
         ctrl_layout.addWidget(self._btn_mw_start)
 
         self._btn_mw_stop = QPushButton("Interrompi")
@@ -1146,6 +1172,14 @@ class FSEApp(QMainWindow):
 
         ctrl_layout.addStretch()
         layout.addWidget(ctrl_group)
+
+        # Auto-polling checkbox
+        self._mw_auto_cb = QCheckBox("Navigazione automatica al cambio paziente")
+        self._mw_auto_cb.setToolTip(
+            "Monitora Millewin e naviga automaticamente al FSE quando cambi paziente"
+        )
+        self._mw_auto_cb.toggled.connect(self._on_mw_auto_toggled)
+        layout.addWidget(self._mw_auto_cb)
 
         # CF extracted label
         self._mw_cf_label = QLabel("")
@@ -1163,7 +1197,40 @@ class FSEApp(QMainWindow):
         console_layout.addWidget(self._mw_console)
         layout.addWidget(console_group, 1)
 
-    def _start_mw_workflow(self) -> None:
+    def _on_mw_auto_toggled(self, checked: bool) -> None:
+        """Toggle automatic polling of Millewin window."""
+        if checked:
+            self._mw_last_cf = None
+            self._mw_auto_timer = QTimer(self)
+            self._mw_auto_timer.timeout.connect(self._mw_auto_poll)
+            self._mw_auto_timer.start(2000)
+            self._btn_mw_start.setEnabled(False)
+            self._mw_log("Auto-polling attivato (ogni 2s)")
+        else:
+            if self._mw_auto_timer is not None:
+                self._mw_auto_timer.stop()
+                self._mw_auto_timer = None
+            # Re-enable manual button only if no worker is running
+            if not (self._mw_worker and self._mw_worker.is_alive()):
+                self._btn_mw_start.setEnabled(True)
+            self._mw_log("Auto-polling disattivato")
+
+    def _mw_auto_poll(self) -> None:
+        """Periodically check Millewin window for patient changes."""
+        # Skip if a workflow is already running
+        if self._mw_worker and self._mw_worker.is_alive():
+            return
+        cf = self._read_millewin_cf()
+        if cf is None:
+            return
+        if cf == self._mw_last_cf:
+            return
+        self._mw_last_cf = cf
+        self._mw_cf_label.setText(cf)
+        self._mw_log(f"Cambio paziente rilevato: {cf}")
+        self._start_mw_workflow(cf_override=cf)
+
+    def _start_mw_workflow(self, cf_override: str | None = None) -> None:
         """Start the Millewin → FSE workflow."""
         if self._mw_worker and self._mw_worker.is_alive():
             QMessageBox.warning(self, "Attenzione", "Workflow Millewin gia' in corso")
@@ -1173,25 +1240,29 @@ class FSEApp(QMainWindow):
         self._mw_stop_event.clear()
         self._btn_mw_start.setEnabled(False)
         self._btn_mw_stop.setEnabled(True)
-        self._mw_cf_label.setText("")
+        if cf_override is None:
+            self._mw_cf_label.setText("")
         self._mw_log("--- Avvio workflow Millewin → FSE ---")
 
         self._mw_worker = threading.Thread(
-            target=self._mw_workflow_worker, daemon=True,
+            target=self._mw_workflow_worker, args=(cf_override,), daemon=True,
         )
         self._mw_worker.start()
         self._mw_poll_timer = QTimer(self)
         self._mw_poll_timer.timeout.connect(self._poll_mw_worker)
         self._mw_poll_timer.start(500)
 
-    def _mw_workflow_worker(self) -> None:
+    def _mw_workflow_worker(self, cf_override: str | None = None) -> None:
         """Worker thread for the Millewin → FSE workflow."""
         try:
-            # Step 1: Read CF from Millewin
-            cf = self._read_millewin_cf()
-            if cf is None:
-                self._mw_log("Nessun paziente aperto in Millewin (finestra non trovata o CF assente nel titolo)")
-                return
+            # Step 1: Read CF from Millewin (or use override from auto-poll)
+            if cf_override is not None:
+                cf = cf_override
+            else:
+                cf = self._read_millewin_cf()
+                if cf is None:
+                    self._mw_log("Nessun paziente aperto in Millewin (finestra non trovata o CF assente nel titolo)")
+                    return
 
             self._mw_log(f"CF estratto: {cf}")
             self._bridge.call_on_main.emit(lambda c=cf: self._mw_cf_label.setText(c))
@@ -1238,7 +1309,9 @@ class FSEApp(QMainWindow):
         if self._mw_worker and self._mw_worker.is_alive():
             return
         self._mw_poll_timer.stop()
-        self._btn_mw_start.setEnabled(True)
+        # If auto-polling is active, keep manual button disabled
+        if not self._mw_auto_cb.isChecked():
+            self._btn_mw_start.setEnabled(True)
         self._btn_mw_stop.setEnabled(False)
         self._mw_log("--- Workflow terminato ---")
 
@@ -2525,6 +2598,9 @@ class FSEApp(QMainWindow):
         self._btn_patient_stop.setEnabled(False)
 
     def closeEvent(self, event) -> None:
+        if self._mw_auto_timer is not None:
+            self._mw_auto_timer.stop()
+            self._mw_auto_timer = None
         if self._patient_browser is not None:
             try:
                 self._patient_browser.stop()
