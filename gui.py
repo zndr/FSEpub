@@ -1600,21 +1600,51 @@ class FSEApp(QMainWindow):
         if getattr(sys, "frozen", False):
             info += f"MEIPASS: {getattr(sys, '_MEIPASS', 'N/A')}\n"
 
+        # Append console content if available
+        siss_log = self._console.toPlainText().strip()
+        patient_log = self._patient_console.toPlainText().strip()
+        if siss_log:
+            info += f"\n{'=' * 40}\nConsole SISS:\n{'=' * 40}\n{siss_log}\n"
+        if patient_log:
+            info += f"\n{'=' * 40}\nConsole Paziente:\n{'=' * 40}\n{patient_log}\n"
+
         dlg = QDialog(self)
         dlg.setWindowTitle("Debug Info")
-        dlg.resize(520, 400)
+        dlg.resize(520, 480)
         layout = QVBoxLayout(dlg)
 
-        text = QTextEdit()
-        text.setReadOnly(True)
-        text.setFont(QFont("Consolas", 9))
-        text.setPlainText(info)
-        layout.addWidget(text)
+        layout.addWidget(QLabel("Descrizione del problema:"))
+        problem_text = QTextEdit()
+        problem_text.setFont(QFont("Segoe UI", 10))
+        problem_text.setPlaceholderText("Descrivi qui il problema riscontrato...")
+        problem_text.setMaximumHeight(100)
+        layout.addWidget(problem_text)
+
+        layout.addWidget(QLabel("Informazioni di debug:"))
+        debug_text = QTextEdit()
+        debug_text.setReadOnly(True)
+        debug_text.setFont(QFont("Consolas", 9))
+        debug_text.setPlainText(info)
+        layout.addWidget(debug_text)
+
+        def _get_full_report() -> str:
+            desc = problem_text.toPlainText().strip()
+            report = ""
+            if desc:
+                report += f"Descrizione problema:\n{desc}\n\n"
+            report += info
+            return report
 
         btn_layout = QHBoxLayout()
         copy_btn = QPushButton("Copia")
-        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(info))
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(_get_full_report()))
         btn_layout.addWidget(copy_btn)
+
+        send_btn = QPushButton("Invia")
+        send_btn.setToolTip("Invia le informazioni di debug via email a supporto@dottorgiorgio.it")
+        send_btn.clicked.connect(lambda: self._send_debug_email(_get_full_report(), dlg))
+        btn_layout.addWidget(send_btn)
+
         btn_layout.addStretch()
         close_btn = QPushButton("Chiudi")
         close_btn.clicked.connect(dlg.accept)
@@ -1622,6 +1652,84 @@ class FSEApp(QMainWindow):
         layout.addLayout(btn_layout)
 
         dlg.exec()
+
+    @staticmethod
+    def _sanitize_cf(text: str) -> str:
+        """Replace any Italian codice fiscale in text with a placeholder."""
+        return re.sub(
+            r'\b[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b',
+            'XXXYYY11Z22H123T',
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    def _send_debug_email(self, body: str, dlg: QDialog = None) -> None:
+        """Send debug info via SMTP using configured email credentials."""
+        import email.message
+        import smtplib
+        import ssl
+
+        self._sync_fields_from_widgets()
+        user = self._fields.get("EMAIL_USER", "").strip()
+        password = self._fields.get("EMAIL_PASS", "").strip()
+        imap_host = self._fields.get("IMAP_HOST", "").strip()
+
+        if not user or not password or not imap_host:
+            QMessageBox.warning(
+                self, "Errore",
+                "Configura le credenziali email nelle Impostazioni prima di inviare.",
+            )
+            return
+
+        sanitized_body = self._sanitize_cf(body)
+
+        subject = f"FSE Processor v{__version__} - Debug Info"
+        dest = "supporto@dottorgiorgio.it"
+
+        def worker():
+            try:
+                msg = email.message.EmailMessage()
+                msg["Subject"] = subject
+                msg["From"] = user
+                msg["To"] = dest
+                msg.set_content(sanitized_body)
+
+                ctx = ssl.create_default_context()
+                # Try SMTP STARTTLS on port 587, fallback to SSL on port 465
+                sent = False
+                for port, use_ssl in [(587, False), (465, True)]:
+                    try:
+                        if use_ssl:
+                            server = smtplib.SMTP_SSL(imap_host, port, context=ctx, timeout=15)
+                        else:
+                            server = smtplib.SMTP(imap_host, port, timeout=15)
+                            server.starttls(context=ctx)
+                        server.login(user, password)
+                        server.send_message(msg)
+                        server.quit()
+                        sent = True
+                        break
+                    except Exception:
+                        continue
+
+                if sent:
+                    self._bridge.show_info.emit(
+                        "Supporto",
+                        "Messaggio inviato.\n\n"
+                        "Tutti i codici fiscali sono stati rimossi per tutelare la privacy dei pazienti.",
+                    )
+                    if dlg:
+                        self._bridge.call_on_main.emit(dlg.accept)
+                else:
+                    self._bridge.show_error.emit(
+                        "Errore",
+                        "Impossibile inviare il messaggio.\n"
+                        "Verifica le credenziali email nelle Impostazioni.",
+                    )
+            except Exception as e:
+                self._bridge.show_error.emit("Errore", f"Invio fallito:\n{e}")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _show_about(self) -> None:
         """Show the About dialog."""
