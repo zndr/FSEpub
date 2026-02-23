@@ -234,6 +234,11 @@ QCheckBox::indicator:unchecked {
 """
 
 
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """Convert a version string like '2.3.5' to a comparable tuple (2, 3, 5)."""
+    return tuple(int(x) for x in v.split("."))
+
+
 def _norm(path: str) -> str:
     """Normalize an exe path for deduplication."""
     return os.path.normcase(os.path.normpath(path))
@@ -1909,7 +1914,7 @@ class FSEApp(QMainWindow):
                 download_url = data.get("DownloadUrl", "")
                 release_notes = data.get("ReleaseNotes", "")
 
-                if remote_version and remote_version != __version__:
+                if remote_version and _version_tuple(remote_version) > _version_tuple(__version__):
                     msg = (
                         f"Nuova versione disponibile: v{remote_version}\n"
                         f"Versione attuale: v{__version__}\n\n"
