@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -643,6 +644,727 @@ def _save_env_values(values: dict[str, str], path: str = ENV_FILE) -> None:
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+# ---- Setup Wizard ----
+
+class SetupWizard(QDialog):
+    """Guided setup wizard shown on first run or from Help menu."""
+
+    # Signals for thread-safe GUI updates from worker threads
+    _sig_info = Signal(str, str)
+    _sig_error = Signal(str, str)
+    _sig_call = Signal(object)
+
+    _STEP_TITLES = [
+        "Benvenuto",
+        "Account Email",
+        "Server di Posta (IMAP)",
+        "Cartelle",
+        "Browser e PDF",
+        "Parametri",
+        "Riepilogo",
+    ]
+
+    def __init__(
+        self,
+        parent: "FSEApp",
+        browsers: list[tuple[str, str]],
+        pdf_readers: list[tuple[str, str]],
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Configurazione guidata")
+        self.setMinimumSize(560, 420)
+        self._browsers = browsers
+        self._pdf_readers = pdf_readers
+        self._current = 0
+
+        # Connect signals for thread-safe GUI updates
+        self._sig_info.connect(lambda t, m: QMessageBox.information(self, t, m))
+        self._sig_error.connect(lambda t, m: QMessageBox.critical(self, t, m))
+        self._sig_call.connect(lambda fn: fn())
+
+        # Pre-load existing values (for re-launch on existing config)
+        self._env = _load_env_values()
+
+        self._build_ui()
+
+    # ---- helpers ----
+
+    def _env_val(self, key: str, default: str = "") -> str:
+        val = self._env.get(key, default)
+        if key == "EMAIL_PASS" and val:
+            val = decrypt_password(val)
+        return val
+
+    # ---- UI construction ----
+
+    def _build_ui(self) -> None:
+        outer = QVBoxLayout(self)
+
+        # Title label
+        self._title_label = QLabel()
+        self._title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #1a4a8a;")
+        outer.addWidget(self._title_label)
+
+        # Stacked pages
+        self._stack = QStackedWidget()
+        outer.addWidget(self._stack, 1)
+
+        self._build_step_welcome()
+        self._build_step_email()
+        self._build_step_imap()
+        self._build_step_folders()
+        self._build_step_browser()
+        self._build_step_params()
+        self._build_step_summary()
+
+        # Navigation bar
+        nav = QHBoxLayout()
+        self._btn_back = QPushButton("Indietro")
+        self._btn_back.clicked.connect(self._go_back)
+        nav.addWidget(self._btn_back)
+
+        nav.addStretch()
+
+        self._btn_next = QPushButton("Avanti")
+        self._btn_next.clicked.connect(self._go_next)
+        nav.addWidget(self._btn_next)
+
+        self._btn_cancel = QPushButton("Annulla")
+        self._btn_cancel.setStyleSheet(
+            "background-color: #e0e0e0; color: #333; border-color: #c0c0c0;"
+        )
+        self._btn_cancel.clicked.connect(self._on_cancel)
+        nav.addWidget(self._btn_cancel)
+
+        outer.addLayout(nav)
+        self._update_nav()
+
+    # ---- Step builders ----
+
+    def _build_step_welcome(self) -> None:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.addStretch()
+        welcome = QLabel(
+            "<h2>Benvenuto in FSE Processor</h2>"
+            "<p>Questa procedura guidata ti aiutera' a configurare "
+            "l'applicazione in pochi semplici passaggi:</p>"
+            "<ol>"
+            "<li>Account email</li>"
+            "<li>Server IMAP</li>"
+            "<li>Cartelle di lavoro</li>"
+            "<li>Browser e lettore PDF</li>"
+            "<li>Parametri avanzati</li>"
+            "</ol>"
+            "<p>Puoi modificare queste impostazioni in qualsiasi momento "
+            "dal tab <b>Impostazioni</b>.</p>"
+        )
+        welcome.setWordWrap(True)
+        lay.addWidget(welcome)
+        lay.addStretch()
+        self._stack.addWidget(page)
+
+    def _build_step_email(self) -> None:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        group = QGroupBox("Credenziali email")
+        grid = QGridLayout(group)
+        grid.setColumnStretch(1, 1)
+
+        grid.addWidget(QLabel("Email utente:"), 0, 0)
+        self._wiz_email = QLineEdit(self._env_val("EMAIL_USER"))
+        self._wiz_email.setPlaceholderText("nome@esempio.it")
+        grid.addWidget(self._wiz_email, 0, 1)
+
+        grid.addWidget(QLabel("Password:"), 1, 0)
+        self._wiz_pass = QLineEdit(self._env_val("EMAIL_PASS"))
+        self._wiz_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        grid.addWidget(self._wiz_pass, 1, 1)
+
+        note = QLabel("La password verra' crittografata al salvataggio.")
+        note.setStyleSheet("color: #6b7b8d; font-size: 11px;")
+        note.setWordWrap(True)
+        grid.addWidget(note, 2, 0, 1, 2)
+
+        lay.addWidget(group)
+        lay.addStretch()
+        self._stack.addWidget(page)
+
+    def _build_step_imap(self) -> None:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        group = QGroupBox("Server di Posta (IMAP)")
+        grid = QGridLayout(group)
+        grid.setColumnStretch(1, 1)
+
+        grid.addWidget(QLabel("Host:"), 0, 0)
+        self._wiz_imap_host = QLineEdit(
+            self._env_val("IMAP_HOST", "mail.fastweb360.it")
+        )
+        grid.addWidget(self._wiz_imap_host, 0, 1)
+
+        grid.addWidget(QLabel("Porta:"), 1, 0)
+        self._wiz_imap_port = QLineEdit(self._env_val("IMAP_PORT", "993"))
+        self._wiz_imap_port.setFixedWidth(80)
+        grid.addWidget(self._wiz_imap_port, 1, 1)
+
+        grid.addWidget(QLabel("Cartelle IMAP:"), 2, 0)
+        folder_row = QHBoxLayout()
+        self._wiz_imap_folder = QLineEdit(
+            self._env_val("IMAP_FOLDER", "INBOX")
+        )
+        folder_row.addWidget(self._wiz_imap_folder)
+        self._wiz_btn_browse = QPushButton("Sfoglia...")
+        self._wiz_btn_browse.clicked.connect(self._wiz_browse_imap_folders)
+        folder_row.addWidget(self._wiz_btn_browse)
+        grid.addLayout(folder_row, 2, 1)
+
+        # Test connection button
+        btn_row = QHBoxLayout()
+        self._wiz_btn_test = QPushButton("Test connessione")
+        self._wiz_btn_test.clicked.connect(self._wiz_test_imap)
+        btn_row.addWidget(self._wiz_btn_test)
+        btn_row.addStretch()
+        grid.addLayout(btn_row, 3, 0, 1, 2)
+
+        lay.addWidget(group)
+
+        note = QLabel(
+            "<b>Nota per chi usa POP3:</b> questa app si collega alla casella di posta "
+            "tramite il protocollo IMAP. Se il tuo client di posta (es. Outlook, Thunderbird) "
+            "e' configurato in modalita' POP3, assicurati che l'opzione "
+            "\"<i>Lascia una copia dei messaggi sul server</i>\" sia attiva, altrimenti "
+            "le email scaricate dal client verranno cancellate dal server e l'app "
+            "non potra' trovarle."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            "background-color: #fff8e1; border: 1px solid #ffe082; "
+            "border-radius: 4px; padding: 8px; color: #5d4037; font-size: 11px;"
+        )
+        lay.addWidget(note)
+
+        lay.addStretch()
+        self._stack.addWidget(page)
+
+    def _build_step_folders(self) -> None:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        group = QGroupBox("Cartelle di lavoro")
+        grid = QGridLayout(group)
+        grid.setColumnStretch(1, 1)
+
+        # Download dir
+        grid.addWidget(QLabel("Salva referti in:"), 0, 0)
+        dl_row = QHBoxLayout()
+        self._wiz_download_dir = QLineEdit(
+            self._env_val("DOWNLOAD_DIR", str(paths.default_download_dir))
+        )
+        dl_row.addWidget(self._wiz_download_dir, 1)
+        btn_dl = QPushButton("...")
+        btn_dl.setFixedWidth(30)
+        btn_dl.setObjectName("browseBtn")
+        btn_dl.clicked.connect(
+            lambda: self._wiz_browse_dir(self._wiz_download_dir, "Seleziona directory download")
+        )
+        dl_row.addWidget(btn_dl)
+        grid.addLayout(dl_row, 0, 1)
+
+        # Move dir
+        grid.addWidget(QLabel("Sposta referti in:"), 1, 0)
+        mv_row = QHBoxLayout()
+        self._wiz_move_dir = QLineEdit(self._env_val("MOVE_DIR"))
+        self._wiz_move_dir.setPlaceholderText("(opzionale)")
+        mv_row.addWidget(self._wiz_move_dir, 1)
+        btn_mv = QPushButton("...")
+        btn_mv.setFixedWidth(30)
+        btn_mv.setObjectName("browseBtn")
+        btn_mv.clicked.connect(
+            lambda: self._wiz_browse_dir(self._wiz_move_dir, "Seleziona directory destinazione")
+        )
+        mv_row.addWidget(btn_mv)
+        grid.addLayout(mv_row, 1, 1)
+
+        # Process text
+        self._wiz_process_text = QCheckBox("Processa il testo del referto")
+        self._wiz_process_text.setChecked(
+            self._env_val("PROCESS_TEXT", "false").lower() == "true"
+        )
+        grid.addWidget(self._wiz_process_text, 2, 0, 1, 2)
+
+        # Text dir
+        grid.addWidget(QLabel("Salva i testi in:"), 3, 0)
+        txt_row = QHBoxLayout()
+        self._wiz_text_dir = QLineEdit(self._env_val("TEXT_DIR"))
+        self._wiz_text_dir.setPlaceholderText("(opzionale)")
+        txt_row.addWidget(self._wiz_text_dir, 1)
+        btn_txt = QPushButton("...")
+        btn_txt.setFixedWidth(30)
+        btn_txt.setObjectName("browseBtn")
+        btn_txt.clicked.connect(
+            lambda: self._wiz_browse_dir(self._wiz_text_dir, "Seleziona directory testi")
+        )
+        txt_row.addWidget(btn_txt)
+        grid.addLayout(txt_row, 3, 1)
+
+        # Enable/disable text dir based on checkbox
+        self._wiz_text_dir.setEnabled(self._wiz_process_text.isChecked())
+        self._wiz_process_text.toggled.connect(self._wiz_text_dir.setEnabled)
+
+        lay.addWidget(group)
+        lay.addStretch()
+        self._stack.addWidget(page)
+
+    def _build_step_browser(self) -> None:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        group = QGroupBox("Browser e PDF")
+        grid = QGridLayout(group)
+        grid.setColumnStretch(1, 1)
+
+        # Browser combo
+        grid.addWidget(QLabel("Browser:"), 0, 0)
+        self._wiz_browser_combo = QComboBox()
+        self._wiz_browser_combo.setToolTip(
+            "Il browser usato dall'app per accedere al portale FSE e scaricare i referti.\n"
+            "Se hai gia' effettuato il login SSO con un browser specifico, selezionalo qui\n"
+            "per riutilizzare la sessione esistente."
+        )
+        browser_map: dict[str, str] = {}
+        for channel_or_path, display_name in self._browsers:
+            browser_map[display_name] = channel_or_path
+        browser_map[BROWSER_CHROMIUM_LABEL] = BROWSER_CHROMIUM
+        self._wiz_browser_map = browser_map
+
+        self._wiz_browser_combo.addItems(list(browser_map.keys()))
+        # Pre-select saved value
+        saved_browser = self._env_val("BROWSER_CHANNEL", "msedge")
+        for label, val in browser_map.items():
+            if val == saved_browser:
+                self._wiz_browser_combo.setCurrentText(label)
+                break
+        grid.addWidget(self._wiz_browser_combo, 0, 1)
+
+        # PDF reader combo
+        grid.addWidget(QLabel("Lettore PDF:"), 1, 0)
+        self._wiz_pdf_combo = QComboBox()
+        self._wiz_pdf_combo.setToolTip(
+            "Il programma usato per aprire i referti PDF scaricati.\n"
+            "\"Predefinito di sistema\" usa il lettore PDF configurato in Windows."
+        )
+        pdf_map: dict[str, str] = {}
+        pdf_map[PDF_READER_DEFAULT_LABEL] = PDF_READER_DEFAULT
+        for exe_path, display_name in self._pdf_readers:
+            pdf_map[display_name] = exe_path
+        self._wiz_pdf_map = pdf_map
+
+        self._wiz_pdf_combo.addItems(list(pdf_map.keys()))
+        saved_pdf = self._env_val("PDF_READER", "default")
+        for label, val in pdf_map.items():
+            if val == saved_pdf or _norm(val) == _norm(saved_pdf):
+                self._wiz_pdf_combo.setCurrentText(label)
+                break
+        grid.addWidget(self._wiz_pdf_combo, 1, 1)
+
+        # Checkboxes
+        r = 2
+        self._wiz_cdp_cb = QCheckBox("Usa browser CDP")
+        self._wiz_cdp_cb.setChecked(
+            self._env_val("USE_EXISTING_BROWSER", "true").lower() == "true"
+        )
+        self._wiz_cdp_cb.setToolTip(
+            "Modalita' CDP (Chrome DevTools Protocol): l'app si collega a un browser\n"
+            "gia' in esecuzione invece di aprirne uno nuovo. Consigliato: permette\n"
+            "di riusare la sessione SSO gia' attiva e lavora in background."
+        )
+        grid.addWidget(self._wiz_cdp_cb, r, 0, 1, 2)
+
+        r += 1
+        self._wiz_cdp_registry_cb = QCheckBox("Abilita CDP nel registro")
+        # Read actual registry state from the parent app
+        cdp_reg_checked = True
+        parent_app = self.parent()
+        if hasattr(parent_app, "_default_browser_info") and parent_app._default_browser_info:
+            progid = parent_app._default_browser_info["progid"]
+            port = int(self._env.get("CDP_PORT", "9222") or "9222")
+            cdp_reg_checked = get_cdp_registry_status(progid, port)
+            is_firefox = parent_app._default_browser_info.get("channel") == "firefox"
+            self._wiz_cdp_registry_cb.setEnabled(not is_firefox)
+        else:
+            self._wiz_cdp_registry_cb.setEnabled(False)
+            cdp_reg_checked = False
+        self._wiz_cdp_registry_cb.setChecked(cdp_reg_checked)
+        self._wiz_cdp_registry_cb.setToolTip(
+            "Modifica il registro di Windows affinche' il browser predefinito\n"
+            "si avvii automaticamente con il supporto CDP attivo.\n"
+            "Necessario per la modalita' \"Usa browser CDP\".\n"
+            "Senza questa opzione dovrai avviare il browser manualmente\n"
+            "con il flag --remote-debugging-port."
+        )
+        grid.addWidget(self._wiz_cdp_registry_cb, r, 0, 1, 2)
+
+        r += 1
+        self._wiz_open_after_cb = QCheckBox("Apri referto al termine")
+        self._wiz_open_after_cb.setChecked(
+            self._env_val("OPEN_AFTER_DOWNLOAD", "true").lower() == "true"
+        )
+        self._wiz_open_after_cb.setToolTip(
+            "Apre automaticamente ogni referto PDF nel lettore\n"
+            "subito dopo il download. Utile per verificare al volo\n"
+            "i documenti scaricati."
+        )
+        grid.addWidget(self._wiz_open_after_cb, r, 0, 1, 2)
+
+        r += 1
+        self._wiz_headless_cb = QCheckBox("Headless browser")
+        self._wiz_headless_cb.setChecked(
+            self._env_val("HEADLESS", "false").lower() == "true"
+        )
+        self._wiz_headless_cb.setToolTip(
+            "Esegue il browser in modo completamente invisibile (senza finestra).\n"
+            "Utile per esecuzioni automatiche non presidiate.\n"
+            "Attenzione: in modalita' headless non potrai effettuare il login SSO\n"
+            "manuale, perche' la finestra del browser non sara' visibile."
+        )
+        grid.addWidget(self._wiz_headless_cb, r, 0, 1, 2)
+
+        lay.addWidget(group)
+        lay.addStretch()
+        self._stack.addWidget(page)
+
+    def _build_step_params(self) -> None:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        group = QGroupBox("Parametri")
+        grid = QGridLayout(group)
+        grid.setColumnStretch(1, 1)
+
+        r = 0
+        grid.addWidget(QLabel("Download timeout (sec):"), r, 0)
+        self._wiz_dl_timeout = QLineEdit(self._env_val("DOWNLOAD_TIMEOUT", "120"))
+        self._wiz_dl_timeout.setFixedWidth(80)
+        self._wiz_dl_timeout.setToolTip(
+            "Tempo massimo di attesa, in secondi, per il download di un singolo referto.\n"
+            "Se il download non si completa entro questo tempo, viene considerato fallito\n"
+            "e l'app passa al referto successivo. Aumenta il valore se hai una connessione lenta."
+        )
+        grid.addWidget(self._wiz_dl_timeout, r, 1)
+
+        r += 1
+        grid.addWidget(QLabel("Page timeout (sec):"), r, 0)
+        self._wiz_pg_timeout = QLineEdit(self._env_val("PAGE_TIMEOUT", "60"))
+        self._wiz_pg_timeout.setFixedWidth(80)
+        self._wiz_pg_timeout.setToolTip(
+            "Tempo massimo di attesa, in secondi, per il caricamento di ogni pagina\n"
+            "del portale FSE. Se una pagina non risponde entro questo tempo, l'operazione\n"
+            "viene interrotta. Aumenta il valore se il portale e' particolarmente lento."
+        )
+        grid.addWidget(self._wiz_pg_timeout, r, 1)
+
+        r += 1
+        grid.addWidget(QLabel("Dimensione carattere console:"), r, 0)
+        self._wiz_font_size = QLineEdit(self._env_val("CONSOLE_FONT_SIZE", "8"))
+        self._wiz_font_size.setFixedWidth(80)
+        self._wiz_font_size.setToolTip(
+            "Dimensione del testo nella console di log dell'applicazione (in punti).\n"
+            "Valori consigliati: 8-12. Aumenta se hai difficolta' a leggere i messaggi."
+        )
+        grid.addWidget(self._wiz_font_size, r, 1)
+
+        lay.addWidget(group)
+
+        note = QLabel(
+            "<i>Nella maggior parte dei casi i valori predefiniti sono adeguati. "
+            "Modifica solo se riscontri problemi di timeout o leggibilita'.</i>"
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #6b7b8d; font-size: 11px; margin-top: 8px;")
+        lay.addWidget(note)
+        lay.addStretch()
+        self._stack.addWidget(page)
+
+    def _build_step_summary(self) -> None:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.addWidget(QLabel("Riepilogo delle impostazioni configurate:"))
+
+        self._summary_text = QTextEdit()
+        self._summary_text.setReadOnly(True)
+        lay.addWidget(self._summary_text)
+
+        note = QLabel(
+            "Premi <b>Fine</b> per salvare le impostazioni e chiudere il wizard."
+        )
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        self._stack.addWidget(page)
+
+    # ---- Navigation ----
+
+    def _update_nav(self) -> None:
+        self._title_label.setText(
+            f"Passo {self._current + 1} di {len(self._STEP_TITLES)} — "
+            f"{self._STEP_TITLES[self._current]}"
+        )
+        self._btn_back.setVisible(self._current > 0)
+        last = self._current == len(self._STEP_TITLES) - 1
+        self._btn_next.setText("Fine" if last else "Avanti")
+        self._stack.setCurrentIndex(self._current)
+
+        # Refresh summary when entering the last step
+        if last:
+            self._refresh_summary()
+
+    def _go_back(self) -> None:
+        if self._current > 0:
+            self._current -= 1
+            self._update_nav()
+
+    def _go_next(self) -> None:
+        if self._current == len(self._STEP_TITLES) - 1:
+            self._finish()
+        else:
+            self._current += 1
+            self._update_nav()
+
+    def _on_cancel(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Annulla configurazione",
+            "Vuoi annullare la configurazione?\nLe impostazioni non verranno salvate.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.reject()
+
+    # ---- Collect values ----
+
+    def _collect_values(self) -> dict[str, str]:
+        """Collect all wizard field values into a dict ready for saving."""
+        vals: dict[str, str] = {}
+        vals["EMAIL_USER"] = self._wiz_email.text().strip()
+
+        raw_pass = self._wiz_pass.text()
+        if raw_pass and not is_encrypted(raw_pass):
+            vals["EMAIL_PASS"] = encrypt_password(raw_pass)
+        else:
+            vals["EMAIL_PASS"] = raw_pass
+
+        vals["IMAP_HOST"] = self._wiz_imap_host.text().strip() or "mail.fastweb360.it"
+        vals["IMAP_PORT"] = self._wiz_imap_port.text().strip() or "993"
+        vals["IMAP_FOLDER"] = self._wiz_imap_folder.text().strip() or "INBOX"
+        vals["DOWNLOAD_DIR"] = self._wiz_download_dir.text().strip() or str(paths.default_download_dir)
+        vals["MOVE_DIR"] = self._wiz_move_dir.text().strip()
+        vals["PROCESS_TEXT"] = "true" if self._wiz_process_text.isChecked() else "false"
+        vals["TEXT_DIR"] = self._wiz_text_dir.text().strip()
+
+        selected_browser_label = self._wiz_browser_combo.currentText()
+        vals["BROWSER_CHANNEL"] = self._wiz_browser_map.get(selected_browser_label, "msedge")
+
+        selected_pdf_label = self._wiz_pdf_combo.currentText()
+        vals["PDF_READER"] = self._wiz_pdf_map.get(selected_pdf_label, PDF_READER_DEFAULT)
+
+        vals["USE_EXISTING_BROWSER"] = "true" if self._wiz_cdp_cb.isChecked() else "false"
+        vals["OPEN_AFTER_DOWNLOAD"] = "true" if self._wiz_open_after_cb.isChecked() else "false"
+        vals["HEADLESS"] = "true" if self._wiz_headless_cb.isChecked() else "false"
+
+        vals["DOWNLOAD_TIMEOUT"] = self._wiz_dl_timeout.text().strip() or "120"
+        vals["PAGE_TIMEOUT"] = self._wiz_pg_timeout.text().strip() or "60"
+        vals["CONSOLE_FONT_SIZE"] = self._wiz_font_size.text().strip() or "8"
+
+        # Preserve existing values for settings not in the wizard
+        for key, _, default, _ in SETTINGS_SPEC:
+            if key not in vals:
+                vals[key] = self._env.get(key, default)
+
+        return vals
+
+    # ---- Summary ----
+
+    def _refresh_summary(self) -> None:
+        vals = self._collect_values()
+        lines = []
+        display_map = {
+            "EMAIL_USER": "Email utente",
+            "EMAIL_PASS": "Password",
+            "IMAP_HOST": "IMAP Host",
+            "IMAP_PORT": "IMAP Porta",
+            "IMAP_FOLDER": "Cartelle IMAP",
+            "DOWNLOAD_DIR": "Directory download",
+            "MOVE_DIR": "Sposta referti in",
+            "PROCESS_TEXT": "Processa testo",
+            "TEXT_DIR": "Directory testi",
+            "BROWSER_CHANNEL": "Browser",
+            "PDF_READER": "Lettore PDF",
+            "USE_EXISTING_BROWSER": "Usa browser CDP",
+            "OPEN_AFTER_DOWNLOAD": "Apri al termine",
+            "HEADLESS": "Headless browser",
+            "DOWNLOAD_TIMEOUT": "Download timeout (sec)",
+            "PAGE_TIMEOUT": "Page timeout (sec)",
+            "CONSOLE_FONT_SIZE": "Dim. carattere console",
+        }
+        bool_keys = {"PROCESS_TEXT", "USE_EXISTING_BROWSER", "OPEN_AFTER_DOWNLOAD", "HEADLESS"}
+        for key, label in display_map.items():
+            val = vals.get(key, "")
+            if key == "EMAIL_PASS":
+                val = "****" if val else "(vuota)"
+            elif key == "BROWSER_CHANNEL":
+                val = self._wiz_browser_combo.currentText()
+            elif key == "PDF_READER":
+                val = self._wiz_pdf_combo.currentText()
+            elif key in bool_keys:
+                val = "Si'" if val.lower() == "true" else "No"
+            elif not val:
+                val = "(vuoto)"
+            lines.append(f"<b>{label}:</b> {val}")
+        self._summary_text.setHtml("<br>".join(lines))
+
+    # ---- Finish / Save ----
+
+    def _finish(self) -> None:
+        vals = self._collect_values()
+        try:
+            _save_env_values(vals)
+            # Apply CDP registry preference
+            self._apply_cdp_registry()
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Errore", f"Impossibile salvare le impostazioni:\n{e}"
+            )
+
+    def _apply_cdp_registry(self) -> None:
+        """Apply the CDP registry checkbox state to the Windows registry."""
+        parent_app = self.parent()
+        if not hasattr(parent_app, "_default_browser_info") or not parent_app._default_browser_info:
+            return
+        progid = parent_app._default_browser_info["progid"]
+        port = int(self._env.get("CDP_PORT", "9222") or "9222")
+        try:
+            if self._wiz_cdp_registry_cb.isChecked():
+                enable_cdp_in_registry(progid, port)
+            else:
+                disable_cdp_in_registry(progid)
+        except Exception:
+            pass  # Non-critical, will be handled by main app
+
+    # ---- IMAP test (wizard-local) ----
+
+    def _wiz_test_imap(self) -> None:
+        self._wiz_btn_test.setEnabled(False)
+        self._wiz_btn_test.setText("Test in corso...")
+        threading.Thread(target=self._wiz_test_imap_worker, daemon=True).start()
+
+    def _wiz_test_imap_worker(self) -> None:
+        try:
+            # Build a temporary env to test with current wizard values
+            vals = self._collect_values()
+            _save_env_values(vals)
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            client = EmailClient(config, logger)
+            client.connect()
+            client.disconnect()
+            self._sig_info.emit(
+                "Test connessione",
+                f"Connessione riuscita!\n\n"
+                f"Server: {config.imap_host}:{config.imap_port}\n"
+                f"Utente: {config.email_user}",
+            )
+        except Exception as e:
+            err_msg = str(e) if str(e) and str(e) != "None" else (
+                f"{type(e).__name__}: {e.args}" if e.args else type(e).__name__
+            )
+            self._sig_error.emit("Test connessione", f"Connessione fallita:\n\n{err_msg}")
+        finally:
+            self._sig_call.emit(
+                lambda: (
+                    self._wiz_btn_test.setEnabled(True),
+                    self._wiz_btn_test.setText("Test connessione"),
+                )
+            )
+
+    # ---- IMAP folder browse (wizard-local) ----
+
+    def _wiz_browse_imap_folders(self) -> None:
+        self._wiz_btn_browse.setEnabled(False)
+        self._wiz_btn_browse.setText("Caricamento...")
+        threading.Thread(target=self._wiz_browse_imap_worker, daemon=True).start()
+
+    def _wiz_browse_imap_worker(self) -> None:
+        try:
+            vals = self._collect_values()
+            _save_env_values(vals)
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            client = EmailClient(config, logger)
+            client.connect()
+            folders = FSEApp._list_imap_folders(client)
+            client.disconnect()
+            current = self._wiz_imap_folder.text()
+            self._sig_call.emit(
+                lambda f=folders, c=current: self._wiz_show_folder_picker(f, c)
+            )
+        except Exception as e:
+            err_msg = str(e) if str(e) and str(e) != "None" else (
+                f"{type(e).__name__}: {e.args}" if e.args else type(e).__name__
+            )
+            self._sig_error.emit(
+                "Cartelle IMAP",
+                f"Impossibile recuperare le cartelle:\n\n{err_msg}",
+            )
+        finally:
+            self._sig_call.emit(
+                lambda: (
+                    self._wiz_btn_browse.setEnabled(True),
+                    self._wiz_btn_browse.setText("Sfoglia..."),
+                )
+            )
+
+    def _wiz_show_folder_picker(self, folders: list[str], current_text: str) -> None:
+        current_set = {f.strip() for f in current_text.split(",") if f.strip()}
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Seleziona cartelle IMAP")
+        dlg.setMinimumWidth(400)
+        dlg.setMinimumHeight(350)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("Seleziona le cartelle da monitorare:"))
+
+        lst = QListWidget()
+        for folder_name in folders:
+            item = QListWidgetItem(folder_name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if folder_name in current_set else Qt.CheckState.Unchecked
+            )
+            lst.addItem(item)
+        layout.addWidget(lst)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            selected: list[str] = []
+            for i in range(lst.count()):
+                item = lst.item(i)
+                if item.checkState() == Qt.CheckState.Checked:
+                    selected.append(item.text())
+            if selected:
+                self._wiz_imap_folder.setText(", ".join(selected))
+
+    # ---- Directory browse helper ----
+
+    def _wiz_browse_dir(self, line_edit: QLineEdit, title: str) -> None:
+        path = QFileDialog.getExistingDirectory(self, title, line_edit.text() or ".")
+        if path:
+            line_edit.setText(os.path.normpath(path))
+
+
 # ---- Signal bridge for thread-safe GUI updates ----
 
 class _SignalBridge(QObject):
@@ -741,6 +1463,10 @@ class FSEApp(QMainWindow):
         self._build_ui()
         self._load_settings()
 
+        # First-run detection: show wizard if no settings file or no email configured
+        if not Path(ENV_FILE).exists() or not self._fields.get("EMAIL_USER"):
+            QTimer.singleShot(100, self._show_setup_wizard)
+
         # Auto-check for updates after the window is shown
         QTimer.singleShot(2000, self._check_updates_startup)
 
@@ -756,6 +1482,12 @@ class FSEApp(QMainWindow):
     def _set_field(self, key: str, value) -> None:
         """Set a field value."""
         self._fields[key] = value
+
+    def _show_setup_wizard(self) -> None:
+        """Launch the setup wizard dialog."""
+        wiz = SetupWizard(self, self._browsers, self._pdf_readers)
+        if wiz.exec() == QDialog.DialogCode.Accepted:
+            self._load_settings()
 
     # ---- UI construction ----
 
@@ -790,6 +1522,10 @@ class FSEApp(QMainWindow):
         act_guide = QAction("Guida", self)
         act_guide.triggered.connect(self._open_guide)
         help_menu.addAction(act_guide)
+
+        act_wizard = QAction("Configurazione guidata", self)
+        act_wizard.triggered.connect(self._show_setup_wizard)
+        help_menu.addAction(act_wizard)
 
         help_menu.addSeparator()
 
