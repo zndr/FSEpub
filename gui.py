@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -69,7 +70,7 @@ SETTINGS_SPEC = [
     ("EMAIL_PASS", "Email password", "", "password"),
     ("IMAP_HOST", "IMAP Host", "mail.fastweb360.it", "text"),
     ("IMAP_PORT", "IMAP Port", "993", "int"),
-    ("IMAP_FOLDER", "Cartella IMAP", "INBOX", "text"),
+    ("IMAP_FOLDER", "Cartelle IMAP", "INBOX", "text"),
     ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
     ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
     ("PDF_READER", "Lettore PDF", "default", "pdf_reader"),
@@ -1421,7 +1422,7 @@ class FSEApp(QMainWindow):
         mail_tooltips = {
             "IMAP_HOST": "Indirizzo del server di posta in arrivo (IMAP)",
             "IMAP_PORT": "Porta del server IMAP (993 per connessioni SSL)",
-            "IMAP_FOLDER": "Cartella IMAP da monitorare (es. INBOX, INBOX/ASST/Referti)",
+            "IMAP_FOLDER": "Cartelle IMAP da monitorare, separate da virgola\n(es. INBOX, INBOX/ASST/Referti)",
         }
         self._settings_entries: dict[str, QLineEdit] = {}
         for r, key in enumerate(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT", "IMAP_FOLDER"]):
@@ -1440,6 +1441,15 @@ class FSEApp(QMainWindow):
                 btn_change_pass.clicked.connect(self._show_change_password_dialog)
                 pass_row.addWidget(btn_change_pass)
                 mail_layout.addLayout(pass_row, r, 1)
+            elif key == "IMAP_FOLDER":
+                entry.setToolTip(mail_tooltips.get(key, ""))
+                folder_row = QHBoxLayout()
+                folder_row.addWidget(entry)
+                self._btn_browse_folders = QPushButton("Sfoglia...")
+                self._btn_browse_folders.setToolTip("Seleziona cartelle IMAP dal server")
+                self._btn_browse_folders.clicked.connect(self._browse_imap_folders)
+                folder_row.addWidget(self._btn_browse_folders)
+                mail_layout.addLayout(folder_row, r, 1)
             else:
                 entry.setToolTip(mail_tooltips.get(key, ""))
                 mail_layout.addWidget(entry, r, 1)
@@ -2163,6 +2173,106 @@ class FSEApp(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Seleziona directory testi", self._text_dir_entry.text() or ".")
         if path:
             self._text_dir_entry.setText(os.path.normpath(path))
+
+    # ---- IMAP folder picker ----
+
+    def _browse_imap_folders(self) -> None:
+        self._btn_browse_folders.setEnabled(False)
+        self._btn_browse_folders.setText("Caricamento...")
+        threading.Thread(target=self._fetch_imap_folders_worker, daemon=True).start()
+
+    def _fetch_imap_folders_worker(self) -> None:
+        try:
+            self._save_settings_quietly()
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            client = EmailClient(config, logger)
+            client.connect()
+            folders = self._list_imap_folders(client)
+            client.disconnect()
+            # Show picker on main thread
+            current = self._settings_entries["IMAP_FOLDER"].text()
+            self._bridge.call_on_main.emit(
+                lambda f=folders, c=current: self._show_folder_picker(f, c)
+            )
+        except Exception as e:
+            err_msg = str(e) if str(e) and str(e) != "None" else (
+                f"{type(e).__name__}: {e.args}" if e.args else type(e).__name__
+            )
+            self._bridge.show_error.emit(
+                "Cartelle IMAP",
+                f"Impossibile recuperare le cartelle:\n\n{err_msg}",
+            )
+        finally:
+            self._bridge.call_on_main.emit(
+                lambda: (
+                    self._btn_browse_folders.setEnabled(True),
+                    self._btn_browse_folders.setText("Sfoglia..."),
+                )
+            )
+
+    _IMAP_LIST_RE = re.compile(
+        rb'\((?P<flags>[^)]*)\)\s+"(?P<delim>[^"]*)"\s+(?P<name>.+)'
+    )
+
+    @staticmethod
+    def _list_imap_folders(client: EmailClient) -> list[str]:
+        """Retrieve the list of mailbox folder names from the IMAP server."""
+        conn = client._connection
+        status, raw = conn.list()
+        if status != "OK":
+            return ["INBOX"]
+        folders: list[str] = []
+        for item in raw:
+            if item is None:
+                continue
+            raw_line = item if isinstance(item, bytes) else item.encode("utf-8")
+            m = FSEApp._IMAP_LIST_RE.match(raw_line)
+            if not m:
+                continue
+            flags = m.group("flags").decode("utf-8", errors="replace")
+            if "\\Noselect" in flags or "\\NoSelect" in flags:
+                continue
+            name = m.group("name").decode("utf-8", errors="replace").strip().strip('"')
+            if name:
+                folders.append(name)
+        return sorted(folders)
+
+    def _show_folder_picker(self, folders: list[str], current_text: str) -> None:
+        """Show a dialog to let the user pick IMAP folders."""
+        current_set = {f.strip() for f in current_text.split(",") if f.strip()}
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Seleziona cartelle IMAP")
+        dlg.setMinimumWidth(400)
+        dlg.setMinimumHeight(350)
+        layout = QVBoxLayout(dlg)
+
+        layout.addWidget(QLabel("Seleziona le cartelle da monitorare:"))
+
+        lst = QListWidget()
+        for folder_name in folders:
+            item = QListWidgetItem(folder_name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if folder_name in current_set else Qt.CheckState.Unchecked
+            )
+            lst.addItem(item)
+        layout.addWidget(lst)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            selected: list[str] = []
+            for i in range(lst.count()):
+                item = lst.item(i)
+                if item.checkState() == Qt.CheckState.Checked:
+                    selected.append(item.text())
+            if selected:
+                self._settings_entries["IMAP_FOLDER"].setText(", ".join(selected))
 
     def _log(self, msg: str) -> None:
         """Append a message to the console (main-thread safe)."""

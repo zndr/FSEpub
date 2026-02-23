@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FSE Processor v1.1.0 — Guida Utente</title>
+<title>FSE Processor v2.3.9 — Guida Utente</title>
 <style>
   :root {
     --blue-900: #1a2744;
@@ -275,7 +275,7 @@
 <!-- ======================== HEADER ======================== -->
 <header class="hero" id="top">
   <h1>FSE Processor</h1>
-  <div class="version">Versione 1.1.0</div>
+  <div class="version">Versione 2.3.9</div>
   <p class="subtitle">Guida Utente &mdash; Scarico e organizzazione automatica dei referti dal Fascicolo Sanitario Elettronico</p>
 </header>
 
@@ -340,7 +340,19 @@
   <tr><td>Password</td><td>Password dell'account email</td><td>&mdash;</td></tr>
   <tr><td>Server IMAP</td><td>Indirizzo del server di posta in arrivo</td><td><code>mail-crs-lombardia.fastweb360.it</code></td></tr>
   <tr><td>Porta IMAP</td><td>Porta del server (SSL)</td><td><code>993</code></td></tr>
+  <tr><td>Cartelle IMAP</td><td>Cartelle da monitorare per le notifiche FSE, separate da virgola.
+    Il pulsante <strong>Sfoglia...</strong> consente di selezionare le cartelle
+    direttamente dal server senza doverle digitare manualmente.</td><td><code>INBOX</code></td></tr>
 </table>
+
+<div class="box box-tip">
+  <strong>Sfoglia cartelle IMAP</strong>
+  Se le notifiche FSE vengono recapitate in una sottocartella (es. <code>INBOX/ASST/Referti</code>),
+  premere il pulsante <strong>Sfoglia...</strong> accanto al campo Cartelle IMAP. L'app si
+  collegher&agrave; al server e mostrer&agrave; l'elenco completo delle cartelle disponibili.
+  Selezionare con le caselle di spunta le cartelle desiderate e confermare con OK.
+  &Egrave; possibile monitorare pi&ugrave; cartelle contemporaneamente.
+</div>
 
 <div class="box box-tip">
   <strong>Test connessione</strong>
@@ -363,8 +375,8 @@
 <h3>Parametri</h3>
 <table>
   <tr><th>Campo</th><th>Descrizione</th><th>Default</th></tr>
-  <tr><td>Timeout download</td><td>Secondi massimi di attesa per il completamento di un singolo download</td><td>60</td></tr>
-  <tr><td>Timeout pagina</td><td>Secondi massimi di attesa per il caricamento di una pagina</td><td>30</td></tr>
+  <tr><td>Timeout download</td><td>Secondi massimi di attesa per il completamento di un singolo download</td><td>120</td></tr>
+  <tr><td>Timeout pagina</td><td>Secondi massimi di attesa per il caricamento di una pagina</td><td>60</td></tr>
   <tr><td>Headless</td><td>Esegui il browser in background senza finestra visibile.
     Disattivare per vedere il browser in azione (vedi <a href="#avanzate">Funzionalit&agrave; avanzate</a>)</td><td>Disattivato</td></tr>
   <tr><td>Dimensione font console</td><td>Dimensione in pixel del testo nella console dell'app</td><td>8</td></tr>
@@ -739,6 +751,10 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
     <p><strong>Soluzione:</strong></p>
     <ul>
       <li>Verificare che ci siano email non lette nella casella di posta.</li>
+      <li><strong>Controllare la cartella IMAP configurata</strong>: se le notifiche FSE
+        vengono recapitate in una sottocartella (es. <code>INBOX/ASST/Referti</code>),
+        usare il pulsante <strong>Sfoglia...</strong> nelle Impostazioni per selezionare
+        la cartella corretta.</li>
       <li>Controllare di non aver gi&agrave; elaborato tutte le email disponibili
         (verificare <code>processed_uids.json</code>).</li>
       <li>Se le email sono state elaborate ma non segnate come lette, il file
@@ -758,7 +774,7 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
     <p><strong>Soluzione:</strong></p>
     <ul>
       <li>Aumentare il valore di <strong>Timeout download</strong> nelle Impostazioni
-        (es. da 60 a 120 secondi).</li>
+        (default: 120 secondi).</li>
       <li>Aumentare il valore di <strong>Timeout pagina</strong> se le pagine si caricano lentamente.</li>
       <li>Verificare la connessione internet.</li>
       <li>Riprovare pi&ugrave; tardi: il portale FSE potrebbe essere temporaneamente sovraccarico.</li>
@@ -775,7 +791,7 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
     <ul>
       <li><code>Connessione IMAP fallita</code> &mdash; impossibile raggiungere il server</li>
       <li><code>Login IMAP fallito</code> &mdash; credenziali errate</li>
-      <li><code>Selezione INBOX fallita</code> &mdash; errore del server di posta</li>
+      <li><code>Impossibile selezionare cartella</code> &mdash; la cartella IMAP configurata non esiste o non &egrave; accessibile</li>
       <li><code>Certificato SSL del server non valido</code> &mdash; problema certificato (l'app ritenta automaticamente senza verifica)</li>
     </ul>
     <p><strong>Soluzione:</strong></p>
@@ -861,7 +877,7 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
 
 <!-- ======================== FOOTER ======================== -->
 <footer>
-  FSE Processor v1.1.0 &mdash; Guida Utente<br>
+  FSE Processor v2.3.9 &mdash; Guida Utente<br>
   Ultimo aggiornamento: febbraio 2026
 </footer>
 

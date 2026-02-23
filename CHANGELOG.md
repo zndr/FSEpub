@@ -1,10 +1,18 @@
 # Changelog
 
-## [2.3.7] - 2026-02-23
+## [2.3.9] - 2026-02-23
+
+### Aggiunto
+
+- Supporto multi-cartella IMAP: il campo "Cartelle IMAP" accetta piu cartelle separate da virgola
+- Pulsante "Sfoglia..." per selezionare le cartelle IMAP dal server tramite dialog con caselle di spunta
+- Riconnessione automatica IMAP (NOOP check) prima di mark_as_read/delete per gestire timeout durante login SSO
+- Guida utente aggiornata alla versione corrente con documentazione cartelle IMAP e folder picker
 
 ### Corretto
 
 - Messaggi marcati manualmente come non letti venivano ignorati: il filtro locale processed_uids ora si applica solo nel fallback ALL, non sui messaggi UNSEEN
+- UID tracking ora usa chiavi composite folder:uid per evitare collisioni tra cartelle diverse
 
 ## [2.3.6] - 2026-02-23
 

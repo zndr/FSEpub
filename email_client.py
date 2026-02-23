@@ -35,9 +35,15 @@ def _save_processed_uids(uids: set[str]) -> None:
     )
 
 
+def _uid_key(folder: str, uid: str) -> str:
+    """Composite key for local tracking: 'folder:uid'."""
+    return f"{folder}:{uid}"
+
+
 @dataclass
 class EmailData:
     uid: str
+    folder: str
     patient_name: str
     fse_link: str
     codice_fiscale: str
@@ -108,14 +114,8 @@ class EmailClient:
         except imaplib.IMAP4.error as e:
             raise ConnectionError(f"Login IMAP fallito: {e}")
 
-        # Select mailbox
-        folder = self._config.imap_folder or "INBOX"
-        try:
-            self._connection.select(folder)
-        except imaplib.IMAP4.error as e:
-            raise ConnectionError(f"Selezione cartella '{folder}' fallita: {e}")
-
-        self._logger.info(f"Login IMAP riuscito (cartella: {folder})")
+        folders = self._config.imap_folders or ["INBOX"]
+        self._logger.info(f"Login IMAP riuscito (cartelle: {', '.join(folders)})")
 
     def disconnect(self) -> None:
         if self._connection:
@@ -129,59 +129,78 @@ class EmailClient:
                 pass
             self._connection = None
 
+    def _select_folder(self, folder: str) -> bool:
+        """Select a mailbox folder. Returns True on success."""
+        try:
+            status, _ = self._connection.select(folder)
+            return status == "OK"
+        except imaplib.IMAP4.error as e:
+            self._logger.warning(f"Impossibile selezionare cartella '{folder}': {e}")
+            return False
+
     def fetch_unread_emails(self) -> list[EmailData]:
         if not self._connection:
             raise RuntimeError("Non connesso al server IMAP")
 
-        # Search for unseen messages using UID commands
-        status, data = self._connection.uid("SEARCH", None, "UNSEEN")
-        if status != "OK":
-            self._logger.warning(f"SEARCH UNSEEN fallita: {status}")
-            return []
-
-        uid_list = data[0].split() if data[0] else []
-        use_local_filter = False
-        if not uid_list:
-            # Fallback: search ALL and filter by local processed_uids
-            self._logger.info("Nessun messaggio UNSEEN, controllo con tracking locale...")
-            status, data = self._connection.uid("SEARCH", None, "ALL")
-            if status != "OK" or not data[0]:
-                self._logger.info("Nessuna email trovata")
-                return []
-            uid_list = data[0].split()
-            use_local_filter = True
-
-        if use_local_filter:
-            # Only apply local tracking filter for the ALL fallback;
-            # UNSEEN messages should always be processed even if previously tracked
-            # (the user may have manually marked them as unread).
-            processed = _load_processed_uids()
-            new_uids = [uid for uid in uid_list if uid.decode() not in processed]
-        else:
-            new_uids = list(uid_list)
-
-        if not new_uids:
-            self._logger.info("Nessuna email non processata trovata")
-            return []
-
-        self._logger.info(f"Trovati {len(new_uids)} messaggi non ancora processati, analisi in corso...")
-
+        folders = self._config.imap_folders or ["INBOX"]
         emails: list[EmailData] = []
         self.limit_reached = False
         max_emails = self._config.max_emails
-        for uid_bytes in new_uids:
-            uid = uid_bytes.decode()
-            email_data = self._fetch_and_parse(uid)
-            if email_data:
-                emails.append(email_data)
-                # Apply max_emails limit after filtering (0 = unlimited)
-                if max_emails > 0 and len(emails) >= max_emails:
-                    self.limit_reached = True
-                    self._logger.info(
-                        f"Raggiunto limite di {max_emails} email FSE, "
-                        f"le restanti saranno processate al prossimo avvio"
-                    )
-                    break
+
+        for folder in folders:
+            if max_emails > 0 and len(emails) >= max_emails:
+                self.limit_reached = True
+                break
+
+            if not self._select_folder(folder):
+                continue
+
+            self._logger.info(f"Ricerca in '{folder}'...")
+
+            # Search for unseen messages
+            status, data = self._connection.uid("SEARCH", None, "UNSEEN")
+            if status != "OK":
+                self._logger.warning(f"SEARCH UNSEEN fallita in '{folder}': {status}")
+                continue
+
+            uid_list = data[0].split() if data[0] else []
+            use_local_filter = False
+            if not uid_list:
+                # Fallback: search ALL and filter by local processed_uids
+                self._logger.info(f"Nessun messaggio UNSEEN in '{folder}', controllo con tracking locale...")
+                status, data = self._connection.uid("SEARCH", None, "ALL")
+                if status != "OK" or not data[0]:
+                    continue
+                uid_list = data[0].split()
+                use_local_filter = True
+
+            if use_local_filter:
+                processed = _load_processed_uids()
+                new_uids = [
+                    uid for uid in uid_list
+                    if _uid_key(folder, uid.decode()) not in processed
+                    and uid.decode() not in processed  # backward compat with old plain UIDs
+                ]
+            else:
+                new_uids = list(uid_list)
+
+            if not new_uids:
+                continue
+
+            self._logger.info(f"Trovati {len(new_uids)} messaggi da analizzare in '{folder}'...")
+
+            for uid_bytes in new_uids:
+                uid = uid_bytes.decode()
+                email_data = self._fetch_and_parse(uid, folder)
+                if email_data:
+                    emails.append(email_data)
+                    if max_emails > 0 and len(emails) >= max_emails:
+                        self.limit_reached = True
+                        self._logger.info(
+                            f"Raggiunto limite di {max_emails} email FSE, "
+                            f"le restanti saranno processate al prossimo avvio"
+                        )
+                        break
 
         self._logger.info(f"Trovate {len(emails)} email con referti FSE")
         return emails
@@ -199,43 +218,44 @@ class EmailClient:
             self._connection = None
             self.connect()
 
-    def mark_as_read(self, uid: str) -> None:
+    def mark_as_read(self, uid: str, folder: str) -> None:
         """Mark a message as read on the server (+FLAGS \\Seen) and in local tracking."""
         self._ensure_connected()
         if self._connection:
             try:
+                self._select_folder(folder)
                 self._connection.uid("STORE", uid, "+FLAGS", "\\Seen")
             except Exception as e:
                 self._logger.warning(f"Impossibile impostare flag \\Seen per UID {uid}: {e}")
         # Also track locally as backup
         processed = _load_processed_uids()
-        processed.add(uid)
+        processed.add(_uid_key(folder, uid))
         _save_processed_uids(processed)
         self._logger.debug(f"Email UID {uid} marcata come letta")
 
-    def track_uid_locally(self, uid: str) -> None:
+    def track_uid_locally(self, uid: str, folder: str) -> None:
         """Track a UID as processed locally without setting IMAP flags."""
         processed = _load_processed_uids()
-        processed.add(uid)
+        processed.add(_uid_key(folder, uid))
         _save_processed_uids(processed)
 
-    def delete_message(self, uid: str) -> None:
+    def delete_message(self, uid: str, folder: str) -> None:
         """Mark a message for deletion on the server and expunge."""
         self._ensure_connected()
         if not self._connection:
             raise RuntimeError("Non connesso al server IMAP")
         try:
+            self._select_folder(folder)
             self._connection.uid("STORE", uid, "+FLAGS", "\\Deleted")
             self._connection.expunge()
             self._logger.info(f"Email UID {uid} eliminata dal server")
         except imaplib.IMAP4.error as e:
             self._logger.warning(f"Impossibile eliminare UID {uid}: {e}")
 
-    def _fetch_and_parse(self, uid: str) -> EmailData | None:
+    def _fetch_and_parse(self, uid: str, folder: str) -> EmailData | None:
         try:
             status, data = self._connection.uid("FETCH", uid, "(BODY.PEEK[])")
             if status != "OK" or not data or data[0] is None:
-                # BODY.PEEK[] not supported – fall back to RFC822
                 self._logger.debug(f"BODY.PEEK[] fallito per UID {uid}, uso RFC822")
                 status, data = self._connection.uid("FETCH", uid, "(RFC822)")
                 if status != "OK" or not data or data[0] is None:
@@ -280,6 +300,7 @@ class EmailClient:
 
         return EmailData(
             uid=uid,
+            folder=folder,
             patient_name=patient_name,
             fse_link=fse_link,
             codice_fiscale=codice_fiscale,
