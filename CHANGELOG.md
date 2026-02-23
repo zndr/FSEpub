@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.12] - 2026-02-23
+
+### Aggiunto
+
+- Allegati immagine nel dialog Debug: pulsanti "Aggiungi immagine..." (file picker) e "Incolla da clipboard" per allegare screenshot alle segnalazioni
+- Le immagini vengono inviate come allegati MIME nell'email di debug
+
 ## [2.3.11] - 2026-02-23
 
 ### Aggiunto
