@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.3.5] - 2026-02-23
+
+### Aggiunto
+
+- Nuovo riquadro "Download e processazione dei referti" nelle Impostazioni con campi per spostamento referti, estrazione testo e relative directory
+- Tema chiaro forzato (Fusion + QPalette) per garantire leggibilita su Windows con tema scuro
+- Modalita CDP e abilitazione CDP nel registro attive di default
+
+### Modificato
+
+- Timeout download aumentato da 60 a 120 secondi
+- Timeout pagina aumentato da 30 a 60 secondi
+
 ## [2.3.4] - 2026-02-23
 
 ### Corretto
