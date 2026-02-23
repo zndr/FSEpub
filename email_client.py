@@ -139,6 +139,7 @@ class EmailClient:
             return []
 
         uid_list = data[0].split() if data[0] else []
+        use_local_filter = False
         if not uid_list:
             # Fallback: search ALL and filter by local processed_uids
             self._logger.info("Nessun messaggio UNSEEN, controllo con tracking locale...")
@@ -147,12 +148,16 @@ class EmailClient:
                 self._logger.info("Nessuna email trovata")
                 return []
             uid_list = data[0].split()
+            use_local_filter = True
 
-        # Load processed UIDs tracking file as backup filter
-        processed = _load_processed_uids()
-
-        # Filter out already-processed UIDs
-        new_uids = [uid for uid in uid_list if uid.decode() not in processed]
+        if use_local_filter:
+            # Only apply local tracking filter for the ALL fallback;
+            # UNSEEN messages should always be processed even if previously tracked
+            # (the user may have manually marked them as unread).
+            processed = _load_processed_uids()
+            new_uids = [uid for uid in uid_list if uid.decode() not in processed]
+        else:
+            new_uids = list(uid_list)
 
         if not new_uids:
             self._logger.info("Nessuna email non processata trovata")
