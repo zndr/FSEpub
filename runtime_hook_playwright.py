@@ -1,6 +1,7 @@
-"""PyInstaller runtime hook: fix Playwright driver path in frozen mode."""
+"""PyInstaller runtime hook: fix Playwright driver path and hide console windows."""
 
 import os
+import subprocess
 import sys
 
 if getattr(sys, "frozen", False):
@@ -24,3 +25,16 @@ if getattr(sys, "frozen", False):
             _driver.compute_driver_executable = _patched_compute_driver_executable
         except ImportError:
             pass
+
+    # Prevent console window flash when launching subprocesses (node.exe etc.)
+    # Playwright uses STARTF_USESHOWWINDOW + SW_HIDE but not CREATE_NO_WINDOW;
+    # without CREATE_NO_WINDOW, Windows still briefly allocates a console.
+    if sys.platform == "win32":
+        _orig_Popen_init = subprocess.Popen.__init__
+
+        def _no_window_Popen_init(self, *args, **kwargs):
+            if "creationflags" not in kwargs or kwargs["creationflags"] == 0:
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            _orig_Popen_init(self, *args, **kwargs)
+
+        subprocess.Popen.__init__ = _no_window_Popen_init
