@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.3.4] - 2026-02-23
+
+### Corretto
+
+- Email non marcate come lette dopo il download: aggiunto auto-reconnect IMAP prima di impostare il flag `\Seen` (la connessione poteva scadere durante il login SSO manuale)
+- Usato `BODY.PEEK[]` al posto di `RFC822` nel fetch per non impostare `\Seen` prematuramente
+- Testo console invisibile su Windows con tema scuro: aggiunto colore testo esplicito a tutti i widget per sovrascrivere la palette di sistema
+
 ## [2.2.1] - 2026-02-22
 
 ### Aggiunto
