@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.3.6] - 2026-02-23
+
+### Corretto
+
+- Controllo aggiornamenti mostrava versioni piu vecchie come aggiornamenti disponibili: ora usa confronto semantico (tuple) invece di semplice disuguaglianza di stringhe
+
 ## [2.3.5] - 2026-02-23
 
 ### Aggiunto
