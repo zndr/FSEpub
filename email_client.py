@@ -180,8 +180,22 @@ class EmailClient:
         self._logger.info(f"Trovate {len(emails)} email con referti FSE")
         return emails
 
+    def _ensure_connected(self) -> None:
+        """Verify the IMAP connection is alive; reconnect if it dropped."""
+        if not self._connection:
+            self._logger.info("Connessione IMAP assente, riconnessione...")
+            self.connect()
+            return
+        try:
+            self._connection.noop()
+        except Exception:
+            self._logger.info("Connessione IMAP scaduta, riconnessione...")
+            self._connection = None
+            self.connect()
+
     def mark_as_read(self, uid: str) -> None:
         """Mark a message as read on the server (+FLAGS \\Seen) and in local tracking."""
+        self._ensure_connected()
         if self._connection:
             try:
                 self._connection.uid("STORE", uid, "+FLAGS", "\\Seen")
@@ -201,6 +215,7 @@ class EmailClient:
 
     def delete_message(self, uid: str) -> None:
         """Mark a message for deletion on the server and expunge."""
+        self._ensure_connected()
         if not self._connection:
             raise RuntimeError("Non connesso al server IMAP")
         try:
@@ -212,7 +227,7 @@ class EmailClient:
 
     def _fetch_and_parse(self, uid: str) -> EmailData | None:
         try:
-            status, data = self._connection.uid("FETCH", uid, "(RFC822)")
+            status, data = self._connection.uid("FETCH", uid, "(BODY.PEEK[])")
             if status != "OK" or not data or data[0] is None:
                 return None
         except imaplib.IMAP4.error:

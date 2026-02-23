@@ -115,6 +115,11 @@ DATE_PRESETS = ["Tutte", "Ultima settimana", "Ultimo mese", "Ultimo anno", "Pers
 DATE_PRESET_DAYS = {"Ultima settimana": 7, "Ultimo mese": 30, "Ultimo anno": 365}
 
 APP_STYLE = """
+/* ---------- Global (override dark system theme) ---------- */
+QWidget {
+    color: #1a1a2e;
+}
+
 /* ---------- QGroupBox ---------- */
 QGroupBox {
     border: 1px solid #3b7dd8;
@@ -189,6 +194,7 @@ QTabBar::tab:hover:!selected {
 /* ---------- QTextEdit (console) ---------- */
 QTextEdit {
     background-color: #f0f4f8;
+    color: #1a1a2e;
     border: 1px solid #c0d0e0;
     border-radius: 3px;
 }
