@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.3.7] - 2026-02-23
+
+### Corretto
+
+- Messaggi marcati manualmente come non letti venivano ignorati: il filtro locale processed_uids ora si applica solo nel fallback ALL, non sui messaggi UNSEEN
+
 ## [2.3.6] - 2026-02-23
 
 ### Corretto
