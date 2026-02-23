@@ -33,6 +33,9 @@ class Config:
     use_existing_browser: bool
     cdp_port: int
     max_emails: int  # 0 = unlimited
+    move_dir: Path | None
+    process_text: bool
+    text_dir: Path | None
 
     @classmethod
     def load(cls, env_path: str | None = None) -> "Config":
@@ -56,15 +59,20 @@ class Config:
         browser_data_dir = Path(os.getenv("BROWSER_DATA_DIR", str(paths.browser_data_dir)))
 
         headless = os.getenv("HEADLESS", "false").lower() == "true"
-        download_timeout = int(os.getenv("DOWNLOAD_TIMEOUT", "60")) * 1000
-        page_timeout = int(os.getenv("PAGE_TIMEOUT", "30")) * 1000
+        download_timeout = int(os.getenv("DOWNLOAD_TIMEOUT", "120")) * 1000
+        page_timeout = int(os.getenv("PAGE_TIMEOUT", "60")) * 1000
         pdf_reader = os.getenv("PDF_READER", "default")
         browser_channel = os.getenv("BROWSER_CHANNEL", "msedge")
         delete_after_processing = os.getenv("DELETE_AFTER_PROCESSING", "false").lower() == "true"
         mark_as_read = os.getenv("MARK_AS_READ", "true").lower() == "true"
-        use_existing_browser = os.getenv("USE_EXISTING_BROWSER", "false").lower() == "true"
+        use_existing_browser = os.getenv("USE_EXISTING_BROWSER", "true").lower() == "true"
         cdp_port = int(os.getenv("CDP_PORT", "9222"))
         max_emails = int(os.getenv("MAX_EMAILS", "0"))
+        move_dir_str = os.getenv("MOVE_DIR", "")
+        move_dir = Path(move_dir_str) if move_dir_str else None
+        process_text = os.getenv("PROCESS_TEXT", "false").lower() == "true"
+        text_dir_str = os.getenv("TEXT_DIR", "")
+        text_dir = Path(text_dir_str) if text_dir_str else None
 
         config = cls(
             email_user=email_user,
@@ -85,6 +93,9 @@ class Config:
             use_existing_browser=use_existing_browser,
             cdp_port=cdp_port,
             max_emails=max_emails,
+            move_dir=move_dir,
+            process_text=process_text,
+            text_dir=text_dir,
         )
         config._create_directories()
         return config

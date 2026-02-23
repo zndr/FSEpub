@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
-from PySide6.QtGui import QAction, QFont
+from PySide6.QtGui import QAction, QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -72,16 +72,19 @@ SETTINGS_SPEC = [
     ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
     ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
     ("PDF_READER", "Lettore PDF", "default", "pdf_reader"),
-    ("USE_EXISTING_BROWSER", "Usa browser esistente (CDP)", "false", "bool"),
+    ("USE_EXISTING_BROWSER", "Usa browser esistente (CDP)", "true", "bool"),
     ("OPEN_AFTER_DOWNLOAD", "Apri al termine", "true", "bool"),
     ("CDP_PORT", "Porta CDP", "9222", "int"),
     ("HEADLESS", "Headless browser", "false", "bool"),
-    ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "60", "int"),
-    ("PAGE_TIMEOUT", "Page timeout (sec)", "30", "int"),
+    ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "120", "int"),
+    ("PAGE_TIMEOUT", "Page timeout (sec)", "60", "int"),
     ("CONSOLE_FONT_SIZE", "Dim. carattere console", "8", "int"),
     ("MARK_AS_READ", "Marca come letto dopo elaborazione", "true", "bool"),
     ("DELETE_AFTER_PROCESSING", "Elimina email dopo elaborazione", "false", "bool"),
     ("MAX_EMAILS", "Max email da processare (0=tutte)", "3", "int"),
+    ("MOVE_DIR", "Sposta referti in", "", "dir"),
+    ("PROCESS_TEXT", "Processa il testo del referto", "false", "bool"),
+    ("TEXT_DIR", "Salva i testi in", "", "dir"),
 ]
 
 # Sentinel values for PDF reader selection
@@ -115,11 +118,6 @@ DATE_PRESETS = ["Tutte", "Ultima settimana", "Ultimo mese", "Ultimo anno", "Pers
 DATE_PRESET_DAYS = {"Ultima settimana": 7, "Ultimo mese": 30, "Ultimo anno": 365}
 
 APP_STYLE = """
-/* ---------- Global (override dark system theme) ---------- */
-QWidget {
-    color: #1a1a2e;
-}
-
 /* ---------- QGroupBox ---------- */
 QGroupBox {
     border: 1px solid #3b7dd8;
@@ -194,7 +192,6 @@ QTabBar::tab:hover:!selected {
 /* ---------- QTextEdit (console) ---------- */
 QTextEdit {
     background-color: #f0f4f8;
-    color: #1a1a2e;
     border: 1px solid #c0d0e0;
     border-radius: 3px;
 }
@@ -1472,23 +1469,6 @@ class FSEApp(QMainWindow):
         self._build_pdf_reader_row(br_layout, r, "PDF_READER", spec["PDF_READER"][1])
 
         r += 1
-        br_layout.addWidget(QLabel("salva in"), r, 0)
-        dl_row = QHBoxLayout()
-        self._download_dir_entry = QLineEdit(spec["DOWNLOAD_DIR"][1])
-        self._download_dir_entry.setToolTip(spec["DOWNLOAD_DIR"][1])
-        self._download_dir_entry.textChanged.connect(
-            lambda text: self._download_dir_entry.setToolTip(text)
-        )
-        dl_row.addWidget(self._download_dir_entry, 1)
-        browse_btn = QPushButton("...")
-        browse_btn.setFixedWidth(30)
-        browse_btn.setObjectName("browseBtn")
-        browse_btn.clicked.connect(self._browse_download_dir)
-        dl_row.addWidget(browse_btn)
-        br_layout.addLayout(dl_row, r, 1, 1, 2)
-        self._fields["DOWNLOAD_DIR"] = spec["DOWNLOAD_DIR"][1]
-
-        r += 1
         self._cdp_cb = QCheckBox("Usa browser CDP")
         self._cdp_cb.setChecked(spec["USE_EXISTING_BROWSER"][1].lower() == "true")
         self._cdp_cb.setToolTip(
@@ -1520,6 +1500,12 @@ class FSEApp(QMainWindow):
         self._cdp_registry_cb.toggled.connect(self._on_cdp_registry_toggled)
         br_layout.addWidget(self._cdp_registry_cb, r, 0, 1, 2)
         self._sync_cdp_registry_checkbox()
+        # Auto-enable CDP in registry if browser supports it and not yet enabled
+        if (
+            self._cdp_registry_cb.isEnabled()
+            and not self._cdp_registry_cb.isChecked()
+        ):
+            self._cdp_registry_cb.setChecked(True)
 
         self._headless_cb = QCheckBox("Headless browser")
         self._headless_cb.setChecked(spec["HEADLESS"][1].lower() == "true")
@@ -1533,6 +1519,76 @@ class FSEApp(QMainWindow):
 
         top_layout.addWidget(br_group)
         layout.addLayout(top_layout)
+
+        # ── Download e processazione dei referti ──
+        dl_group = QGroupBox("Download e processazione dei referti")
+        dl_layout = QGridLayout(dl_group)
+        dl_layout.setColumnStretch(1, 1)
+
+        dr = 0
+        dl_layout.addWidget(QLabel("salva referti in:"), dr, 0)
+        dl_dir_row = QHBoxLayout()
+        self._download_dir_entry = QLineEdit(spec["DOWNLOAD_DIR"][1])
+        self._download_dir_entry.setToolTip(spec["DOWNLOAD_DIR"][1])
+        self._download_dir_entry.textChanged.connect(
+            lambda text: self._download_dir_entry.setToolTip(text)
+        )
+        dl_dir_row.addWidget(self._download_dir_entry, 1)
+        browse_dl_btn = QPushButton("...")
+        browse_dl_btn.setFixedWidth(30)
+        browse_dl_btn.setObjectName("browseBtn")
+        browse_dl_btn.clicked.connect(self._browse_download_dir)
+        dl_dir_row.addWidget(browse_dl_btn)
+        dl_layout.addLayout(dl_dir_row, dr, 1, 1, 2)
+        self._fields["DOWNLOAD_DIR"] = spec["DOWNLOAD_DIR"][1]
+
+        dr += 1
+        after_label = QLabel("dopo il download:")
+        after_label.setStyleSheet("font-weight: bold;")
+        dl_layout.addWidget(after_label, dr, 0, 1, 3)
+
+        dr += 1
+        dl_layout.addWidget(QLabel("sposta referti in:"), dr, 0)
+        mv_dir_row = QHBoxLayout()
+        self._move_dir_entry = QLineEdit(spec["MOVE_DIR"][1])
+        self._move_dir_entry.setToolTip("Dopo il download, sposta i referti in questa cartella (lascia vuoto per non spostare)")
+        self._move_dir_entry.textChanged.connect(
+            lambda text: self._move_dir_entry.setToolTip(text or "Dopo il download, sposta i referti in questa cartella (lascia vuoto per non spostare)")
+        )
+        mv_dir_row.addWidget(self._move_dir_entry, 1)
+        browse_mv_btn = QPushButton("...")
+        browse_mv_btn.setFixedWidth(30)
+        browse_mv_btn.setObjectName("browseBtn")
+        browse_mv_btn.clicked.connect(self._browse_move_dir)
+        mv_dir_row.addWidget(browse_mv_btn)
+        dl_layout.addLayout(mv_dir_row, dr, 1, 1, 2)
+        self._fields["MOVE_DIR"] = spec["MOVE_DIR"][1]
+
+        dr += 1
+        self._process_text_cb = QCheckBox("processa il testo del referto")
+        self._process_text_cb.setChecked(spec["PROCESS_TEXT"][1].lower() == "true")
+        self._process_text_cb.setToolTip("Estrai il testo dai PDF scaricati")
+        dl_layout.addWidget(self._process_text_cb, dr, 0, 1, 3)
+        self._fields["PROCESS_TEXT"] = spec["PROCESS_TEXT"][1]
+
+        dr += 1
+        dl_layout.addWidget(QLabel("salva i testi in:"), dr, 0)
+        txt_dir_row = QHBoxLayout()
+        self._text_dir_entry = QLineEdit(spec["TEXT_DIR"][1])
+        self._text_dir_entry.setToolTip("Cartella dove salvare i testi estratti dai referti (lascia vuoto per non salvare)")
+        self._text_dir_entry.textChanged.connect(
+            lambda text: self._text_dir_entry.setToolTip(text or "Cartella dove salvare i testi estratti dai referti (lascia vuoto per non salvare)")
+        )
+        txt_dir_row.addWidget(self._text_dir_entry, 1)
+        browse_txt_btn = QPushButton("...")
+        browse_txt_btn.setFixedWidth(30)
+        browse_txt_btn.setObjectName("browseBtn")
+        browse_txt_btn.clicked.connect(self._browse_text_dir)
+        txt_dir_row.addWidget(browse_txt_btn)
+        dl_layout.addLayout(txt_dir_row, dr, 1, 1, 2)
+        self._fields["TEXT_DIR"] = spec["TEXT_DIR"][1]
+
+        layout.addWidget(dl_group)
 
         # ── Bottom (full-width): Parametri ──
         params_group = QGroupBox("Parametri")
@@ -2091,6 +2147,16 @@ class FSEApp(QMainWindow):
         if path:
             self._download_dir_entry.setText(os.path.normpath(path))
 
+    def _browse_move_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Seleziona directory destinazione", self._move_dir_entry.text() or ".")
+        if path:
+            self._move_dir_entry.setText(os.path.normpath(path))
+
+    def _browse_text_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Seleziona directory testi", self._text_dir_entry.text() or ".")
+        if path:
+            self._text_dir_entry.setText(os.path.normpath(path))
+
     def _log(self, msg: str) -> None:
         """Append a message to the console (main-thread safe)."""
         self._bridge.append_text.emit(self._console, msg)
@@ -2110,6 +2176,9 @@ class FSEApp(QMainWindow):
         self._fields["HEADLESS"] = "true" if self._headless_cb.isChecked() else "false"
         self._fields["USE_EXISTING_BROWSER"] = "true" if self._cdp_cb.isChecked() else "false"
         self._fields["OPEN_AFTER_DOWNLOAD"] = "true" if self._open_after_cb.isChecked() else "false"
+        self._fields["MOVE_DIR"] = self._move_dir_entry.text()
+        self._fields["PROCESS_TEXT"] = "true" if self._process_text_cb.isChecked() else "false"
+        self._fields["TEXT_DIR"] = self._text_dir_entry.text()
         # BROWSER_CHANNEL and PDF_READER are already updated via combobox handlers
         # Sync fields from SISS tab widgets
         self._fields["MAX_EMAILS"] = self._max_email_entry.text()
@@ -2178,6 +2247,12 @@ class FSEApp(QMainWindow):
                 self._siss_mark_cb.setChecked(val.lower() == "true")
             elif key == "DELETE_AFTER_PROCESSING":
                 self._siss_delete_cb.setChecked(val.lower() == "true")
+            elif key == "MOVE_DIR":
+                self._move_dir_entry.setText(os.path.normpath(val) if val else "")
+            elif key == "PROCESS_TEXT":
+                self._process_text_cb.setChecked(val.lower() == "true")
+            elif key == "TEXT_DIR":
+                self._text_dir_entry.setText(os.path.normpath(val) if val else "")
 
         # Apply initial state for delete toggle
         self._on_delete_toggled(self._siss_delete_cb.isChecked())
@@ -2624,8 +2699,29 @@ class FSEApp(QMainWindow):
         super().closeEvent(event)
 
 
+def _force_light_palette(app: QApplication) -> None:
+    """Override the system palette with a light theme to avoid dark-mode issues."""
+    app.setStyle("Fusion")
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(20, 20, 20))
+    palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(233, 236, 239))
+    palette.setColor(QPalette.ColorRole.Text, QColor(20, 20, 20))
+    palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(20, 20, 20))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 108, 176))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 220))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(20, 20, 20))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(120, 120, 120))
+    app.setPalette(palette)
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    _force_light_palette(app)
     app.setStyleSheet(APP_STYLE)
     window = FSEApp()
     window.show()
