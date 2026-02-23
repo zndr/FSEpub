@@ -1,8 +1,8 @@
 {
-    "Version": "2.3.7",
-    "ReleaseNotes": "Fix messaggi non letti ignorati dal tracking locale.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.7/FSE_Processor_Setup_2.3.7_QT6.exe",
+    "Version": "2.3.9",
+    "ReleaseNotes": "Fix verifica aggiornamenti SSL su sistemi nuovi.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.9/FSE_Processor_Setup_2.3.9_QT6.exe",
     "ReleaseDate": "2026-02-23",
-    "Sha256Hash": "a22db13d8b0042e5235013e5f53f96f2c3e881b8a58fd8e36338ae152d6fb5e8",
-    "FileSize": 60033973
+    "Sha256Hash": "93828db02cb3c58d369870e622162fe8616914dd835193aacd947d2f824dd985",
+    "FileSize": 60046179
 }
