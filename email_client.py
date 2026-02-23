@@ -108,13 +108,14 @@ class EmailClient:
         except imaplib.IMAP4.error as e:
             raise ConnectionError(f"Login IMAP fallito: {e}")
 
-        # Select INBOX
+        # Select mailbox
+        folder = self._config.imap_folder or "INBOX"
         try:
-            self._connection.select("INBOX")
+            self._connection.select(folder)
         except imaplib.IMAP4.error as e:
-            raise ConnectionError(f"Selezione INBOX fallita: {e}")
+            raise ConnectionError(f"Selezione cartella '{folder}' fallita: {e}")
 
-        self._logger.info("Login IMAP riuscito")
+        self._logger.info(f"Login IMAP riuscito (cartella: {folder})")
 
     def disconnect(self) -> None:
         if self._connection:
@@ -234,9 +235,20 @@ class EmailClient:
         try:
             status, data = self._connection.uid("FETCH", uid, "(BODY.PEEK[])")
             if status != "OK" or not data or data[0] is None:
-                return None
+                # BODY.PEEK[] not supported – fall back to RFC822
+                self._logger.debug(f"BODY.PEEK[] fallito per UID {uid}, uso RFC822")
+                status, data = self._connection.uid("FETCH", uid, "(RFC822)")
+                if status != "OK" or not data or data[0] is None:
+                    return None
         except imaplib.IMAP4.error:
-            return None
+            try:
+                self._logger.debug(f"BODY.PEEK[] non supportato, uso RFC822 per UID {uid}")
+                status, data = self._connection.uid("FETCH", uid, "(RFC822)")
+                if status != "OK" or not data or data[0] is None:
+                    return None
+            except imaplib.IMAP4.error as e:
+                self._logger.warning(f"Impossibile recuperare email UID {uid}: {e}")
+                return None
 
         raw_email = data[0][1]
         msg = message_from_bytes(raw_email)

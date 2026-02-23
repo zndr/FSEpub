@@ -16,6 +16,7 @@ class Config:
     imap_host: str
     imap_port: int
     imap_use_ssl: bool
+    imap_folder: str
 
     # Paths
     download_dir: Path
@@ -53,6 +54,7 @@ class Config:
 
         imap_port = int(os.getenv("IMAP_PORT", "993"))
         imap_use_ssl = os.getenv("IMAP_USE_SSL", "true").lower() == "true"
+        imap_folder = os.getenv("IMAP_FOLDER", "INBOX")
 
         download_dir = Path(os.getenv("DOWNLOAD_DIR", str(paths.default_download_dir)))
         log_dir = Path(os.getenv("LOG_DIR", str(paths.log_dir)))
@@ -80,6 +82,7 @@ class Config:
             imap_host=imap_host,
             imap_port=imap_port,
             imap_use_ssl=imap_use_ssl,
+            imap_folder=imap_folder,
             download_dir=download_dir,
             log_dir=log_dir,
             browser_data_dir=browser_data_dir,

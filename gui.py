@@ -69,6 +69,7 @@ SETTINGS_SPEC = [
     ("EMAIL_PASS", "Email password", "", "password"),
     ("IMAP_HOST", "IMAP Host", "mail.fastweb360.it", "text"),
     ("IMAP_PORT", "IMAP Port", "993", "int"),
+    ("IMAP_FOLDER", "Cartella IMAP", "INBOX", "text"),
     ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
     ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
     ("PDF_READER", "Lettore PDF", "default", "pdf_reader"),
@@ -1420,9 +1421,10 @@ class FSEApp(QMainWindow):
         mail_tooltips = {
             "IMAP_HOST": "Indirizzo del server di posta in arrivo (IMAP)",
             "IMAP_PORT": "Porta del server IMAP (993 per connessioni SSL)",
+            "IMAP_FOLDER": "Cartella IMAP da monitorare (es. INBOX, INBOX/ASST/Referti)",
         }
         self._settings_entries: dict[str, QLineEdit] = {}
-        for r, key in enumerate(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"]):
+        for r, key in enumerate(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT", "IMAP_FOLDER"]):
             label_text, default, kind = spec[key]
             mail_layout.addWidget(QLabel(label_text), r, 0)
             entry = QLineEdit(default)
@@ -1456,7 +1458,7 @@ class FSEApp(QMainWindow):
         btn_reset_imap.clicked.connect(self._reset_imap_defaults)
         mail_btn_row.addWidget(btn_reset_imap)
 
-        mail_layout.addLayout(mail_btn_row, len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT"]), 0, 1, 2)
+        mail_layout.addLayout(mail_btn_row, len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT", "IMAP_FOLDER"]), 0, 1, 2)
 
         top_layout.addWidget(mail_group)
 
