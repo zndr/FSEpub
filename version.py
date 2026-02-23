@@ -5,4 +5,4 @@ Tutti gli altri riferimenti (installer.iss, build.bat, gui.py) vengono
 aggiornati automaticamente dallo script Update-Version.ps1.
 """
 
-__version__ = "2.3.8"
+__version__ = "2.3.9"
