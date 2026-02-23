@@ -2734,7 +2734,7 @@ class FSEApp(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Debug Info")
-        dlg.resize(520, 480)
+        dlg.resize(560, 580)
         layout = QVBoxLayout(dlg)
 
         layout.addWidget(QLabel("Descrizione del problema:"))
@@ -2743,6 +2743,69 @@ class FSEApp(QMainWindow):
         problem_text.setPlaceholderText("Descrivi qui il problema riscontrato...")
         problem_text.setMaximumHeight(100)
         layout.addWidget(problem_text)
+
+        # Attachments
+        attach_group = QGroupBox("Allegati (screenshot, immagini)")
+        attach_layout = QVBoxLayout(attach_group)
+        attach_list = QListWidget()
+        attach_list.setMaximumHeight(80)
+        attach_layout.addWidget(attach_list)
+        attached_files: list[str] = []
+
+        attach_btn_row = QHBoxLayout()
+        btn_add_file = QPushButton("Aggiungi immagine...")
+        btn_add_file.setToolTip("Allega uno screenshot o un'immagine al messaggio")
+
+        def _add_attachments():
+            files, _ = QFileDialog.getOpenFileNames(
+                dlg,
+                "Seleziona immagini",
+                "",
+                "Immagini (*.png *.jpg *.jpeg *.gif *.bmp *.webp);;Tutti i file (*)",
+            )
+            for f in files:
+                if f not in attached_files:
+                    attached_files.append(f)
+                    attach_list.addItem(Path(f).name)
+
+        btn_add_file.clicked.connect(_add_attachments)
+        attach_btn_row.addWidget(btn_add_file)
+
+        btn_paste_clip = QPushButton("Incolla da clipboard")
+        btn_paste_clip.setToolTip("Incolla un'immagine copiata negli appunti (es. da Cattura schermo)")
+
+        def _paste_clipboard_image():
+            clipboard = QApplication.clipboard()
+            image = clipboard.image()
+            if image.isNull():
+                QMessageBox.information(dlg, "Clipboard", "Nessuna immagine trovata negli appunti.")
+                return
+            tmp_dir = Path(paths.log_dir)
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            idx = len(attached_files) + 1
+            tmp_path = str(tmp_dir / f"clipboard_{idx}.png")
+            image.save(tmp_path)
+            attached_files.append(tmp_path)
+            attach_list.addItem(f"clipboard_{idx}.png")
+
+        btn_paste_clip.clicked.connect(_paste_clipboard_image)
+        attach_btn_row.addWidget(btn_paste_clip)
+
+        btn_remove = QPushButton("Rimuovi")
+        btn_remove.setToolTip("Rimuovi l'allegato selezionato")
+
+        def _remove_attachment():
+            row = attach_list.currentRow()
+            if row >= 0:
+                attach_list.takeItem(row)
+                attached_files.pop(row)
+
+        btn_remove.clicked.connect(_remove_attachment)
+        attach_btn_row.addWidget(btn_remove)
+
+        attach_btn_row.addStretch()
+        attach_layout.addLayout(attach_btn_row)
+        layout.addWidget(attach_group)
 
         layout.addWidget(QLabel("Informazioni di debug:"))
         debug_text = QTextEdit()
@@ -2771,7 +2834,7 @@ class FSEApp(QMainWindow):
 
         send_btn = QPushButton("Invia")
         send_btn.setToolTip("Invia le informazioni di debug via email a supporto@dottorgiorgio.it")
-        send_btn.clicked.connect(lambda: self._send_debug_email(_get_full_report(), dlg))
+        send_btn.clicked.connect(lambda: self._send_debug_email(_get_full_report(), dlg, attached_files))
         btn_layout.addWidget(send_btn)
 
         btn_layout.addStretch()
@@ -2812,9 +2875,12 @@ class FSEApp(QMainWindow):
             flags=re.IGNORECASE,
         )
 
-    def _send_debug_email(self, body: str, dlg: QDialog = None) -> None:
+    def _send_debug_email(
+        self, body: str, dlg: QDialog = None, attachments: list[str] | None = None,
+    ) -> None:
         """Send debug info via SMTP using configured email credentials."""
         import email.message
+        import mimetypes
         import smtplib
         import ssl
 
@@ -2831,6 +2897,7 @@ class FSEApp(QMainWindow):
             return
 
         sanitized_body = self._sanitize_cf(body)
+        file_list = list(attachments or [])
 
         subject = f"FSE Processor v{__version__} - Debug Info"
         dest = "supporto@dottorgiorgio.it"
@@ -2842,6 +2909,22 @@ class FSEApp(QMainWindow):
                 msg["From"] = user
                 msg["To"] = dest
                 msg.set_content(sanitized_body)
+
+                for filepath in file_list:
+                    p = Path(filepath)
+                    if not p.is_file():
+                        continue
+                    mime, _ = mimetypes.guess_type(str(p))
+                    if mime and mime.startswith("image/"):
+                        maintype, subtype = mime.split("/", 1)
+                    else:
+                        maintype, subtype = "application", "octet-stream"
+                    msg.add_attachment(
+                        p.read_bytes(),
+                        maintype=maintype,
+                        subtype=subtype,
+                        filename=p.name,
+                    )
 
                 ctx = ssl.create_default_context()
                 # Try SMTP STARTTLS on port 587, fallback to SSL on port 465
@@ -2862,10 +2945,13 @@ class FSEApp(QMainWindow):
                         continue
 
                 if sent:
+                    n_att = len(file_list)
+                    att_note = f"\n\n{n_att} allegat{'o' if n_att == 1 else 'i'} inclus{'o' if n_att == 1 else 'i'}." if n_att else ""
                     self._bridge.show_info.emit(
                         "Supporto",
                         "Messaggio inviato.\n\n"
-                        "Tutti i codici fiscali sono stati rimossi per tutelare la privacy dei pazienti.",
+                        "Tutti i codici fiscali sono stati rimossi per tutelare "
+                        "la privacy dei pazienti." + att_note,
                     )
                     if dlg:
                         self._bridge.call_on_main.emit(dlg.accept)
