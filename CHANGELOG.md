@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.3.12] - 2026-02-23
+
+### Aggiunto
+
+- Allegati immagine nel dialog Debug: pulsanti "Aggiungi immagine..." (file picker) e "Incolla da clipboard" per allegare screenshot alle segnalazioni
+- Le immagini vengono inviate come allegati MIME nell'email di debug
+
+## [2.3.11] - 2026-02-23
+
+### Aggiunto
+
+- Wizard di configurazione guidata (7 step): si avvia automaticamente alla prima installazione quando settings.env non esiste o EMAIL_USER e' vuoto
+- Accessibile anche da menu Aiuto > Configurazione guidata per riconfigurare l'app
+- Step: Benvenuto, Account Email, Server IMAP (con test connessione e sfoglia cartelle), Cartelle, Browser e PDF, Parametri, Riepilogo
+- Nota informativa POP3 nello step IMAP per utenti con client di posta POP3
+- Tooltips esplicativi su tutte le opzioni del wizard (CDP, headless, timeout, etc.)
+- Opzioni "Abilita CDP nel registro" e "Headless browser" nello step Browser
+- Step Parametri per timeout download/pagina e dimensione carattere console
+
 ## [2.3.9] - 2026-02-23
 
 ### Aggiunto
