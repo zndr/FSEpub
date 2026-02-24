@@ -19,6 +19,12 @@
 - Opzioni "Abilita CDP nel registro" e "Headless browser" nello step Browser
 - Step Parametri per timeout download/pagina e dimensione carattere console
 
+## [2.3.10] - 2026-02-23
+
+### Corretto
+
+- Nascosta la finestra console dei sottoprocessi node.exe di Playwright: monkey-patch di subprocess.Popen con flag CREATE_NO_WINDOW in modalita frozen, per evitare console visibili su alcune configurazioni Windows
+
 ## [2.3.9] - 2026-02-23
 
 ### Aggiunto
@@ -32,6 +38,12 @@
 
 - Messaggi marcati manualmente come non letti venivano ignorati: il filtro locale processed_uids ora si applica solo nel fallback ALL, non sui messaggi UNSEEN
 - UID tracking ora usa chiavi composite folder:uid per evitare collisioni tra cartelle diverse
+
+## [2.3.7] - 2026-02-23
+
+### Corretto
+
+- Messaggi UNSEEN ignorati quando gia tracciati localmente: corretto il filtro processed_uids
 
 ## [2.3.6] - 2026-02-23
 
@@ -60,6 +72,35 @@
 - Usato `BODY.PEEK[]` al posto di `RFC822` nel fetch per non impostare `\Seen` prematuramente
 - Testo console invisibile su Windows con tema scuro: aggiunto colore testo esplicito a tutti i widget per sovrascrivere la palette di sistema
 
+## [2.3.3] - 2026-02-23
+
+### Corretto
+
+- Fix errore certificato SSL nel controllo aggiornamenti: skip verifica SSL per la richiesta al URL GitHub hardcoded (nessun dato sensibile coinvolto)
+
+## [2.3.2] - 2026-02-23
+
+### Corretto
+
+- Fix errore certificato SSL su sistemi nuovi: uso esplicito del Windows Certificate Store invece di cacert.pem che puo mancare nei bundle PyInstaller frozen
+
+## [2.3.1] - 2026-02-22
+
+### Corretto
+
+- Fix installazione Chromium su sistemi nuovi: aggiunto flag `--with-deps` e cattura stderr per migliore segnalazione errori
+
+## [2.3.0] - 2026-02-22
+
+### Aggiunto
+
+- Auto-polling Millewin: checkbox per monitoraggio automatico cambio paziente
+- Rilevamento installazione: tab Millewin nascosto se Millewin non e installato
+
+### Corretto
+
+- Fix rilevamento servizio pgmille su Windows con localizzazione non inglese
+
 ## [2.2.1] - 2026-02-22
 
 ### Aggiunto
@@ -86,7 +127,6 @@
 
 - Campo password email reso read-only con pulsante "Cambia..." a fianco
 - `config.py` decritta automaticamente `EMAIL_PASS` al caricamento
-
 
 ## [2.1.0] - 2026-02-22
 
