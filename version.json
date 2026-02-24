@@ -1,8 +1,8 @@
 {
-    "Version": "2.3.10",
+    "Version": "2.3.12",
     "ReleaseNotes": "Fix verifica aggiornamenti SSL su sistemi nuovi.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.10/FSE_Processor_Setup_2.3.10_QT6.exe",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.12/FSE_Processor_Setup_2.3.12_QT6.exe",
     "ReleaseDate": "2026-02-23",
-    "Sha256Hash": "a53dd26459e6cf9065b5af92e97c946b548fd03e5d71ef9ad8b68f652867d3a5",
-    "FileSize": 60045628
+    "Sha256Hash": "f07c242245124a95a57c00ac8cb160a808f8dbdbf3e9ec6fa21fafd37e8860b5",
+    "FileSize": 61255660
 }
