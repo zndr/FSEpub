@@ -143,11 +143,12 @@ if (Test-Path $changelogPath) {
     Write-Host "   ATTENZIONE: CHANGELOG.md non trovato" -ForegroundColor $colorWarning
 }
 
-# 6. Push version.json su FSEpub (repo pubblico per auto-update)
-Write-Host "6. Push version.json su FSEpub (repo pubblico)..." -ForegroundColor $colorInfo
+# 6. Push version.json e CHANGELOG.md su FSEpub (repo pubblico per auto-update)
+Write-Host "6. Push version.json e CHANGELOG.md su FSEpub (repo pubblico)..." -ForegroundColor $colorInfo
 $versionJsonPath = Join-Path $PSScriptRoot "version.json"
+$changelogSrc = Join-Path $PSScriptRoot "CHANGELOG.md"
 if (Test-Path $versionJsonPath) {
-    $answer = Read-Host "   Pushare version.json su FSEpub ora? (s/N)"
+    $answer = Read-Host "   Pushare su FSEpub ora? (s/N)"
     if ($answer -eq 's' -or $answer -eq 'S') {
         $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "FSEpub_update_$([guid]::NewGuid().ToString('N').Substring(0,8))"
         try {
@@ -156,18 +157,21 @@ if (Test-Path $versionJsonPath) {
             if ($LASTEXITCODE -ne 0) { throw "Clone fallito" }
 
             Copy-Item $versionJsonPath (Join-Path $tempDir "version.json") -Force
+            if (Test-Path $changelogSrc) {
+                Copy-Item $changelogSrc (Join-Path $tempDir "CHANGELOG.md") -Force
+            }
 
             Push-Location $tempDir
-            git add version.json
+            git add version.json CHANGELOG.md
             $hasChanges = git diff --cached --quiet 2>&1; $changed = $LASTEXITCODE -ne 0
             if ($changed) {
-                git commit -m "Update version.json to $NewVersion" 2>&1 | Out-Null
+                git commit -m "Update version.json and CHANGELOG.md to $NewVersion" 2>&1 | Out-Null
                 git push origin main 2>&1 | Out-Null
                 if ($LASTEXITCODE -ne 0) { throw "Push fallito" }
-                Write-Host "   OK version.json pushato su FSEpub" -ForegroundColor $colorSuccess
+                Write-Host "   OK version.json e CHANGELOG.md pushati su FSEpub" -ForegroundColor $colorSuccess
                 $updatedCount++
             } else {
-                Write-Host "   version.json su FSEpub gia aggiornato" -ForegroundColor $colorWarning
+                Write-Host "   FSEpub gia aggiornato" -ForegroundColor $colorWarning
             }
             Pop-Location
         } catch {
@@ -177,7 +181,7 @@ if (Test-Path $versionJsonPath) {
             if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
         }
     } else {
-        Write-Host "   Saltato. Ricorda di pushare version.json su FSEpub dopo il build!" -ForegroundColor $colorWarning
+        Write-Host "   Saltato. Ricorda di pushare su FSEpub dopo il build!" -ForegroundColor $colorWarning
     }
 } else {
     Write-Host "   ATTENZIONE: version.json non trovato" -ForegroundColor $colorWarning
@@ -197,5 +201,5 @@ Write-Host "  2. Esegui build.bat per compilare" -ForegroundColor $colorInfo
 Write-Host "  3. git add -A && git commit -m `"release: FSE Processor v$NewVersion`"" -ForegroundColor $colorInfo
 Write-Host "  4. git tag -a v$NewVersion -m `"v$NewVersion`"" -ForegroundColor $colorInfo
 Write-Host "  5. git push --all && git push --tags" -ForegroundColor $colorInfo
-Write-Host "  6. Se non fatto prima: pushare version.json su FSEpub" -ForegroundColor $colorInfo
+Write-Host "  6. Se non fatto prima: pushare version.json e CHANGELOG.md su FSEpub" -ForegroundColor $colorInfo
 Write-Host ""
