@@ -88,6 +88,12 @@ SETTINGS_SPEC = [
     ("MOVE_DIR", "Sposta referti in", "", "dir"),
     ("PROCESS_TEXT", "Processa il testo del referto", "false", "bool"),
     ("TEXT_DIR", "Salva i testi in", "", "dir"),
+    ("PROCESSING_MODE", "Modalita' processazione", "local", "text"),
+    ("LLM_PROVIDER", "Provider AI", "", "text"),
+    ("LLM_API_KEY", "API Key AI", "", "password"),
+    ("LLM_MODEL", "Modello AI", "", "text"),
+    ("LLM_TIMEOUT", "Timeout AI (sec)", "120", "int"),
+    ("LLM_BASE_URL", "URL endpoint AI", "", "text"),
 ]
 
 # Sentinel values for PDF reader selection
@@ -660,6 +666,7 @@ class SetupWizard(QDialog):
         "Server di Posta (IMAP)",
         "Cartelle",
         "Browser e PDF",
+        "Elaborazione Testo",
         "Parametri",
         "Riepilogo",
     ]
@@ -714,6 +721,7 @@ class SetupWizard(QDialog):
         self._build_step_imap()
         self._build_step_folders()
         self._build_step_browser()
+        self._build_step_text_processing()
         self._build_step_params()
         self._build_step_summary()
 
@@ -885,32 +893,6 @@ class SetupWizard(QDialog):
         mv_row.addWidget(btn_mv)
         grid.addLayout(mv_row, 1, 1)
 
-        # Process text
-        self._wiz_process_text = QCheckBox("Processa il testo del referto")
-        self._wiz_process_text.setChecked(
-            self._env_val("PROCESS_TEXT", "false").lower() == "true"
-        )
-        grid.addWidget(self._wiz_process_text, 2, 0, 1, 2)
-
-        # Text dir
-        grid.addWidget(QLabel("Salva i testi in:"), 3, 0)
-        txt_row = QHBoxLayout()
-        self._wiz_text_dir = QLineEdit(self._env_val("TEXT_DIR"))
-        self._wiz_text_dir.setPlaceholderText("(opzionale)")
-        txt_row.addWidget(self._wiz_text_dir, 1)
-        btn_txt = QPushButton("...")
-        btn_txt.setFixedWidth(30)
-        btn_txt.setObjectName("browseBtn")
-        btn_txt.clicked.connect(
-            lambda: self._wiz_browse_dir(self._wiz_text_dir, "Seleziona directory testi")
-        )
-        txt_row.addWidget(btn_txt)
-        grid.addLayout(txt_row, 3, 1)
-
-        # Enable/disable text dir based on checkbox
-        self._wiz_text_dir.setEnabled(self._wiz_process_text.isChecked())
-        self._wiz_process_text.toggled.connect(self._wiz_text_dir.setEnabled)
-
         lay.addWidget(group)
         lay.addStretch()
         self._stack.addWidget(page)
@@ -1031,6 +1013,237 @@ class SetupWizard(QDialog):
         lay.addWidget(group)
         lay.addStretch()
         self._stack.addWidget(page)
+
+    def _build_step_text_processing(self) -> None:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+
+        # ── Enable / disable ──
+        self._wiz_process_text = QCheckBox("Processa automaticamente il testo dei referti scaricati")
+        self._wiz_process_text.setChecked(
+            self._env_val("PROCESS_TEXT", "false").lower() == "true"
+        )
+        self._wiz_process_text.setStyleSheet("font-weight: bold;")
+        lay.addWidget(self._wiz_process_text)
+
+        intro = QLabel(
+            "Quando attivo, il testo viene estratto dai PDF scaricati, anonimizzato "
+            "(dati paziente rimossi) e salvato in file .txt. Puoi scegliere se "
+            "processare il testo solo in locale oppure con l'aiuto di un servizio AI."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #6b7b8d; font-size: 11px; margin-bottom: 6px;")
+        lay.addWidget(intro)
+
+        # ── Mode selection ──
+        mode_group = QGroupBox("Modalita' di elaborazione")
+        mode_layout = QGridLayout(mode_group)
+        mode_layout.setColumnStretch(1, 1)
+
+        mode_layout.addWidget(QLabel("Modalita':"), 0, 0)
+        self._wiz_processing_mode = QComboBox()
+        self._wiz_processing_mode.addItems([
+            "Senza AI (locale)",
+            "Con AI (richiede account LLM)",
+        ])
+        self._wiz_processing_mode.setCurrentIndex(
+            1 if self._env_val("PROCESSING_MODE", "local") == "ai" else 0
+        )
+        self._wiz_processing_mode.setToolTip(
+            "Senza AI: filtraggio regex locale. Il testo viene pulito e salvato.\n"
+            "Con AI: il testo anonimizzato viene inviato a un LLM per un'analisi\n"
+            "strutturata con classificazione dei reperti patologici."
+        )
+        mode_layout.addWidget(self._wiz_processing_mode, 0, 1)
+
+        lay.addWidget(mode_group)
+
+        # ── AI settings ──
+        self._wiz_ai_group = QGroupBox("Impostazioni AI")
+        ai_layout = QGridLayout(self._wiz_ai_group)
+        ai_layout.setColumnStretch(1, 1)
+
+        from text_processing.llm_analyzer import PROVIDER_LABELS, LABEL_TO_PROVIDER, DEFAULT_MODELS
+        self._wiz_provider_labels = PROVIDER_LABELS
+        self._wiz_label_to_provider = LABEL_TO_PROVIDER
+        self._wiz_default_models = DEFAULT_MODELS
+
+        ar = 0
+        ai_layout.addWidget(QLabel("Provider:"), ar, 0)
+        self._wiz_llm_provider = QComboBox()
+        self._wiz_llm_provider.addItems(list(PROVIDER_LABELS.values()))
+        saved_provider = self._env_val("LLM_PROVIDER")
+        if saved_provider in PROVIDER_LABELS:
+            self._wiz_llm_provider.setCurrentText(PROVIDER_LABELS[saved_provider])
+        self._wiz_llm_provider.currentTextChanged.connect(self._wiz_on_provider_changed)
+        ai_layout.addWidget(self._wiz_llm_provider, ar, 1)
+
+        ar += 1
+        ai_layout.addWidget(QLabel("API Key:"), ar, 0)
+        api_key_row = QHBoxLayout()
+        self._wiz_llm_api_key = QLineEdit(decrypt_password(self._env_val("LLM_API_KEY")))
+        self._wiz_llm_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._wiz_llm_api_key.setPlaceholderText("Inserisci la tua API key")
+        api_key_row.addWidget(self._wiz_llm_api_key, 1)
+        wiz_show_key = QPushButton("Mostra")
+        wiz_show_key.setFixedWidth(60)
+        wiz_show_key.setCheckable(True)
+        wiz_show_key.toggled.connect(
+            lambda checked: self._wiz_llm_api_key.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        api_key_row.addWidget(wiz_show_key)
+        ai_layout.addLayout(api_key_row, ar, 1)
+
+        ar += 1
+        ai_layout.addWidget(QLabel("Modello:"), ar, 0)
+        self._wiz_llm_model = QComboBox()
+        self._wiz_llm_model.setEditable(True)
+        self._wiz_llm_model.setToolTip("Seleziona un modello predefinito o inseriscine uno personalizzato")
+        self._wiz_update_model_items(saved_provider)
+        saved_model = self._env_val("LLM_MODEL")
+        if saved_model:
+            self._wiz_llm_model.setCurrentText(saved_model)
+        ai_layout.addWidget(self._wiz_llm_model, ar, 1)
+
+        ar += 1
+        self._wiz_base_url_label = QLabel("URL endpoint:")
+        ai_layout.addWidget(self._wiz_base_url_label, ar, 0)
+        self._wiz_llm_base_url = QLineEdit(self._env_val("LLM_BASE_URL"))
+        self._wiz_llm_base_url.setPlaceholderText("https://your-server.com")
+        ai_layout.addWidget(self._wiz_llm_base_url, ar, 1)
+
+        ar += 1
+        self._wiz_test_btn = QPushButton("Testa connessione")
+        self._wiz_test_btn.clicked.connect(self._wiz_test_llm)
+        ai_layout.addWidget(self._wiz_test_btn, ar, 0, 1, 2)
+
+        ar += 1
+        anon_note = QLabel(
+            "Il testo viene ANONIMIZZATO (nome paziente, codice fiscale e tutti "
+            "i dati identificativi vengono rimossi) prima dell'invio al servizio AI."
+        )
+        anon_note.setWordWrap(True)
+        anon_note.setStyleSheet(
+            "background-color: #fff8e1; border: 1px solid #ffe082; "
+            "border-radius: 4px; padding: 8px; color: #5d4037; font-size: 11px;"
+        )
+        ai_layout.addWidget(anon_note, ar, 0, 1, 2)
+
+        lay.addWidget(self._wiz_ai_group)
+
+        # ── Output directory ──
+        dir_group = QGroupBox("Output")
+        dir_layout = QGridLayout(dir_group)
+        dir_layout.setColumnStretch(1, 1)
+        dir_layout.addWidget(QLabel("Salva i testi in:"), 0, 0)
+        txt_row = QHBoxLayout()
+        self._wiz_text_dir = QLineEdit(self._env_val("TEXT_DIR"))
+        self._wiz_text_dir.setPlaceholderText("(opzionale)")
+        txt_row.addWidget(self._wiz_text_dir, 1)
+        btn_txt = QPushButton("...")
+        btn_txt.setFixedWidth(30)
+        btn_txt.setObjectName("browseBtn")
+        btn_txt.clicked.connect(
+            lambda: self._wiz_browse_dir(self._wiz_text_dir, "Seleziona directory testi")
+        )
+        txt_row.addWidget(btn_txt)
+        dir_layout.addLayout(txt_row, 0, 1)
+        lay.addWidget(dir_group)
+
+        # ── Visibility logic ──
+        def _update():
+            enabled = self._wiz_process_text.isChecked()
+            ai_mode = self._wiz_processing_mode.currentIndex() == 1
+            mode_group.setEnabled(enabled)
+            self._wiz_ai_group.setVisible(enabled and ai_mode)
+            dir_group.setEnabled(enabled)
+
+        self._wiz_process_text.toggled.connect(lambda: _update())
+        self._wiz_processing_mode.currentIndexChanged.connect(lambda: _update())
+        # Initial provider state
+        self._wiz_on_provider_changed(self._wiz_llm_provider.currentText())
+        _update()
+
+        lay.addStretch()
+        self._stack.addWidget(page)
+
+    def _wiz_on_provider_changed(self, label: str) -> None:
+        """Update wizard AI fields when provider changes."""
+        provider = self._wiz_label_to_provider.get(label, "")
+        # Show/hide base URL
+        is_custom = provider == "custom_url"
+        self._wiz_base_url_label.setVisible(is_custom)
+        self._wiz_llm_base_url.setVisible(is_custom)
+        # API key needed?
+        needs_key = provider != "claude_cli"
+        self._wiz_llm_api_key.setEnabled(needs_key)
+        if not needs_key:
+            self._wiz_llm_api_key.setPlaceholderText("(non necessaria)")
+        else:
+            self._wiz_llm_api_key.setPlaceholderText("Inserisci la tua API key")
+        # Update model suggestions
+        self._wiz_update_model_items(provider)
+
+    def _wiz_update_model_items(self, provider: str) -> None:
+        """Populate wizard model combo with suggestions for the provider."""
+        model_suggestions = {
+            "claude_api": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
+            "openai_api": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
+            "gemini_api": ["gemini-2.0-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+            "claude_cli": [],
+            "custom_url": [],
+        }
+        current = self._wiz_llm_model.currentText()
+        self._wiz_llm_model.clear()
+        suggestions = model_suggestions.get(provider, [])
+        if suggestions:
+            self._wiz_llm_model.addItems(suggestions)
+        if current and current not in suggestions:
+            self._wiz_llm_model.setCurrentText(current)
+        elif suggestions:
+            default = self._wiz_default_models.get(provider, "")
+            if default in suggestions:
+                self._wiz_llm_model.setCurrentText(default)
+
+    def _wiz_test_llm(self) -> None:
+        """Test LLM connection from the wizard."""
+        self._wiz_test_btn.setEnabled(False)
+        self._wiz_test_btn.setText("Test in corso...")
+        threading.Thread(target=self._wiz_test_llm_worker, daemon=True).start()
+
+    def _wiz_test_llm_worker(self) -> None:
+        try:
+            from text_processing.llm_analyzer import LLMAnalyzer, LLMConfig
+
+            provider_label = self._wiz_llm_provider.currentText()
+            provider = self._wiz_label_to_provider.get(provider_label, "")
+            api_key_raw = self._wiz_llm_api_key.text()
+            api_key = decrypt_password(api_key_raw) if api_key_raw.startswith("ENC:") else api_key_raw
+
+            config = LLMConfig(
+                provider=provider,
+                api_key=api_key,
+                model=self._wiz_llm_model.currentText(),
+                timeout=15,
+                base_url=self._wiz_llm_base_url.text().strip(),
+            )
+            analyzer = LLMAnalyzer(config)
+            ok = analyzer.is_available()
+            if ok:
+                self._sig_info.emit("Test AI", f"Connessione a {provider_label} riuscita!")
+            else:
+                self._sig_error.emit("Test AI", f"Connessione a {provider_label} fallita.\nVerifica API key e connessione internet.")
+        except Exception as e:
+            self._sig_error.emit("Test AI", f"Errore: {e}")
+        finally:
+            self._sig_call.emit(
+                lambda: (
+                    self._wiz_test_btn.setEnabled(True),
+                    self._wiz_test_btn.setText("Testa connessione"),
+                )
+            )
 
     def _build_step_params(self) -> None:
         page = QWidget()
@@ -1158,6 +1371,16 @@ class SetupWizard(QDialog):
         vals["MOVE_DIR"] = self._wiz_move_dir.text().strip()
         vals["PROCESS_TEXT"] = "true" if self._wiz_process_text.isChecked() else "false"
         vals["TEXT_DIR"] = self._wiz_text_dir.text().strip()
+        vals["PROCESSING_MODE"] = "ai" if self._wiz_processing_mode.currentIndex() == 1 else "local"
+        provider_label = self._wiz_llm_provider.currentText()
+        vals["LLM_PROVIDER"] = self._wiz_label_to_provider.get(provider_label, "")
+        raw_key = self._wiz_llm_api_key.text().strip()
+        if raw_key and not is_encrypted(raw_key):
+            vals["LLM_API_KEY"] = encrypt_password(raw_key)
+        else:
+            vals["LLM_API_KEY"] = raw_key
+        vals["LLM_MODEL"] = self._wiz_llm_model.currentText().strip()
+        vals["LLM_BASE_URL"] = self._wiz_llm_base_url.text().strip()
 
         selected_browser_label = self._wiz_browser_combo.currentText()
         vals["BROWSER_CHANNEL"] = self._wiz_browser_map.get(selected_browser_label, "msedge")
@@ -1195,6 +1418,9 @@ class SetupWizard(QDialog):
             "MOVE_DIR": "Sposta referti in",
             "PROCESS_TEXT": "Processa testo",
             "TEXT_DIR": "Directory testi",
+            "PROCESSING_MODE": "Modalita' processazione",
+            "LLM_PROVIDER": "Provider AI",
+            "LLM_MODEL": "Modello AI",
             "BROWSER_CHANNEL": "Browser",
             "PDF_READER": "Lettore PDF",
             "USE_EXISTING_BROWSER": "Usa browser CDP",
@@ -1209,10 +1435,16 @@ class SetupWizard(QDialog):
             val = vals.get(key, "")
             if key == "EMAIL_PASS":
                 val = "****" if val else "(vuota)"
+            elif key == "LLM_API_KEY":
+                continue  # Don't show API key in summary
             elif key == "BROWSER_CHANNEL":
                 val = self._wiz_browser_combo.currentText()
             elif key == "PDF_READER":
                 val = self._wiz_pdf_combo.currentText()
+            elif key == "PROCESSING_MODE":
+                val = "Con AI" if val == "ai" else "Senza AI (locale)"
+            elif key == "LLM_PROVIDER":
+                val = self._wiz_provider_labels.get(val, val) if val else "(nessuno)"
             elif key in bool_keys:
                 val = "Si'" if val.lower() == "true" else "No"
             elif not val:
@@ -2325,6 +2557,100 @@ class FSEApp(QMainWindow):
         self._fields["PROCESS_TEXT"] = spec["PROCESS_TEXT"][1]
 
         dr += 1
+        dl_layout.addWidget(QLabel("modalita':"), dr, 0)
+        self._processing_mode_combo = QComboBox()
+        self._processing_mode_combo.addItems(["Senza AI (locale)", "Con AI (richiede account LLM)"])
+        current_mode = spec.get("PROCESSING_MODE", ("", "local"))[1]
+        self._processing_mode_combo.setCurrentIndex(1 if current_mode == "ai" else 0)
+        self._processing_mode_combo.setToolTip("Senza AI: filtraggio regex locale.\nCon AI: testo anonimizzato inviato a un LLM per analisi strutturata.")
+        dl_layout.addWidget(self._processing_mode_combo, dr, 1, 1, 2)
+        self._fields["PROCESSING_MODE"] = current_mode
+
+        # ── AI settings sub-group ──
+        dr += 1
+        self._ai_group = QGroupBox("Impostazioni AI")
+        ai_layout = QGridLayout(self._ai_group)
+        ai_layout.setColumnStretch(1, 1)
+
+        ar = 0
+        ai_layout.addWidget(QLabel("Provider:"), ar, 0)
+        self._llm_provider_combo = QComboBox()
+        from text_processing.llm_analyzer import PROVIDER_LABELS, LABEL_TO_PROVIDER, DEFAULT_MODELS
+        self._llm_provider_labels = PROVIDER_LABELS
+        self._llm_label_to_provider = LABEL_TO_PROVIDER
+        self._llm_default_models = DEFAULT_MODELS
+        self._llm_provider_combo.addItems(list(PROVIDER_LABELS.values()))
+        saved_provider = spec.get("LLM_PROVIDER", ("", ""))[1]
+        if saved_provider in PROVIDER_LABELS:
+            self._llm_provider_combo.setCurrentText(PROVIDER_LABELS[saved_provider])
+        self._llm_provider_combo.currentTextChanged.connect(self._on_llm_provider_changed)
+        ai_layout.addWidget(self._llm_provider_combo, ar, 1)
+        self._fields["LLM_PROVIDER"] = saved_provider
+
+        ar += 1
+        ai_layout.addWidget(QLabel("API Key:"), ar, 0)
+        api_key_row = QHBoxLayout()
+        self._llm_api_key_entry = QLineEdit(spec.get("LLM_API_KEY", ("", ""))[1])
+        self._llm_api_key_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        self._llm_api_key_entry.setPlaceholderText("Inserisci la tua API key")
+        api_key_row.addWidget(self._llm_api_key_entry, 1)
+        self._llm_show_key_btn = QPushButton("Mostra")
+        self._llm_show_key_btn.setFixedWidth(60)
+        self._llm_show_key_btn.setCheckable(True)
+        self._llm_show_key_btn.toggled.connect(
+            lambda checked: self._llm_api_key_entry.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        api_key_row.addWidget(self._llm_show_key_btn)
+        ai_layout.addLayout(api_key_row, ar, 1)
+        self._fields["LLM_API_KEY"] = spec.get("LLM_API_KEY", ("", ""))[1]
+
+        ar += 1
+        ai_layout.addWidget(QLabel("Modello:"), ar, 0)
+        self._llm_model_combo = QComboBox()
+        self._llm_model_combo.setEditable(True)
+        self._llm_model_combo.setToolTip("Seleziona un modello predefinito o inserisci un nome personalizzato")
+        self._update_model_combo_items(saved_provider)
+        saved_model = spec.get("LLM_MODEL", ("", ""))[1]
+        if saved_model:
+            self._llm_model_combo.setCurrentText(saved_model)
+        ai_layout.addWidget(self._llm_model_combo, ar, 1)
+        self._fields["LLM_MODEL"] = saved_model
+
+        ar += 1
+        ai_layout.addWidget(QLabel("Timeout (sec):"), ar, 0)
+        self._llm_timeout_entry = QLineEdit(spec.get("LLM_TIMEOUT", ("", "120"))[1])
+        self._llm_timeout_entry.setFixedWidth(60)
+        ai_layout.addWidget(self._llm_timeout_entry, ar, 1)
+        self._fields["LLM_TIMEOUT"] = spec.get("LLM_TIMEOUT", ("", "120"))[1]
+
+        ar += 1
+        self._llm_base_url_label = QLabel("URL endpoint:")
+        ai_layout.addWidget(self._llm_base_url_label, ar, 0)
+        self._llm_base_url_entry = QLineEdit(spec.get("LLM_BASE_URL", ("", ""))[1])
+        self._llm_base_url_entry.setPlaceholderText("https://your-server.com")
+        self._llm_base_url_entry.setToolTip("URL base per endpoint OpenAI-compatibile (solo per 'Endpoint personalizzato')")
+        ai_layout.addWidget(self._llm_base_url_entry, ar, 1)
+        self._fields["LLM_BASE_URL"] = spec.get("LLM_BASE_URL", ("", ""))[1]
+
+        ar += 1
+        self._llm_test_btn = QPushButton("Testa connessione")
+        self._llm_test_btn.clicked.connect(self._test_llm_connection)
+        ai_layout.addWidget(self._llm_test_btn, ar, 0, 1, 2)
+
+        ar += 1
+        anon_warning = QLabel("Il testo viene ANONIMIZZATO (dati paziente rimossi) prima dell'invio al LLM.")
+        anon_warning.setWordWrap(True)
+        anon_warning.setStyleSheet("color: #d4a017; font-style: italic;")
+        ai_layout.addWidget(anon_warning, ar, 0, 1, 2)
+
+        dl_layout.addWidget(self._ai_group, dr, 0, 1, 3)
+
+        # Show/hide base_url based on provider
+        self._on_llm_provider_changed(self._llm_provider_combo.currentText())
+
+        dr += 1
         dl_layout.addWidget(QLabel("salva i testi in:"), dr, 0)
         txt_dir_row = QHBoxLayout()
         self._text_dir_entry = QLineEdit(spec["TEXT_DIR"][1])
@@ -2340,6 +2666,11 @@ class FSEApp(QMainWindow):
         txt_dir_row.addWidget(browse_txt_btn)
         dl_layout.addLayout(txt_dir_row, dr, 1, 1, 2)
         self._fields["TEXT_DIR"] = spec["TEXT_DIR"][1]
+
+        # Wire visibility: AI group shown only when mode is "Con AI" and process_text enabled
+        self._processing_mode_combo.currentIndexChanged.connect(self._update_ai_group_visibility)
+        self._process_text_cb.toggled.connect(self._update_ai_group_visibility)
+        self._update_ai_group_visibility()
 
         layout.addWidget(dl_group)
 
@@ -2996,6 +3327,91 @@ class FSEApp(QMainWindow):
         if path:
             self._text_dir_entry.setText(os.path.normpath(path))
 
+    # ---- AI / LLM settings helpers ----
+
+    def _update_ai_group_visibility(self) -> None:
+        """Show AI settings group only when process_text is on and mode is AI."""
+        ai_mode = self._processing_mode_combo.currentIndex() == 1
+        enabled = self._process_text_cb.isChecked()
+        self._processing_mode_combo.setEnabled(enabled)
+        self._ai_group.setVisible(enabled and ai_mode)
+        self._text_dir_entry.setEnabled(enabled)
+
+    def _on_llm_provider_changed(self, label: str) -> None:
+        """Update UI when the LLM provider selection changes."""
+        provider = self._llm_label_to_provider.get(label, "")
+        # Show/hide base URL (only for custom_url)
+        is_custom = provider == "custom_url"
+        self._llm_base_url_label.setVisible(is_custom)
+        self._llm_base_url_entry.setVisible(is_custom)
+        # Show/hide API key (not needed for claude_cli)
+        needs_key = provider != "claude_cli"
+        self._llm_api_key_entry.setEnabled(needs_key)
+        self._llm_show_key_btn.setEnabled(needs_key)
+        if not needs_key:
+            self._llm_api_key_entry.setPlaceholderText("(non necessaria)")
+        else:
+            self._llm_api_key_entry.setPlaceholderText("Inserisci la tua API key")
+        # Update model suggestions
+        self._update_model_combo_items(provider)
+
+    def _update_model_combo_items(self, provider: str) -> None:
+        """Populate model combo with suggestions for the given provider."""
+        model_suggestions = {
+            "claude_api": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
+            "openai_api": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
+            "gemini_api": ["gemini-2.0-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+            "claude_cli": [],
+            "custom_url": [],
+        }
+        current_text = self._llm_model_combo.currentText()
+        self._llm_model_combo.clear()
+        suggestions = model_suggestions.get(provider, [])
+        if suggestions:
+            self._llm_model_combo.addItems(suggestions)
+        # Restore previous text if it was custom, or set default
+        if current_text and current_text not in suggestions:
+            self._llm_model_combo.setCurrentText(current_text)
+        elif suggestions:
+            default = self._llm_default_models.get(provider, "")
+            if default in suggestions:
+                self._llm_model_combo.setCurrentText(default)
+
+    def _test_llm_connection(self) -> None:
+        """Test the LLM connection in a background thread."""
+        self._llm_test_btn.setEnabled(False)
+        self._llm_test_btn.setText("Test in corso...")
+        threading.Thread(target=self._test_llm_worker, daemon=True).start()
+
+    def _test_llm_worker(self) -> None:
+        try:
+            from text_processing.llm_analyzer import LLMAnalyzer, LLMConfig
+            from credential_manager import decrypt_password
+
+            provider_label = self._llm_provider_combo.currentText()
+            provider = self._llm_label_to_provider.get(provider_label, "")
+            api_key_raw = self._llm_api_key_entry.text()
+            api_key = decrypt_password(api_key_raw) if api_key_raw.startswith("ENC:") else api_key_raw
+
+            config = LLMConfig(
+                provider=provider,
+                api_key=api_key,
+                model=self._llm_model_combo.currentText(),
+                timeout=15,
+                base_url=self._llm_base_url_entry.text().strip(),
+            )
+            analyzer = LLMAnalyzer(config)
+            ok = analyzer.is_available()
+            if ok:
+                self._bridge.show_info.emit("Test AI", f"Connessione a {provider_label} riuscita!")
+            else:
+                self._bridge.show_error.emit("Test AI", f"Connessione a {provider_label} fallita.\nVerifica API key e connessione internet.")
+        except Exception as e:
+            self._bridge.show_error.emit("Test AI", f"Errore: {e}")
+        finally:
+            self._bridge.call_on_main.emit(lambda: self._llm_test_btn.setEnabled(True))
+            self._bridge.call_on_main.emit(lambda: self._llm_test_btn.setText("Testa connessione"))
+
     # ---- IMAP folder picker ----
 
     def _browse_imap_folders(self) -> None:
@@ -3118,6 +3534,13 @@ class FSEApp(QMainWindow):
         self._fields["MOVE_DIR"] = self._move_dir_entry.text()
         self._fields["PROCESS_TEXT"] = "true" if self._process_text_cb.isChecked() else "false"
         self._fields["TEXT_DIR"] = self._text_dir_entry.text()
+        self._fields["PROCESSING_MODE"] = "ai" if self._processing_mode_combo.currentIndex() == 1 else "local"
+        provider_label = self._llm_provider_combo.currentText()
+        self._fields["LLM_PROVIDER"] = self._llm_label_to_provider.get(provider_label, "")
+        self._fields["LLM_API_KEY"] = self._llm_api_key_entry.text()
+        self._fields["LLM_MODEL"] = self._llm_model_combo.currentText()
+        self._fields["LLM_TIMEOUT"] = self._llm_timeout_entry.text()
+        self._fields["LLM_BASE_URL"] = self._llm_base_url_entry.text()
         # BROWSER_CHANNEL and PDF_READER are already updated via combobox handlers
         # Sync fields from SISS tab widgets
         self._fields["MAX_EMAILS"] = self._max_email_entry.text()
@@ -3134,10 +3557,13 @@ class FSEApp(QMainWindow):
                 values[key] = "true" if val else "false"
             else:
                 values[key] = str(val)
-        # Encrypt password before saving to disk
+        # Encrypt passwords before saving to disk
         raw_pass = values.get("EMAIL_PASS", "")
         if raw_pass and not is_encrypted(raw_pass):
             values["EMAIL_PASS"] = encrypt_password(raw_pass)
+        raw_api_key = values.get("LLM_API_KEY", "")
+        if raw_api_key and not is_encrypted(raw_api_key):
+            values["LLM_API_KEY"] = encrypt_password(raw_api_key)
         return values
 
     # ---- Settings ----
@@ -3148,12 +3574,14 @@ class FSEApp(QMainWindow):
         for key, _, default, kind in SETTINGS_SPEC:
             val = env_vals.get(key, default)
 
-            # Decrypt EMAIL_PASS for in-memory / widget use
+            # Decrypt passwords for in-memory / widget use
             if key == "EMAIL_PASS":
                 raw_val = val
                 val = decrypt_password(val)
                 if raw_val and not is_encrypted(raw_val):
                     need_migration = True
+            elif key == "LLM_API_KEY":
+                val = decrypt_password(val)
 
             self._fields[key] = val
 
@@ -3192,6 +3620,23 @@ class FSEApp(QMainWindow):
                 self._process_text_cb.setChecked(val.lower() == "true")
             elif key == "TEXT_DIR":
                 self._text_dir_entry.setText(os.path.normpath(val) if val else "")
+            elif key == "PROCESSING_MODE":
+                self._processing_mode_combo.setCurrentIndex(1 if val == "ai" else 0)
+            elif key == "LLM_PROVIDER":
+                if val in self._llm_provider_labels:
+                    self._llm_provider_combo.setCurrentText(self._llm_provider_labels[val])
+            elif key == "LLM_API_KEY":
+                self._llm_api_key_entry.setText(val)
+            elif key == "LLM_MODEL":
+                if val:
+                    self._llm_model_combo.setCurrentText(val)
+            elif key == "LLM_TIMEOUT":
+                self._llm_timeout_entry.setText(val)
+            elif key == "LLM_BASE_URL":
+                self._llm_base_url_entry.setText(val)
+
+        # Apply initial states
+        self._update_ai_group_visibility()
 
         # Apply initial state for delete toggle
         self._on_delete_toggled(self._siss_delete_cb.isChecked())
@@ -3576,6 +4021,23 @@ class FSEApp(QMainWindow):
                     on_enti_found=on_enti_found,
                 )
 
+                # Initialize text processor
+                text_processor = None
+                if config.process_text and config.text_dir:
+                    from text_processing import TextProcessor, ProcessingMode, LLMConfig
+                    if config.processing_mode == "ai" and config.llm_provider:
+                        mode = ProcessingMode.AI_ASSISTED
+                        llm_cfg = LLMConfig(
+                            provider=config.llm_provider,
+                            api_key=config.llm_api_key,
+                            model=config.llm_model,
+                            timeout=config.llm_timeout,
+                            base_url=config.llm_base_url,
+                        )
+                        text_processor = TextProcessor(mode, llm_config=llm_cfg)
+                    else:
+                        text_processor = TextProcessor(ProcessingMode.LOCAL_ONLY)
+
                 downloaded = 0
                 skipped = 0
                 errors = 0
@@ -3587,13 +4049,31 @@ class FSEApp(QMainWindow):
                         errors += 1
                         continue
                     downloaded += 1
-                    file_manager.rename_download(
+                    renamed = file_manager.rename_download(
                         download_path=result.download_path,
                         patient_name=codice_fiscale,
                         codice_fiscale=codice_fiscale,
                         disciplina=result.disciplina,
                         fse_link=f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}",
                     )
+
+                    # Text processing
+                    if renamed and text_processor is not None:
+                        try:
+                            tp_result = text_processor.process(renamed)
+                            if tp_result.success:
+                                saved = TextProcessor.save_result(
+                                    tp_result, config.text_dir, renamed.stem,
+                                )
+                                if saved:
+                                    logger.info(f"Testo salvato: {saved.name}")
+                            else:
+                                logger.warning(
+                                    f"Estrazione testo fallita per {renamed.name}: "
+                                    f"{tp_result.error_message}"
+                                )
+                        except Exception as e:
+                            logger.warning(f"Errore processazione testo {renamed.name}: {e}")
 
                 logger.info("--- Riepilogo ---")
                 logger.info(f"Scaricati: {downloaded}")

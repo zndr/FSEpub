@@ -38,6 +38,14 @@ class Config:
     process_text: bool
     text_dir: Path | None
 
+    # LLM / AI text processing
+    processing_mode: str        # "ai", "local", "disabled"
+    llm_provider: str           # "claude_api", "openai_api", "gemini_api", "claude_cli", "custom_url"
+    llm_api_key: str
+    llm_model: str
+    llm_timeout: int            # seconds
+    llm_base_url: str           # for custom_url provider
+
     @classmethod
     def load(cls, env_path: str | None = None) -> "Config":
         env_file = Path(env_path) if env_path else paths.settings_file
@@ -77,6 +85,13 @@ class Config:
         text_dir_str = os.getenv("TEXT_DIR", "")
         text_dir = Path(text_dir_str) if text_dir_str else None
 
+        processing_mode = os.getenv("PROCESSING_MODE", "local")
+        llm_provider = os.getenv("LLM_PROVIDER", "")
+        llm_api_key = decrypt_password(os.getenv("LLM_API_KEY", ""))
+        llm_model = os.getenv("LLM_MODEL", "")
+        llm_timeout = int(os.getenv("LLM_TIMEOUT", "120"))
+        llm_base_url = os.getenv("LLM_BASE_URL", "")
+
         config = cls(
             email_user=email_user,
             email_pass=email_pass,
@@ -100,6 +115,12 @@ class Config:
             move_dir=move_dir,
             process_text=process_text,
             text_dir=text_dir,
+            processing_mode=processing_mode,
+            llm_provider=llm_provider,
+            llm_api_key=llm_api_key,
+            llm_model=llm_model,
+            llm_timeout=llm_timeout,
+            llm_base_url=llm_base_url,
         )
         config._create_directories()
         return config

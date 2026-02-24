@@ -21,6 +21,7 @@ from logger_module import ProcessingLogger
 from email_client import EmailClient
 from browser_automation import FSEBrowser
 from file_manager import FileManager
+from text_processing import TextProcessor, ProcessingMode, LLMConfig
 
 
 def run_processing(config: Config, logger: ProcessingLogger, stop_event: threading.Event | None = None,
@@ -64,6 +65,25 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
         email_client.disconnect()
         logger.info("Processamento interrotto dall'utente")
         return
+
+    # Initialize text processor
+    text_processor = None
+    if config.process_text and config.text_dir:
+        mode_str = config.processing_mode
+        if mode_str == "ai" and config.llm_provider:
+            mode = ProcessingMode.AI_ASSISTED
+            llm_config = LLMConfig(
+                provider=config.llm_provider,
+                api_key=config.llm_api_key,
+                model=config.llm_model,
+                timeout=config.llm_timeout,
+                base_url=config.llm_base_url,
+            )
+            text_processor = TextProcessor(mode, llm_config=llm_config)
+        else:
+            mode = ProcessingMode.LOCAL_ONLY
+            text_processor = TextProcessor(mode)
+        logger.info(f"Processazione testo attiva (modalita': {mode.value})")
 
     # Start browser and perform manual login
     file_manager = FileManager(config, logger)
@@ -118,6 +138,24 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
                 if renamed:
                     logger.documents_renamed += 1
                     session_pdfs.append(str(renamed))
+
+                    # Text processing
+                    if text_processor is not None:
+                        try:
+                            tp_result = text_processor.process(renamed)
+                            if tp_result.success:
+                                saved = TextProcessor.save_result(
+                                    tp_result, config.text_dir, renamed.stem,
+                                )
+                                if saved:
+                                    logger.info(f"Testo salvato: {saved.name}")
+                            else:
+                                logger.warning(
+                                    f"Estrazione testo fallita per {renamed.name}: "
+                                    f"{tp_result.error_message}"
+                                )
+                        except Exception as e:
+                            logger.warning(f"Errore processazione testo {renamed.name}: {e}")
 
             # Post-download actions (only if all documents processed successfully)
             if all_ok:
