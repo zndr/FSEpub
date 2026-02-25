@@ -27,6 +27,7 @@ DEFAULT_MODELS: dict[str, str] = {
     "claude_api": "claude-sonnet-4-6",
     "openai_api": "gpt-4o",
     "gemini_api": "gemini-2.0-flash",
+    "mistral_api": "mistral-large-latest",
     "claude_cli": "",
     "custom_url": "",
 }
@@ -36,6 +37,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "claude_api": "Claude (Anthropic)",
     "openai_api": "ChatGPT (OpenAI)",
     "gemini_api": "Gemini (Google)",
+    "mistral_api": "Mistral",
     "claude_cli": "Claude CLI (locale)",
     "custom_url": "Endpoint personalizzato",
 }
@@ -48,7 +50,7 @@ LABEL_TO_PROVIDER: dict[str, str] = {v: k for k, v in PROVIDER_LABELS.items()}
 class LLMConfig:
     """Configuration for an LLM provider."""
 
-    provider: str = ""          # claude_api, openai_api, gemini_api, claude_cli, custom_url
+    provider: str = ""          # claude_api, openai_api, gemini_api, mistral_api, claude_cli, custom_url
     api_key: str = ""           # Decrypted API key
     model: str = ""             # Model identifier
     timeout: int = 120          # Seconds
@@ -150,6 +152,8 @@ class LLMAnalyzer:
                 return self._call_openai_api(anonymized_text)
             elif provider == "gemini_api":
                 return self._call_gemini_api(anonymized_text)
+            elif provider == "mistral_api":
+                return self._call_mistral_api(anonymized_text)
             elif provider == "claude_cli":
                 return self._call_claude_cli(anonymized_text)
             elif provider == "custom_url":
@@ -175,6 +179,8 @@ class LLMAnalyzer:
                 return self._test_openai_api()
             elif provider == "gemini_api":
                 return self._test_gemini_api()
+            elif provider == "mistral_api":
+                return self._test_mistral_api()
             elif provider == "claude_cli":
                 return self._test_claude_cli()
             elif provider == "custom_url":
@@ -354,6 +360,48 @@ class LLMAnalyzer:
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
+
+    # ------------------------------------------------------------------
+    # Mistral API
+    # ------------------------------------------------------------------
+
+    def _call_mistral_api(self, text: str) -> str:
+        model = self.config.model or DEFAULT_MODELS["mistral_api"]
+        resp = httpx.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 8192,
+                "messages": [
+                    {"role": "system", "content": "Sei un assistente medico specializzato."},
+                    {"role": "user", "content": MEDICAL_PROMPT + text},
+                ],
+            },
+            timeout=self.config.timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return _extract_text_from_openai(data)
+
+    def _test_mistral_api(self) -> bool:
+        resp = httpx.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.config.model or DEFAULT_MODELS["mistral_api"],
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "Rispondi solo OK."}],
+            },
+            timeout=15,
+        )
+        return resp.status_code == 200
 
     # ------------------------------------------------------------------
     # Custom OpenAI-compatible endpoint

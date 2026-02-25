@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QStackedWidget,
     QTabWidget,
@@ -1192,6 +1193,7 @@ class SetupWizard(QDialog):
             "claude_api": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
             "openai_api": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
             "gemini_api": ["gemini-2.0-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+            "mistral_api": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
             "claude_cli": [],
             "custom_url": [],
         }
@@ -1747,6 +1749,13 @@ class FSEApp(QMainWindow):
         act_exit = QAction("Esci", self)
         act_exit.triggered.connect(self.close)
         file_menu.addAction(act_exit)
+
+        # Tools menu
+        tools_menu = menu_bar.addMenu("Strumenti")
+
+        act_interpret = QAction("Interpreta referto", self)
+        act_interpret.triggered.connect(self._open_interpreter)
+        tools_menu.addAction(act_interpret)
 
         # Help menu
         help_menu = menu_bar.addMenu("Aiuto")
@@ -2373,9 +2382,32 @@ class FSEApp(QMainWindow):
             self._ente_combo.setCurrentIndex(idx)
 
     def _build_settings_tab(self, parent: QWidget) -> None:
-        """Build the Settings tab content with grouped QGroupBoxes."""
+        """Build the Settings tab with nested sub-tabs: Parametri + Processazione Testi."""
         spec = {key: (label, default, kind) for key, label, default, kind in SETTINGS_SPEC}
 
+        layout = QVBoxLayout(parent)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Nested sub-tabs within Impostazioni
+        self._settings_tabs = QTabWidget()
+
+        params_page = QWidget()
+        self._build_settings_params(params_page, spec)
+        self._settings_tabs.addTab(params_page, "Parametri")
+
+        text_page = QWidget()
+        self._build_settings_text_processing(text_page, spec)
+        self._settings_tabs.addTab(text_page, "Processazione Testi")
+
+        layout.addWidget(self._settings_tabs)
+
+        # Shared save button
+        save_btn = QPushButton("Salva Impostazioni")
+        save_btn.clicked.connect(self._save_settings)
+        layout.addWidget(save_btn)
+
+    def _build_settings_params(self, parent: QWidget, spec: dict) -> None:
+        """Build the Parametri sub-tab: mail server, browser, general parameters."""
         layout = QVBoxLayout(parent)
         layout.setContentsMargins(8, 8, 8, 8)
 
@@ -2401,7 +2433,6 @@ class FSEApp(QMainWindow):
                 entry.setEchoMode(QLineEdit.EchoMode.Password)
                 entry.setReadOnly(True)
                 entry.setToolTip("Usa il pulsante 'Cambia...' per modificare la password")
-                # Password row: entry + "Cambia..." button
                 pass_row = QHBoxLayout()
                 pass_row.addWidget(entry)
                 btn_change_pass = QPushButton("Cambia...")
@@ -2424,18 +2455,15 @@ class FSEApp(QMainWindow):
             self._settings_entries[key] = entry
             self._fields[key] = default
 
-        # Test connection + Reset default buttons
         mail_btn_row = QHBoxLayout()
         self._btn_test_imap = QPushButton("Test connessione")
         self._btn_test_imap.clicked.connect(self._test_imap_connection)
         self._btn_test_imap.setToolTip("Verifica connessione e login al server di posta")
         mail_btn_row.addWidget(self._btn_test_imap)
-
         btn_reset_imap = QPushButton("Ripristina default")
         btn_reset_imap.setToolTip("Ripristina host e porta IMAP ai valori predefiniti")
         btn_reset_imap.clicked.connect(self._reset_imap_defaults)
         mail_btn_row.addWidget(btn_reset_imap)
-
         mail_layout.addLayout(mail_btn_row, len(["EMAIL_USER", "EMAIL_PASS", "IMAP_HOST", "IMAP_PORT", "IMAP_FOLDER"]), 0, 1, 2)
 
         top_layout.addWidget(mail_group)
@@ -2471,7 +2499,6 @@ class FSEApp(QMainWindow):
         br_layout.addWidget(self._open_after_cb, r, 2)
         self._fields["OPEN_AFTER_DOWNLOAD"] = "true"
 
-        # CDP port: hidden field for code compatibility
         self._fields["CDP_PORT"] = spec["CDP_PORT"][1]
 
         r += 1
@@ -2485,7 +2512,6 @@ class FSEApp(QMainWindow):
         self._cdp_registry_cb.toggled.connect(self._on_cdp_registry_toggled)
         br_layout.addWidget(self._cdp_registry_cb, r, 0, 1, 2)
         self._sync_cdp_registry_checkbox()
-        # Auto-enable CDP in registry if browser supports it and not yet enabled
         if (
             self._cdp_registry_cb.isEnabled()
             and not self._cdp_registry_cb.isChecked()
@@ -2505,13 +2531,56 @@ class FSEApp(QMainWindow):
         top_layout.addWidget(br_group)
         layout.addLayout(top_layout)
 
-        # ── Download e processazione dei referti ──
-        dl_group = QGroupBox("Download e processazione dei referti")
-        dl_layout = QGridLayout(dl_group)
-        dl_layout.setColumnStretch(1, 1)
+        # ── Parametri ──
+        params_group = QGroupBox("Parametri")
+        params_layout = QVBoxLayout(params_group)
+        params_row0 = QHBoxLayout()
 
-        dr = 0
-        dl_layout.addWidget(QLabel("salva referti in:"), dr, 0)
+        params_row0.addWidget(QLabel("Download timeout (sec)"))
+        self._dl_timeout_entry = QLineEdit(spec["DOWNLOAD_TIMEOUT"][1])
+        self._dl_timeout_entry.setFixedWidth(60)
+        self._dl_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il download di un documento")
+        params_row0.addWidget(self._dl_timeout_entry)
+        self._fields["DOWNLOAD_TIMEOUT"] = spec["DOWNLOAD_TIMEOUT"][1]
+
+        params_row0.addStretch()
+
+        params_row0.addWidget(QLabel("Page timeout (sec)"))
+        self._pg_timeout_entry = QLineEdit(spec["PAGE_TIMEOUT"][1])
+        self._pg_timeout_entry.setFixedWidth(60)
+        self._pg_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il caricamento di una pagina")
+        params_row0.addWidget(self._pg_timeout_entry)
+        self._fields["PAGE_TIMEOUT"] = spec["PAGE_TIMEOUT"][1]
+
+        params_row0.addStretch()
+
+        params_row0.addWidget(QLabel("Dim. carattere console"))
+        self._font_size_entry = QLineEdit(spec["CONSOLE_FONT_SIZE"][1])
+        self._font_size_entry.setFixedWidth(60)
+        params_row0.addWidget(self._font_size_entry)
+        self._fields["CONSOLE_FONT_SIZE"] = spec["CONSOLE_FONT_SIZE"][1]
+
+        params_layout.addLayout(params_row0)
+
+        self._fields["MAX_EMAILS"] = spec["MAX_EMAILS"][1]
+        self._fields["MARK_AS_READ"] = spec["MARK_AS_READ"][1]
+        self._fields["DELETE_AFTER_PROCESSING"] = spec["DELETE_AFTER_PROCESSING"][1]
+
+        layout.addWidget(params_group)
+        layout.addStretch()
+
+    def _build_settings_text_processing(self, parent: QWidget, spec: dict) -> None:
+        """Build the Processazione Testi sub-tab: folders, processing mode, AI settings."""
+        layout = QVBoxLayout(parent)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # ── Cartelle ──
+        cartelle_group = QGroupBox("Cartelle")
+        cg = QGridLayout(cartelle_group)
+        cg.setColumnStretch(1, 1)
+
+        cr = 0
+        cg.addWidget(QLabel("salva in:"), cr, 0)
         dl_dir_row = QHBoxLayout()
         self._download_dir_entry = QLineEdit(spec["DOWNLOAD_DIR"][1])
         self._download_dir_entry.setToolTip(spec["DOWNLOAD_DIR"][1])
@@ -2524,16 +2593,16 @@ class FSEApp(QMainWindow):
         browse_dl_btn.setObjectName("browseBtn")
         browse_dl_btn.clicked.connect(self._browse_download_dir)
         dl_dir_row.addWidget(browse_dl_btn)
-        dl_layout.addLayout(dl_dir_row, dr, 1, 1, 2)
+        cg.addLayout(dl_dir_row, cr, 1, 1, 2)
         self._fields["DOWNLOAD_DIR"] = spec["DOWNLOAD_DIR"][1]
 
-        dr += 1
+        cr += 1
         after_label = QLabel("dopo il download:")
         after_label.setStyleSheet("font-weight: bold;")
-        dl_layout.addWidget(after_label, dr, 0, 1, 3)
+        cg.addWidget(after_label, cr, 0, 1, 3)
 
-        dr += 1
-        dl_layout.addWidget(QLabel("sposta referti in:"), dr, 0)
+        cr += 1
+        cg.addWidget(QLabel("sposta in:"), cr, 0)
         mv_dir_row = QHBoxLayout()
         self._move_dir_entry = QLineEdit(spec["MOVE_DIR"][1])
         self._move_dir_entry.setToolTip("Dopo il download, sposta i referti in questa cartella (lascia vuoto per non spostare)")
@@ -2546,39 +2615,58 @@ class FSEApp(QMainWindow):
         browse_mv_btn.setObjectName("browseBtn")
         browse_mv_btn.clicked.connect(self._browse_move_dir)
         mv_dir_row.addWidget(browse_mv_btn)
-        dl_layout.addLayout(mv_dir_row, dr, 1, 1, 2)
+        cg.addLayout(mv_dir_row, cr, 1, 1, 2)
         self._fields["MOVE_DIR"] = spec["MOVE_DIR"][1]
 
-        dr += 1
-        self._process_text_cb = QCheckBox("processa il testo del referto")
-        self._process_text_cb.setChecked(spec["PROCESS_TEXT"][1].lower() == "true")
-        self._process_text_cb.setToolTip("Estrai il testo dai PDF scaricati")
-        dl_layout.addWidget(self._process_text_cb, dr, 0, 1, 3)
-        self._fields["PROCESS_TEXT"] = spec["PROCESS_TEXT"][1]
+        layout.addWidget(cartelle_group)
 
-        dr += 1
-        dl_layout.addWidget(QLabel("modalita':"), dr, 0)
-        self._processing_mode_combo = QComboBox()
-        self._processing_mode_combo.addItems(["Senza AI (locale)", "Con AI (richiede account LLM)"])
+        # ── Processazione del testo ──
+        processing_group = QGroupBox("Processazione del testo")
+        pg = QVBoxLayout(processing_group)
+
+        # Mode radio buttons (in own QWidget for auto-exclusive grouping)
+        mode_widget = QWidget()
+        mode_row = QHBoxLayout(mode_widget)
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        self._mode_radio_local = QRadioButton("Solo estrazione")
+        self._mode_radio_ai = QRadioButton("Estrazione e analisi con A.I.")
         current_mode = spec.get("PROCESSING_MODE", ("", "local"))[1]
-        self._processing_mode_combo.setCurrentIndex(1 if current_mode == "ai" else 0)
-        self._processing_mode_combo.setToolTip("Senza AI: filtraggio regex locale.\nCon AI: testo anonimizzato inviato a un LLM per analisi strutturata.")
-        dl_layout.addWidget(self._processing_mode_combo, dr, 1, 1, 2)
+        if current_mode == "ai":
+            self._mode_radio_ai.setChecked(True)
+        else:
+            self._mode_radio_local.setChecked(True)
         self._fields["PROCESSING_MODE"] = current_mode
+        self._fields["PROCESS_TEXT"] = "true"
+        mode_row.addWidget(self._mode_radio_local)
+        mode_row.addWidget(self._mode_radio_ai)
+        mode_row.addStretch()
+        pg.addWidget(mode_widget)
 
-        # ── AI settings sub-group ──
-        dr += 1
-        self._ai_group = QGroupBox("Impostazioni AI")
+        # Scope radio buttons (in own QWidget for auto-exclusive grouping)
+        scope_widget = QWidget()
+        scope_row = QHBoxLayout(scope_widget)
+        scope_row.setContentsMargins(0, 0, 0, 0)
+        self._scope_radio_all = QRadioButton("Tutti i referti scaricati")
+        self._scope_radio_choose = QRadioButton("Scegli referti")
+        self._scope_radio_all.setChecked(True)
+        scope_row.addWidget(self._scope_radio_all)
+        scope_row.addWidget(self._scope_radio_choose)
+        scope_row.addStretch()
+        pg.addWidget(scope_widget)
+
+        # ── Impostazioni A.I. sub-group ──
+        self._ai_group = QGroupBox("Impostazioni A.I.")
         ai_layout = QGridLayout(self._ai_group)
         ai_layout.setColumnStretch(1, 1)
 
-        ar = 0
-        ai_layout.addWidget(QLabel("Provider:"), ar, 0)
-        self._llm_provider_combo = QComboBox()
         from text_processing.llm_analyzer import PROVIDER_LABELS, LABEL_TO_PROVIDER, DEFAULT_MODELS
         self._llm_provider_labels = PROVIDER_LABELS
         self._llm_label_to_provider = LABEL_TO_PROVIDER
         self._llm_default_models = DEFAULT_MODELS
+
+        ar = 0
+        ai_layout.addWidget(QLabel("Provider:"), ar, 0)
+        self._llm_provider_combo = QComboBox()
         self._llm_provider_combo.addItems(list(PROVIDER_LABELS.values()))
         saved_provider = spec.get("LLM_PROVIDER", ("", ""))[1]
         if saved_provider in PROVIDER_LABELS:
@@ -2619,13 +2707,6 @@ class FSEApp(QMainWindow):
         self._fields["LLM_MODEL"] = saved_model
 
         ar += 1
-        ai_layout.addWidget(QLabel("Timeout (sec):"), ar, 0)
-        self._llm_timeout_entry = QLineEdit(spec.get("LLM_TIMEOUT", ("", "120"))[1])
-        self._llm_timeout_entry.setFixedWidth(60)
-        ai_layout.addWidget(self._llm_timeout_entry, ar, 1)
-        self._fields["LLM_TIMEOUT"] = spec.get("LLM_TIMEOUT", ("", "120"))[1]
-
-        ar += 1
         self._llm_base_url_label = QLabel("URL endpoint:")
         ai_layout.addWidget(self._llm_base_url_label, ar, 0)
         self._llm_base_url_entry = QLineEdit(spec.get("LLM_BASE_URL", ("", ""))[1])
@@ -2635,23 +2716,31 @@ class FSEApp(QMainWindow):
         self._fields["LLM_BASE_URL"] = spec.get("LLM_BASE_URL", ("", ""))[1]
 
         ar += 1
+        timeout_row = QHBoxLayout()
+        timeout_row.addWidget(QLabel("Timeout (sec):"))
+        self._llm_timeout_entry = QLineEdit(spec.get("LLM_TIMEOUT", ("", "120"))[1])
+        self._llm_timeout_entry.setFixedWidth(60)
+        timeout_row.addWidget(self._llm_timeout_entry)
+        self._fields["LLM_TIMEOUT"] = spec.get("LLM_TIMEOUT", ("", "120"))[1]
         self._llm_test_btn = QPushButton("Testa connessione")
         self._llm_test_btn.clicked.connect(self._test_llm_connection)
-        ai_layout.addWidget(self._llm_test_btn, ar, 0, 1, 2)
+        timeout_row.addWidget(self._llm_test_btn)
+        timeout_row.addStretch()
+        ai_layout.addLayout(timeout_row, ar, 0, 1, 2)
 
-        ar += 1
-        anon_warning = QLabel("Il testo viene ANONIMIZZATO (dati paziente rimossi) prima dell'invio al LLM.")
-        anon_warning.setWordWrap(True)
-        anon_warning.setStyleSheet("color: #d4a017; font-style: italic;")
-        ai_layout.addWidget(anon_warning, ar, 0, 1, 2)
+        pg.addWidget(self._ai_group)
 
-        dl_layout.addWidget(self._ai_group, dr, 0, 1, 3)
-
-        # Show/hide base_url based on provider
+        # Wire visibility: AI group shown only when AI mode radio is selected
+        self._mode_radio_ai.toggled.connect(self._update_ai_group_visibility)
+        self._scope_radio_choose.toggled.connect(self._on_scope_choose)
         self._on_llm_provider_changed(self._llm_provider_combo.currentText())
+        self._update_ai_group_visibility()
 
-        dr += 1
-        dl_layout.addWidget(QLabel("salva i testi in:"), dr, 0)
+        # Save extracted texts directory
+        txt_group = QGroupBox("Salvataggio testi estratti")
+        tg = QGridLayout(txt_group)
+        tg.setColumnStretch(1, 1)
+        tg.addWidget(QLabel("salva testi in:"), 0, 0)
         txt_dir_row = QHBoxLayout()
         self._text_dir_entry = QLineEdit(spec["TEXT_DIR"][1])
         self._text_dir_entry.setToolTip("Cartella dove salvare i testi estratti dai referti (lascia vuoto per non salvare)")
@@ -2664,60 +2753,11 @@ class FSEApp(QMainWindow):
         browse_txt_btn.setObjectName("browseBtn")
         browse_txt_btn.clicked.connect(self._browse_text_dir)
         txt_dir_row.addWidget(browse_txt_btn)
-        dl_layout.addLayout(txt_dir_row, dr, 1, 1, 2)
+        tg.addLayout(txt_dir_row, 0, 1, 1, 2)
         self._fields["TEXT_DIR"] = spec["TEXT_DIR"][1]
 
-        # Wire visibility: AI group shown only when mode is "Con AI" and process_text enabled
-        self._processing_mode_combo.currentIndexChanged.connect(self._update_ai_group_visibility)
-        self._process_text_cb.toggled.connect(self._update_ai_group_visibility)
-        self._update_ai_group_visibility()
-
-        layout.addWidget(dl_group)
-
-        # ── Bottom (full-width): Parametri ──
-        params_group = QGroupBox("Parametri")
-        params_layout = QVBoxLayout(params_group)
-
-        # Row 0: timeouts
-        params_row0 = QHBoxLayout()
-
-        params_row0.addWidget(QLabel("Download timeout (sec)"))
-        self._dl_timeout_entry = QLineEdit(spec["DOWNLOAD_TIMEOUT"][1])
-        self._dl_timeout_entry.setFixedWidth(60)
-        self._dl_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il download di un documento")
-        params_row0.addWidget(self._dl_timeout_entry)
-        self._fields["DOWNLOAD_TIMEOUT"] = spec["DOWNLOAD_TIMEOUT"][1]
-
-        params_row0.addStretch()
-
-        params_row0.addWidget(QLabel("Page timeout (sec)"))
-        self._pg_timeout_entry = QLineEdit(spec["PAGE_TIMEOUT"][1])
-        self._pg_timeout_entry.setFixedWidth(60)
-        self._pg_timeout_entry.setToolTip("Tempo massimo di attesa (in secondi) per il caricamento di una pagina")
-        params_row0.addWidget(self._pg_timeout_entry)
-        self._fields["PAGE_TIMEOUT"] = spec["PAGE_TIMEOUT"][1]
-
-        params_row0.addStretch()
-
-        params_row0.addWidget(QLabel("Dim. carattere console"))
-        self._font_size_entry = QLineEdit(spec["CONSOLE_FONT_SIZE"][1])
-        self._font_size_entry.setFixedWidth(60)
-        params_row0.addWidget(self._font_size_entry)
-        self._fields["CONSOLE_FONT_SIZE"] = spec["CONSOLE_FONT_SIZE"][1]
-
-        params_layout.addLayout(params_row0)
-
-        # Fields for settings persistence displayed in SISS tab
-        self._fields["MAX_EMAILS"] = spec["MAX_EMAILS"][1]
-        self._fields["MARK_AS_READ"] = spec["MARK_AS_READ"][1]
-        self._fields["DELETE_AFTER_PROCESSING"] = spec["DELETE_AFTER_PROCESSING"][1]
-
-        # Save button
-        save_btn = QPushButton("Salva Impostazioni")
-        save_btn.clicked.connect(self._save_settings)
-        params_layout.addWidget(save_btn)
-
-        layout.addWidget(params_group)
+        layout.addWidget(processing_group)
+        layout.addWidget(txt_group)
         layout.addStretch()
 
     def _build_pdf_reader_row(self, parent_layout: QGridLayout, row: int, key: str, default: str) -> None:
@@ -2954,6 +2994,82 @@ class FSEApp(QMainWindow):
             self._set_pdf_combo_from_value(self._fields.get("PDF_READER", PDF_READER_DEFAULT))
 
     # ---- Helpers ----
+
+    def _open_interpreter(self) -> None:
+        """Open the report interpreter dialog with current LLM settings."""
+        from report_interpreter import ReportInterpreterDialog
+        from text_processing.llm_analyzer import LLMConfig
+
+        # Read current LLM settings from widgets
+        provider_label = self._llm_provider_combo.currentText()
+        provider = self._llm_label_to_provider.get(provider_label, "")
+        api_key_raw = self._llm_api_key_entry.text()
+        api_key = decrypt_password(api_key_raw) if api_key_raw.startswith("ENC:") else api_key_raw
+
+        config = LLMConfig(
+            provider=provider,
+            api_key=api_key,
+            model=self._llm_model_combo.currentText(),
+            timeout=int(self._llm_timeout_entry.text() or "120"),
+            base_url=self._llm_base_url_entry.text().strip(),
+        )
+
+        dlg = ReportInterpreterDialog(self, llm_config=config)
+        dlg.exec()
+
+    def _on_scope_choose(self, checked: bool) -> None:
+        """Handle 'Scegli referti' radio button toggle."""
+        if not checked:
+            return
+
+        from report_interpreter import ReportPickerDialog
+        from text_processing.llm_analyzer import LLMConfig
+
+        # Validate AI mode is active
+        if not self._mode_radio_ai.isChecked():
+            QMessageBox.information(
+                self, "Modalità A.I. richiesta",
+                "Per analizzare singoli referti, attiva prima la modalità "
+                "'Estrazione e analisi con A.I.'.",
+            )
+            self._scope_radio_all.setChecked(True)
+            return
+
+        # Build LLM config from current widget values
+        provider_label = self._llm_provider_combo.currentText()
+        provider = self._llm_label_to_provider.get(provider_label, "")
+        api_key_raw = self._llm_api_key_entry.text()
+        api_key = decrypt_password(api_key_raw) if api_key_raw.startswith("ENC:") else api_key_raw
+
+        if not provider:
+            QMessageBox.warning(
+                self, "Provider mancante",
+                "Seleziona un provider AI prima di procedere.",
+            )
+            self._scope_radio_all.setChecked(True)
+            return
+
+        config = LLMConfig(
+            provider=provider,
+            api_key=api_key,
+            model=self._llm_model_combo.currentText().strip(),
+            timeout=int(self._llm_timeout_entry.text() or "120"),
+            base_url=self._llm_base_url_entry.text().strip(),
+        )
+
+        download_dir = self._download_dir_entry.text() or str(paths.default_download_dir)
+        text_dir = self._text_dir_entry.text()
+
+        dlg = ReportPickerDialog(
+            self,
+            download_dir=download_dir,
+            text_dir=text_dir,
+            llm_config=config,
+        )
+        dlg.exec()
+
+        # Revert to "Tutti i referti" after dialog closes
+        self._scope_radio_all.setChecked(True)
 
     def _open_guide(self) -> None:
         """Open the user guide HTML file in the default browser."""
@@ -3330,12 +3446,8 @@ class FSEApp(QMainWindow):
     # ---- AI / LLM settings helpers ----
 
     def _update_ai_group_visibility(self) -> None:
-        """Show AI settings group only when process_text is on and mode is AI."""
-        ai_mode = self._processing_mode_combo.currentIndex() == 1
-        enabled = self._process_text_cb.isChecked()
-        self._processing_mode_combo.setEnabled(enabled)
-        self._ai_group.setVisible(enabled and ai_mode)
-        self._text_dir_entry.setEnabled(enabled)
+        """Show AI settings group only when AI mode radio is selected."""
+        self._ai_group.setVisible(self._mode_radio_ai.isChecked())
 
     def _on_llm_provider_changed(self, label: str) -> None:
         """Update UI when the LLM provider selection changes."""
@@ -3361,6 +3473,7 @@ class FSEApp(QMainWindow):
             "claude_api": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
             "openai_api": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
             "gemini_api": ["gemini-2.0-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+            "mistral_api": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
             "claude_cli": [],
             "custom_url": [],
         }
@@ -3532,9 +3645,9 @@ class FSEApp(QMainWindow):
         self._fields["USE_EXISTING_BROWSER"] = "true" if self._cdp_cb.isChecked() else "false"
         self._fields["OPEN_AFTER_DOWNLOAD"] = "true" if self._open_after_cb.isChecked() else "false"
         self._fields["MOVE_DIR"] = self._move_dir_entry.text()
-        self._fields["PROCESS_TEXT"] = "true" if self._process_text_cb.isChecked() else "false"
+        self._fields["PROCESS_TEXT"] = "true"
         self._fields["TEXT_DIR"] = self._text_dir_entry.text()
-        self._fields["PROCESSING_MODE"] = "ai" if self._processing_mode_combo.currentIndex() == 1 else "local"
+        self._fields["PROCESSING_MODE"] = "ai" if self._mode_radio_ai.isChecked() else "local"
         provider_label = self._llm_provider_combo.currentText()
         self._fields["LLM_PROVIDER"] = self._llm_label_to_provider.get(provider_label, "")
         self._fields["LLM_API_KEY"] = self._llm_api_key_entry.text()
@@ -3617,11 +3730,14 @@ class FSEApp(QMainWindow):
             elif key == "MOVE_DIR":
                 self._move_dir_entry.setText(os.path.normpath(val) if val else "")
             elif key == "PROCESS_TEXT":
-                self._process_text_cb.setChecked(val.lower() == "true")
+                pass  # Always true in new UI
             elif key == "TEXT_DIR":
                 self._text_dir_entry.setText(os.path.normpath(val) if val else "")
             elif key == "PROCESSING_MODE":
-                self._processing_mode_combo.setCurrentIndex(1 if val == "ai" else 0)
+                if val == "ai":
+                    self._mode_radio_ai.setChecked(True)
+                else:
+                    self._mode_radio_local.setChecked(True)
             elif key == "LLM_PROVIDER":
                 if val in self._llm_provider_labels:
                     self._llm_provider_combo.setCurrentText(self._llm_provider_labels[val])
