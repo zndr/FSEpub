@@ -84,6 +84,9 @@ _COMMON_FOOTER = [
     r"consultare\s+il\s+proprio\s+medico\s+di\s+fiducia",
     r"interpretare\s+i\s+risultati",
     r"Si\s+suggerisce\s+di\s+consultare",
+    r"copia\s+dell.originale\s+informatico",
+    r"Data\s+e\s+ora\s+firma:",
+    r"^Sanitario\s+Elettronico",
 ]
 
 
@@ -485,12 +488,14 @@ def _create_spec_asst() -> ReportProfile:
             r"e-mail:",
             # Medico refertante con CF (footer)
             r"[A-Z]+\s+[A-Z]+\s+\([A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\)",
+            # "PASQUINO DOTT.SSA BERNADETTA" (medico firmante all-caps)
+            r"^[A-Z]+\s+DOTT\.(?:SSA)?\s+[A-Z]+",
             *_COMMON_PII,
             *_COMMON_FOOTER,
         ],
         keep_patterns=[
             r"Egregio\s+Collega",
-            r"Referto",
+            r"^Referto\b",
             r"Diagnosi:",
             r"CONCLUSIONI",
             r"COMMENTO",
