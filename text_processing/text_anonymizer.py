@@ -91,13 +91,20 @@ class TextAnonymizer:
             stripped = line.strip()
             if not stripped:
                 continue
+            # 4a. Strip sidebar prefixes (multi-column PDF layout artifacts)
+            stripped = _strip_sidebar_prefix(stripped, profile.sidebar_strip_patterns)
+            if not stripped:
+                continue
             if not _should_exclude_line(
-                line, dynamic_excludes, profile.keep_patterns
+                stripped, dynamic_excludes, profile.keep_patterns
             ):
                 kept_lines.append(stripped)
 
         # 5. Join into single text
         body = " ".join(kept_lines)
+
+        # 5b. Remove patient name inline (persists in keep-pattern lines)
+        body = _strip_inline_name(body, patient_name)
 
         # 6. Insert newlines before structural patterns
         for pattern in profile.newline_before_patterns:
@@ -168,6 +175,62 @@ def _normalize_filename(name: str) -> str:
     # Strip trailing separator
     text = "".join(result)
     return text.rstrip("_")
+
+
+def _strip_sidebar_prefix(line: str, patterns: list[str]) -> str:
+    """Strip sidebar prefixes from line start (multi-column PDF layout).
+
+    When sidebar labels (e.g. "Segreteria", "Degenze") merge with main text
+    due to multi-column PDF extraction, this strips the prefix so the
+    remaining clinical content can be correctly evaluated by keep/exclude.
+    """
+    for pattern in patterns:
+        try:
+            m = re.match(pattern, line, re.IGNORECASE)
+            if m:
+                remainder = line[m.end():].strip()
+                if remainder:
+                    return remainder
+                return ""
+        except re.error:
+            continue
+    return line
+
+
+def _strip_inline_name(text: str, patient_name: str) -> str:
+    """Remove patient name occurrences within kept text.
+
+    Handles names that persist in keep-pattern lines (e.g. 'Si dimette
+    la Sig.ra COGNOME NOME, ricoverata...').
+    """
+    if not patient_name or patient_name == "PAZIENTE_SCONOSCIUTO":
+        return text
+
+    name_parts = patient_name.upper().split()
+    if len(name_parts) < 2:
+        return text
+
+    escaped = [re.escape(p) for p in name_parts]
+
+    # Build orderings: [COGNOME NOME] and [NOME COGNOME]
+    orderings = [escaped]
+    if len(escaped) == 2:
+        orderings.append(list(reversed(escaped)))
+
+    for ordering in orderings:
+        name_regex = r"\s+".join(ordering)
+        # "la Sig.ra COGNOME NOME," or "il Sig. COGNOME NOME"
+        text = re.sub(
+            r"(?:il |la )?Sig\.(?:ra)?\s+" + name_regex + r",?\s*",
+            "", text, flags=re.IGNORECASE,
+        )
+        # Standalone full name
+        text = re.sub(
+            r"\b" + name_regex + r"\b,?\s*",
+            "", text, flags=re.IGNORECASE,
+        )
+
+    return text
 
 
 def _should_exclude_line(

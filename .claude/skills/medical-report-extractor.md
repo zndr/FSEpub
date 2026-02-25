@@ -585,10 +585,17 @@ viene MANTENUTA.
 
 ### Esclusione dinamica del nome paziente
 
-Dopo l'estrazione del nome, il sistema genera automaticamente pattern regex
-per escludere righe che contengono il nome completo in qualsiasi ordine:
-- `\bCOGNOME\s+NOME\b`
-- `\bNOME\s+COGNOME\b`
+L'esclusione del nome paziente opera su **due livelli**:
+
+1. **Livello riga** (pre-join): righe che contengono il nome completo vengono escluse
+   (a meno che un keep pattern non le preservi):
+   - `\bCOGNOME\s+NOME\b`
+   - `\bNOME\s+COGNOME\b`
+
+2. **Livello inline** (post-join): il nome viene rimosso anche **dentro** righe preservate
+   dai keep pattern (es. "Si dimette la Sig.ra COGNOME NOME, ricoverata..."):
+   - Rimuove `Sig./Sig.ra COGNOME NOME,` e varianti
+   - Rimuove occorrenze standalone del nome completo in entrambi gli ordini
 
 ### Profili dal più specifico al più generico
 
@@ -606,10 +613,24 @@ sempre il contesto della riga, non solo la keyword.
 
 Le lettere di dimissione ASST hanno un sidebar sinistro con dati del personale
 (primario, coordinatore, telefoni, email). L'estrazione PDF li mescola con il testo
-principale. Pattern specifici intercettano questi residui:
-- Parole singole uppercase isolate su una riga (`^[A-Z]{4,}$`) = cognomi personale
-- Email troncate (`[a-z]+@$`) = indirizzi spezzati dal layout
-- Domini isolati (`spedalicivili.it$`)
+principale. La gestione opera su **tre livelli**:
+
+1. **Sidebar prefix stripping** (pre-filtro): prima del check keep/exclude, prefissi sidebar
+   vengono rimossi dall'inizio delle righe per recuperare il testo clinico che segue.
+   Definiti nel campo `sidebar_strip_patterns` del profilo:
+   - `"Segreteria "` → recupera date ricovero
+   - `"Degenze "` → recupera "Diagnosi alla dimissione"
+   - `"traumatologia. "` → recupera "Di seguito si riporta..."
+   - `"spedalicivili.it "` → recupera sezione clinica
+   - Email troncate (`[a-z]+\d*\.\w+@ `)
+   - Numeri telefono (`030/3995610 / 8" `)
+
+2. **Exclude patterns** (livello riga): righe interamente sidebar vengono escluse:
+   - Parole singole uppercase (`^[A-Z]{4,}$`) = cognomi personale
+   - Email troncate (`[a-z]+@$`) = indirizzi spezzati dal layout
+   - Domini isolati (`spedalicivili.it$`)
+
+3. **Inline name removal** (post-join): nomi paziente dentro righe keep vengono rimossi
 
 ---
 
@@ -627,6 +648,7 @@ Quando l'utente corregge l'output:
 <!-- Sezione auto-aggiornata. Formato: - [AAAA-MM-GG] AZIONE: regola — Origine: descrizione -->
 
 - [2026-02-25] INIT: 15 profili creati da analisi di 53 documenti reali FSE (ASST Brescia, Maugeri, SYNLAB, Bianalisi, Richiedei). 50/50 successo, 50/50 estrazione nomi.
+- [2026-02-25] FIX: Aggiunto sidebar_strip_patterns a dimosp_asst per gestire prefissi sidebar mergiati con testo clinico (Segreteria, Degenze, email troncate, telefoni, domini). Aggiunto inline name removal post-join per rimuovere nomi paziente persistenti in righe keep. Fix pattern Dr. 3+ parole nome.
 
 ---
 
@@ -648,6 +670,7 @@ Quando l'utente corregge l'output:
 | Testo non-clinico residuo | Pattern exclude non copre quel formato | Aggiungere regex agli exclude_patterns |
 | Profilo errato assegnato | Identifier pattern troppo generico | Rendere più specifici i pattern o riordinare priorità |
 | Nome paziente non estratto | Formato nome non previsto | Aggiungere patient_name_pattern al profilo |
-| Sidebar residuo in dimissioni | Layout multi-colonna con merge inatteso | Aggiungere pattern per frammenti sidebar |
+| Sidebar residuo in dimissioni | Layout multi-colonna con merge inatteso | Aggiungere regex a sidebar_strip_patterns del profilo |
+| Nome paziente in righe keep | Keep pattern preserva riga con nome | Gestito automaticamente da inline name removal |
 | OCR di scarsa qualità | Bassa risoluzione, foto mossa | Richiedere PDF originale o scansione a >= 300 DPI |
 | Dati lab senza struttura | Tabelle non rilevate da pdfplumber | Usare extract_simple come fallback |

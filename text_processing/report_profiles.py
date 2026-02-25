@@ -34,6 +34,9 @@ class ReportProfile:
     keep_patterns: list[str] = field(default_factory=list)
     # Regex patterns: a newline is inserted before matching text.
     newline_before_patterns: list[str] = field(default_factory=list)
+    # Regex patterns: sidebar prefixes stripped from line start before keep/exclude check.
+    # Used to handle multi-column PDF layout where sidebar labels merge with main text.
+    sidebar_strip_patterns: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -266,8 +269,8 @@ def _create_dimosp_asst() -> ReportProfile:
             r"\d{10}\s+-\s+Versione\s+\d+",
             r"Data\s+Stesura:\s+\d{2}/\d{2}/\d{4}",
             r"Il\s+Medico$",
-            r"^Dr\.\s+[A-Z]+\s+[A-Z]+\s+Pagina",
-            r"^Dr\.\s+[A-Z]+\s+[A-Z]+$",
+            r"^Dr\.\s+[A-Z]+(?:\s+[A-Z]+){1,3}\s+Pagina",
+            r"^Dr\.\s+[A-Z]+(?:\s+[A-Z]+){1,3}$",
             *_COMMON_PII,
             *_COMMON_FOOTER,
         ],
@@ -311,6 +314,18 @@ def _create_dimosp_asst() -> ReportProfile:
             r"Condizioni\s+alla\s+dimissione",
             r"Indicazioni\s+al\s+follow",
             r"Altre\s+prescrizioni",
+        ],
+        sidebar_strip_patterns=[
+            # Multi-column PDF layout: sidebar labels merge with main text.
+            # These prefixes are stripped from line starts before keep/exclude check.
+            r'^"?Segreteria:?\s+',
+            r"^Degenz[ae]\s+",
+            r"^Indirizzo\s+email\s*",
+            r"^[a-z]+\d*\.\w+@\s*",  # Truncated emails: "psichiatria22.brescia@ "
+            r"^(?:asst-)?spedalicivili\.it\s+",  # Domain fragment: "spedalicivili.it "
+            r"^Tel:\s*\d{3}[/\-]?\d*\s+",  # "Tel: 030/3995234 " before clinical text
+            r'^(?:ortopedia|traumatologia|chirurgia\d*)\.\s+',  # Sidebar dept labels
+            r'^\d{3}/\d{7}(?:\s*/\s*\d+)?"?\s+',  # Phone: "030/3995610 / 8" "
         ],
     )
 
