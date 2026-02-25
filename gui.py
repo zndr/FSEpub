@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QRadioButton,
     QSizePolicy,
@@ -1019,43 +1020,33 @@ class SetupWizard(QDialog):
         page = QWidget()
         lay = QVBoxLayout(page)
 
-        # ── Enable / disable ──
-        self._wiz_process_text = QCheckBox("Processa automaticamente il testo dei referti scaricati")
-        self._wiz_process_text.setChecked(
-            self._env_val("PROCESS_TEXT", "false").lower() == "true"
-        )
-        self._wiz_process_text.setStyleSheet("font-weight: bold;")
-        lay.addWidget(self._wiz_process_text)
-
         intro = QLabel(
-            "Quando attivo, il testo viene estratto dai PDF scaricati, anonimizzato "
+            "Il testo viene estratto dai PDF scaricati, anonimizzato "
             "(dati paziente rimossi) e salvato in file .txt. Puoi scegliere se "
-            "processare il testo solo in locale oppure con l'aiuto di un servizio AI."
+            "processare il testo solo in locale oppure con l'aiuto di un servizio AI, "
+            "oppure disabilitare completamente l'analisi."
         )
         intro.setWordWrap(True)
         intro.setStyleSheet("color: #6b7b8d; font-size: 11px; margin-bottom: 6px;")
         lay.addWidget(intro)
 
-        # ── Mode selection ──
-        mode_group = QGroupBox("Modalita' di elaborazione")
-        mode_layout = QGridLayout(mode_group)
-        mode_layout.setColumnStretch(1, 1)
+        # ── Mode selection (3 radios) ──
+        mode_group = QGroupBox("Modalita' di analisi")
+        mode_layout = QVBoxLayout(mode_group)
 
-        mode_layout.addWidget(QLabel("Modalita':"), 0, 0)
-        self._wiz_processing_mode = QComboBox()
-        self._wiz_processing_mode.addItems([
-            "Senza AI (locale)",
-            "Con AI (richiede account LLM)",
-        ])
-        self._wiz_processing_mode.setCurrentIndex(
-            1 if self._env_val("PROCESSING_MODE", "local") == "ai" else 0
-        )
-        self._wiz_processing_mode.setToolTip(
-            "Senza AI: filtraggio regex locale. Il testo viene pulito e salvato.\n"
-            "Con AI: il testo anonimizzato viene inviato a un LLM per un'analisi\n"
-            "strutturata con classificazione dei reperti patologici."
-        )
-        mode_layout.addWidget(self._wiz_processing_mode, 0, 1)
+        saved_mode = self._env_val("PROCESSING_MODE", "local")
+        self._wiz_mode_none = QRadioButton("Nessuna — non analizzare i referti")
+        self._wiz_mode_local = QRadioButton("Solo estrazione — estrai e anonimizza in locale")
+        self._wiz_mode_ai = QRadioButton("Estrazione e analisi con A.I. — richiede account LLM")
+        if saved_mode == "ai":
+            self._wiz_mode_ai.setChecked(True)
+        elif saved_mode == "none":
+            self._wiz_mode_none.setChecked(True)
+        else:
+            self._wiz_mode_local.setChecked(True)
+        mode_layout.addWidget(self._wiz_mode_none)
+        mode_layout.addWidget(self._wiz_mode_local)
+        mode_layout.addWidget(self._wiz_mode_ai)
 
         lay.addWidget(mode_group)
 
@@ -1155,14 +1146,14 @@ class SetupWizard(QDialog):
 
         # ── Visibility logic ──
         def _update():
-            enabled = self._wiz_process_text.isChecked()
-            ai_mode = self._wiz_processing_mode.currentIndex() == 1
-            mode_group.setEnabled(enabled)
-            self._wiz_ai_group.setVisible(enabled and ai_mode)
-            dir_group.setEnabled(enabled)
+            is_none = self._wiz_mode_none.isChecked()
+            is_ai = self._wiz_mode_ai.isChecked()
+            self._wiz_ai_group.setVisible(is_ai)
+            dir_group.setEnabled(not is_none)
 
-        self._wiz_process_text.toggled.connect(lambda: _update())
-        self._wiz_processing_mode.currentIndexChanged.connect(lambda: _update())
+        self._wiz_mode_none.toggled.connect(lambda: _update())
+        self._wiz_mode_local.toggled.connect(lambda: _update())
+        self._wiz_mode_ai.toggled.connect(lambda: _update())
         # Initial provider state
         self._wiz_on_provider_changed(self._wiz_llm_provider.currentText())
         _update()
@@ -1371,9 +1362,16 @@ class SetupWizard(QDialog):
         vals["IMAP_FOLDER"] = self._wiz_imap_folder.text().strip() or "INBOX"
         vals["DOWNLOAD_DIR"] = self._wiz_download_dir.text().strip() or str(paths.default_download_dir)
         vals["MOVE_DIR"] = self._wiz_move_dir.text().strip()
-        vals["PROCESS_TEXT"] = "true" if self._wiz_process_text.isChecked() else "false"
+        if self._wiz_mode_none.isChecked():
+            vals["PROCESS_TEXT"] = "false"
+            vals["PROCESSING_MODE"] = "none"
+        elif self._wiz_mode_ai.isChecked():
+            vals["PROCESS_TEXT"] = "true"
+            vals["PROCESSING_MODE"] = "ai"
+        else:
+            vals["PROCESS_TEXT"] = "true"
+            vals["PROCESSING_MODE"] = "local"
         vals["TEXT_DIR"] = self._wiz_text_dir.text().strip()
-        vals["PROCESSING_MODE"] = "ai" if self._wiz_processing_mode.currentIndex() == 1 else "local"
         provider_label = self._wiz_llm_provider.currentText()
         vals["LLM_PROVIDER"] = self._wiz_label_to_provider.get(provider_label, "")
         raw_key = self._wiz_llm_api_key.text().strip()
@@ -1444,7 +1442,7 @@ class SetupWizard(QDialog):
             elif key == "PDF_READER":
                 val = self._wiz_pdf_combo.currentText()
             elif key == "PROCESSING_MODE":
-                val = "Con AI" if val == "ai" else "Senza AI (locale)"
+                val = {"ai": "Con AI", "none": "Nessuna", "local": "Solo estrazione (locale)"}.get(val, val)
             elif key == "LLM_PROVIDER":
                 val = self._wiz_provider_labels.get(val, val) if val else "(nessuno)"
             elif key in bool_keys:
@@ -1690,6 +1688,7 @@ class FSEApp(QMainWindow):
         self._mw_auto_timer: QTimer | None = None
         self._mw_last_cf: str | None = None
         self._fields: dict[str, str | bool] = {}  # key -> current value
+        self._btn_analyze: QPushButton | None = None  # created in _build_ui
 
         # Signal bridge for thread-safe GUI updates
         self._bridge = _SignalBridge()
@@ -1814,12 +1813,16 @@ class FSEApp(QMainWindow):
         if not _is_millewin_installed():
             self._notebook.removeTab(2)
 
-        # Bottom bar: Reset console (left) — Apri cartella download (right)
+        # Bottom bar: Reset console (left) — Analizza referti — Apri cartella download (right)
         bottom_row = QHBoxLayout()
         self._btn_reset_console = QPushButton("Reset console")
         self._btn_reset_console.clicked.connect(self._reset_active_console)
         bottom_row.addWidget(self._btn_reset_console)
         bottom_row.addStretch()
+        self._btn_analyze = QPushButton("Analizza referti")
+        self._btn_analyze.clicked.connect(self._start_analysis)
+        self._btn_analyze.setVisible(False)  # hidden until settings loaded
+        bottom_row.addWidget(self._btn_analyze)
         btn_open_dl = QPushButton("Apri cartella download")
         btn_open_dl.clicked.connect(self._open_download_dir)
         bottom_row.addWidget(btn_open_dl)
@@ -2397,7 +2400,7 @@ class FSEApp(QMainWindow):
 
         text_page = QWidget()
         self._build_settings_text_processing(text_page, spec)
-        self._settings_tabs.addTab(text_page, "Processazione Testi")
+        self._settings_tabs.addTab(text_page, "Analisi referti")
 
         layout.addWidget(self._settings_tabs)
 
@@ -2621,22 +2624,26 @@ class FSEApp(QMainWindow):
         layout.addWidget(cartelle_group)
 
         # ── Processazione del testo ──
-        processing_group = QGroupBox("Processazione del testo")
+        processing_group = QGroupBox("Analisi referti")
         pg = QVBoxLayout(processing_group)
 
         # Mode radio buttons (in own QWidget for auto-exclusive grouping)
         mode_widget = QWidget()
         mode_row = QHBoxLayout(mode_widget)
         mode_row.setContentsMargins(0, 0, 0, 0)
+        self._mode_radio_none = QRadioButton("Nessuna")
         self._mode_radio_local = QRadioButton("Solo estrazione")
         self._mode_radio_ai = QRadioButton("Estrazione e analisi con A.I.")
         current_mode = spec.get("PROCESSING_MODE", ("", "local"))[1]
         if current_mode == "ai":
             self._mode_radio_ai.setChecked(True)
+        elif current_mode == "none":
+            self._mode_radio_none.setChecked(True)
         else:
             self._mode_radio_local.setChecked(True)
         self._fields["PROCESSING_MODE"] = current_mode
-        self._fields["PROCESS_TEXT"] = "true"
+        self._fields["PROCESS_TEXT"] = "false" if current_mode == "none" else "true"
+        mode_row.addWidget(self._mode_radio_none)
         mode_row.addWidget(self._mode_radio_local)
         mode_row.addWidget(self._mode_radio_ai)
         mode_row.addStretch()
@@ -2730,11 +2737,12 @@ class FSEApp(QMainWindow):
 
         pg.addWidget(self._ai_group)
 
-        # Wire visibility: AI group shown only when AI mode radio is selected
-        self._mode_radio_ai.toggled.connect(self._update_ai_group_visibility)
-        self._scope_radio_choose.toggled.connect(self._on_scope_choose)
+        # Wire visibility: mode radios control scope, AI group, and analyze button
+        self._mode_radio_none.toggled.connect(lambda: self._on_mode_changed())
+        self._mode_radio_local.toggled.connect(lambda: self._on_mode_changed())
+        self._mode_radio_ai.toggled.connect(lambda: self._on_mode_changed())
         self._on_llm_provider_changed(self._llm_provider_combo.currentText())
-        self._update_ai_group_visibility()
+        self._on_mode_changed()
 
         # Save extracted texts directory
         txt_group = QGroupBox("Salvataggio testi estratti")
@@ -2995,61 +3003,16 @@ class FSEApp(QMainWindow):
 
     # ---- Helpers ----
 
-    def _open_interpreter(self) -> None:
-        """Open the report interpreter dialog with current LLM settings."""
-        from report_interpreter import ReportInterpreterDialog
+    def _build_llm_config_from_widgets(self):
+        """Build an LLMConfig from current settings widgets."""
         from text_processing.llm_analyzer import LLMConfig
 
-        # Read current LLM settings from widgets
         provider_label = self._llm_provider_combo.currentText()
         provider = self._llm_label_to_provider.get(provider_label, "")
         api_key_raw = self._llm_api_key_entry.text()
         api_key = decrypt_password(api_key_raw) if api_key_raw.startswith("ENC:") else api_key_raw
 
-        config = LLMConfig(
-            provider=provider,
-            api_key=api_key,
-            model=self._llm_model_combo.currentText(),
-            timeout=int(self._llm_timeout_entry.text() or "120"),
-            base_url=self._llm_base_url_entry.text().strip(),
-        )
-
-        dlg = ReportInterpreterDialog(self, llm_config=config)
-        dlg.exec()
-
-    def _on_scope_choose(self, checked: bool) -> None:
-        """Handle 'Scegli referti' radio button toggle."""
-        if not checked:
-            return
-
-        from report_interpreter import ReportPickerDialog
-        from text_processing.llm_analyzer import LLMConfig
-
-        # Validate AI mode is active
-        if not self._mode_radio_ai.isChecked():
-            QMessageBox.information(
-                self, "Modalità A.I. richiesta",
-                "Per analizzare singoli referti, attiva prima la modalità "
-                "'Estrazione e analisi con A.I.'.",
-            )
-            self._scope_radio_all.setChecked(True)
-            return
-
-        # Build LLM config from current widget values
-        provider_label = self._llm_provider_combo.currentText()
-        provider = self._llm_label_to_provider.get(provider_label, "")
-        api_key_raw = self._llm_api_key_entry.text()
-        api_key = decrypt_password(api_key_raw) if api_key_raw.startswith("ENC:") else api_key_raw
-
-        if not provider:
-            QMessageBox.warning(
-                self, "Provider mancante",
-                "Seleziona un provider AI prima di procedere.",
-            )
-            self._scope_radio_all.setChecked(True)
-            return
-
-        config = LLMConfig(
+        return LLMConfig(
             provider=provider,
             api_key=api_key,
             model=self._llm_model_combo.currentText().strip(),
@@ -3057,19 +3020,149 @@ class FSEApp(QMainWindow):
             base_url=self._llm_base_url_entry.text().strip(),
         )
 
-        download_dir = self._download_dir_entry.text() or str(paths.default_download_dir)
-        text_dir = self._text_dir_entry.text()
+    def _open_interpreter(self) -> None:
+        """Open the report interpreter dialog with current LLM settings."""
+        from report_interpreter import ReportInterpreterDialog
 
-        dlg = ReportPickerDialog(
-            self,
-            download_dir=download_dir,
-            text_dir=text_dir,
-            llm_config=config,
-        )
+        dlg = ReportInterpreterDialog(self, llm_config=self._build_llm_config_from_widgets())
         dlg.exec()
 
-        # Revert to "Tutti i referti" after dialog closes
-        self._scope_radio_all.setChecked(True)
+    def _start_analysis(self) -> None:
+        """Start report analysis based on current mode and scope settings."""
+        from text_processing import TextProcessor, ProcessingMode, LLMConfig
+
+        is_ai = self._mode_radio_ai.isChecked()
+        is_choose = self._scope_radio_choose.isChecked()
+
+        download_dir = self._download_dir_entry.text() or str(paths.default_download_dir)
+        text_dir = self._text_dir_entry.text()
+        if not text_dir:
+            QMessageBox.warning(
+                self, "Directory mancante",
+                "Configura la directory di salvataggio testi nelle impostazioni.",
+            )
+            return
+
+        # ── Scope "Scegli referti": open picker dialog ──
+        if is_choose:
+            from report_interpreter import ReportPickerDialog
+
+            llm_config = self._build_llm_config_from_widgets() if is_ai else None
+            dlg = ReportPickerDialog(
+                self,
+                download_dir=download_dir,
+                text_dir=text_dir,
+                llm_config=llm_config,
+            )
+            dlg.exec()
+            return
+
+        # ── Scope "Tutti i referti scaricati" ──
+        dl_path = Path(download_dir)
+        pdfs = sorted(dl_path.glob("*.pdf"))
+        if not pdfs:
+            QMessageBox.warning(
+                self, "Nessun referto",
+                f"Nessun file PDF trovato in:\n{dl_path}",
+            )
+            return
+
+        # AI mode warning
+        if is_ai:
+            reply = QMessageBox.warning(
+                self, "Analisi con A.I.",
+                f"L'analisi con AI di {len(pdfs)} referti potrebbe richiedere "
+                "diversi minuti.\nContinuare?",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Ok:
+                return
+
+        # Check for already-analyzed reports
+        text_path = Path(text_dir)
+        already_done = []
+        new_pdfs = []
+        for pdf in pdfs:
+            txt_file = text_path / f"{pdf.stem}.txt"
+            if txt_file.exists():
+                already_done.append(pdf)
+            else:
+                new_pdfs.append(pdf)
+
+        if already_done:
+            reply = QMessageBox.question(
+                self, "Referti già analizzati",
+                f"{len(already_done)} referti sono già stati analizzati.\n"
+                "Vuoi rianalizzarli?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+            elif reply == QMessageBox.StandardButton.Yes:
+                pdfs_to_process = pdfs  # all
+            else:
+                pdfs_to_process = new_pdfs  # only new
+        else:
+            pdfs_to_process = pdfs
+
+        if not pdfs_to_process:
+            QMessageBox.information(
+                self, "Nulla da analizzare",
+                "Tutti i referti sono già stati analizzati.",
+            )
+            return
+
+        # Build processor
+        if is_ai:
+            llm_config = self._build_llm_config_from_widgets()
+            processor = TextProcessor(ProcessingMode.AI_ASSISTED, llm_config=llm_config)
+        else:
+            processor = TextProcessor(ProcessingMode.LOCAL_ONLY)
+
+        # Progress dialog
+        progress = QProgressDialog(
+            "Analisi referti in corso...", "Annulla", 0, len(pdfs_to_process), self
+        )
+        progress.setWindowTitle("Analisi referti")
+        progress.setMinimumDuration(0)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+
+        successes = 0
+        errors = 0
+        out_dir = Path(text_dir)
+
+        for i, pdf in enumerate(pdfs_to_process):
+            if progress.wasCanceled():
+                break
+            progress.setLabelText(f"Analisi: {pdf.name}")
+            progress.setValue(i)
+            QApplication.processEvents()
+
+            try:
+                result = processor.process(pdf)
+                if result.success:
+                    saved = TextProcessor.save_result(result, out_dir, pdf.stem)
+                    if saved:
+                        successes += 1
+                    else:
+                        errors += 1
+                else:
+                    errors += 1
+            except Exception:
+                errors += 1
+
+        progress.setValue(len(pdfs_to_process))
+
+        QMessageBox.information(
+            self, "Analisi completata",
+            f"Analisi terminata.\n\n"
+            f"Successi: {successes}\n"
+            f"Errori: {errors}",
+        )
 
     def _open_guide(self) -> None:
         """Open the user guide HTML file in the default browser."""
@@ -3445,9 +3538,21 @@ class FSEApp(QMainWindow):
 
     # ---- AI / LLM settings helpers ----
 
-    def _update_ai_group_visibility(self) -> None:
-        """Show AI settings group only when AI mode radio is selected."""
-        self._ai_group.setVisible(self._mode_radio_ai.isChecked())
+    def _on_mode_changed(self) -> None:
+        """Update UI state when the processing mode radio changes."""
+        is_none = self._mode_radio_none.isChecked()
+        is_ai = self._mode_radio_ai.isChecked()
+
+        # Scope radios: disabled when "Nessuna"
+        self._scope_radio_all.setEnabled(not is_none)
+        self._scope_radio_choose.setEnabled(not is_none)
+
+        # AI group: visible only in AI mode
+        self._ai_group.setVisible(is_ai)
+
+        # Analyze button: visible when not "Nessuna"
+        if self._btn_analyze is not None:
+            self._btn_analyze.setVisible(not is_none)
 
     def _on_llm_provider_changed(self, label: str) -> None:
         """Update UI when the LLM provider selection changes."""
@@ -3645,9 +3750,16 @@ class FSEApp(QMainWindow):
         self._fields["USE_EXISTING_BROWSER"] = "true" if self._cdp_cb.isChecked() else "false"
         self._fields["OPEN_AFTER_DOWNLOAD"] = "true" if self._open_after_cb.isChecked() else "false"
         self._fields["MOVE_DIR"] = self._move_dir_entry.text()
-        self._fields["PROCESS_TEXT"] = "true"
+        if self._mode_radio_none.isChecked():
+            self._fields["PROCESS_TEXT"] = "false"
+            self._fields["PROCESSING_MODE"] = "none"
+        elif self._mode_radio_ai.isChecked():
+            self._fields["PROCESS_TEXT"] = "true"
+            self._fields["PROCESSING_MODE"] = "ai"
+        else:
+            self._fields["PROCESS_TEXT"] = "true"
+            self._fields["PROCESSING_MODE"] = "local"
         self._fields["TEXT_DIR"] = self._text_dir_entry.text()
-        self._fields["PROCESSING_MODE"] = "ai" if self._mode_radio_ai.isChecked() else "local"
         provider_label = self._llm_provider_combo.currentText()
         self._fields["LLM_PROVIDER"] = self._llm_label_to_provider.get(provider_label, "")
         self._fields["LLM_API_KEY"] = self._llm_api_key_entry.text()
@@ -3730,12 +3842,14 @@ class FSEApp(QMainWindow):
             elif key == "MOVE_DIR":
                 self._move_dir_entry.setText(os.path.normpath(val) if val else "")
             elif key == "PROCESS_TEXT":
-                pass  # Always true in new UI
+                pass  # Derived from PROCESSING_MODE
             elif key == "TEXT_DIR":
                 self._text_dir_entry.setText(os.path.normpath(val) if val else "")
             elif key == "PROCESSING_MODE":
                 if val == "ai":
                     self._mode_radio_ai.setChecked(True)
+                elif val == "none":
+                    self._mode_radio_none.setChecked(True)
                 else:
                     self._mode_radio_local.setChecked(True)
             elif key == "LLM_PROVIDER":
@@ -3752,7 +3866,7 @@ class FSEApp(QMainWindow):
                 self._llm_base_url_entry.setText(val)
 
         # Apply initial states
-        self._update_ai_group_visibility()
+        self._on_mode_changed()
 
         # Apply initial state for delete toggle
         self._on_delete_toggled(self._siss_delete_cb.isChecked())

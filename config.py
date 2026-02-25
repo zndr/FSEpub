@@ -39,7 +39,7 @@ class Config:
     text_dir: Path | None
 
     # LLM / AI text processing
-    processing_mode: str        # "ai", "local", "disabled"
+    processing_mode: str        # "none", "ai", "local"
     llm_provider: str           # "claude_api", "openai_api", "gemini_api", "claude_cli", "custom_url"
     llm_api_key: str
     llm_model: str
