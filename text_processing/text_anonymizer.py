@@ -67,7 +67,24 @@ class TextAnonymizer:
         patient_name = _extract_patient_name(raw_text, profile.patient_name_patterns)
         normalized_name = _normalize_filename(patient_name)
 
-        # 3. Filter lines
+        # 3. Build dynamic exclude patterns from extracted patient name
+        dynamic_excludes = list(profile.exclude_patterns)
+        if patient_name and patient_name != "PAZIENTE_SCONOSCIUTO":
+            # Exclude lines containing the full patient name
+            name_parts = patient_name.upper().split()
+            if len(name_parts) >= 2:
+                # "COGNOME NOME" -> match both orderings
+                escaped = [re.escape(p) for p in name_parts]
+                dynamic_excludes.append(
+                    r"\b" + r"\s+".join(escaped) + r"\b"
+                )
+                # Also match reversed: "NOME COGNOME"
+                if len(escaped) == 2:
+                    dynamic_excludes.append(
+                        r"\b" + escaped[1] + r"\s+" + escaped[0] + r"\b"
+                    )
+
+        # 4. Filter lines
         lines = raw_text.splitlines()
         kept_lines: list[str] = []
         for line in lines:
@@ -75,21 +92,21 @@ class TextAnonymizer:
             if not stripped:
                 continue
             if not _should_exclude_line(
-                line, profile.exclude_patterns, profile.keep_patterns
+                line, dynamic_excludes, profile.keep_patterns
             ):
                 kept_lines.append(stripped)
 
-        # 4. Join into single text
+        # 5. Join into single text
         body = " ".join(kept_lines)
 
-        # 5. Insert newlines before structural patterns
+        # 6. Insert newlines before structural patterns
         for pattern in profile.newline_before_patterns:
             try:
                 body = re.sub(pattern, r"\n\g<0>", body, flags=re.IGNORECASE)
             except re.error:
                 continue
 
-        # 6. Normalize whitespace (preserve intentional newlines)
+        # 7. Normalize whitespace (preserve intentional newlines)
         body = _normalize_whitespace(body)
 
         return AnonymizedReport(
@@ -103,15 +120,31 @@ class TextAnonymizer:
 def _extract_patient_name(text: str, patterns: list[str]) -> str:
     """Try each regex pattern to extract the patient name.
 
+    Handles special cases:
+    - PS format with two groups: COGNOME*NOME -> "COGNOME NOME"
+    - Standard single-group patterns
+
     Returns the first successful match or a fallback string.
     """
     for pattern in patterns:
         try:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match and match.group(1):
-                name = match.group(1).strip()
-                if name:
-                    return name
+            match = re.search(pattern, text, re.MULTILINE)
+            if match:
+                # Two capture groups (e.g. PS: group(1)=COGNOME, group(2)=NOME)
+                try:
+                    g1 = match.group(1)
+                    g2 = match.group(2)
+                    if g1 and g2:
+                        name = f"{g1.strip()} {g2.strip()}"
+                        if len(name) > 3:
+                            return name
+                except IndexError:
+                    pass
+                # Single capture group
+                if match.group(1):
+                    name = match.group(1).strip()
+                    if len(name) > 2:
+                        return name
         except (re.error, IndexError):
             continue
     return "PAZIENTE_SCONOSCIUTO"

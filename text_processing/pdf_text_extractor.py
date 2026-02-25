@@ -120,6 +120,47 @@ class PdfTextExtractor:
             return ""
 
     @staticmethod
+    def extract_tables(pdf_path: Path) -> str:
+        """Extract tabular data from a PDF using pdfplumber table detection.
+
+        Particularly useful for lab reports where results are in tables.
+        Falls back to simple extraction if no tables are found.
+
+        Args:
+            pdf_path: Path to the PDF file.
+
+        Returns:
+            Extracted table text with aligned columns, or empty string.
+        """
+        try:
+            results: list[str] = []
+            with pdfplumber.open(pdf_path) as pdf:
+                for page in pdf.pages:
+                    tables = page.extract_tables()
+                    page_has_table_data = False
+                    if tables:
+                        for table in tables:
+                            for row in table:
+                                if row:
+                                    cells = [
+                                        (c or "").strip() for c in row
+                                    ]
+                                    if any(cells):
+                                        results.append("\t".join(cells))
+                                        page_has_table_data = True
+                    if not page_has_table_data:
+                        # No useful tables, fall back to text
+                        text = page.extract_text()
+                        if text:
+                            results.append(text)
+            return "\n".join(results)
+        except Exception as e:
+            logger.error(
+                "Errore estrazione tabelle da %s: %s", pdf_path.name, e
+            )
+            return ""
+
+    @staticmethod
     def has_selectable_text(pdf_path: Path) -> bool:
         """Check if a PDF contains selectable (non-scanned) text.
 

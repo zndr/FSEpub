@@ -18,6 +18,26 @@ from .llm_analyzer import LLMAnalyzer, LLMConfig
 logger = logging.getLogger(__name__)
 
 
+def _detect_doc_type(pdf_path: Path) -> str:
+    """Detect document type from the filename suffix convention.
+
+    FSE Processor names files as: CF_NOME_COGNOME_TYPE.pdf
+    where TYPE is one of: SPEC, PS, DIMOSP, LAB.
+
+    Returns:
+        Document type string, or empty string if not detectable.
+    """
+    stem = pdf_path.stem.upper()
+    for suffix in ("_LAB", "_PS", "_DIMOSP", "_SPEC"):
+        if stem.endswith(suffix):
+            return suffix.lstrip("_")
+    # Also check for numbered variants like _1_SPEC
+    parts = stem.rsplit("_", maxsplit=2)
+    if len(parts) >= 2 and parts[-1] in ("LAB", "PS", "DIMOSP", "SPEC"):
+        return parts[-1]
+    return ""
+
+
 class ProcessingMode(Enum):
     """How to process extracted text."""
 
@@ -75,8 +95,12 @@ class TextProcessor:
         Returns:
             ProcessingResult with the extracted and processed text.
         """
-        # Step 1: Extract text
-        raw_text = PdfTextExtractor.extract_simple(pdf_path)
+        # Step 1: Extract text (use table mode for lab reports)
+        doc_type = _detect_doc_type(pdf_path)
+        if doc_type == "LAB":
+            raw_text = PdfTextExtractor.extract_tables(pdf_path)
+        else:
+            raw_text = PdfTextExtractor.extract_simple(pdf_path)
         if not raw_text.strip():
             # Retry with layout mode
             raw_text = PdfTextExtractor.extract(pdf_path)
