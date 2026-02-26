@@ -1494,30 +1494,8 @@ class FSEBrowser:
 
         return results
 
-    # Maximum time (seconds) to wait for save_as() to complete.
-    _SAVE_TIMEOUT = 120
-
-    @staticmethod
-    def _force_pdf_download(route):
-        """Route handler: fetch the response and force Content-Disposition
-        to 'attachment' on PDF / binary responses so the browser always
-        triggers a download event instead of opening the PDF inline."""
-        # Let static assets through untouched
-        if route.request.resource_type in ("stylesheet", "image", "font", "script", "media"):
-            route.continue_()
-            return
-        try:
-            response = route.fetch()
-        except Exception:
-            route.continue_()
-            return
-        ct = response.headers.get("content-type", "")
-        if "pdf" in ct or "octet-stream" in ct:
-            headers = dict(response.headers)
-            headers["content-disposition"] = "attachment; filename=document.pdf"
-            route.fulfill(response=response, headers=headers)
-        else:
-            route.fulfill(response=response)
+    # Timeout (seconds) for waiting for the PDF response to arrive.
+    _PDF_INTERCEPT_TIMEOUT = 30
 
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,
                            visualizza_col: int | None, data_rows=None) -> DocumentResult:
@@ -1542,48 +1520,56 @@ class FSEBrowser:
                 if clickable.count() == 0:
                     clickable = visualizza_cell
 
-                # ── Force every PDF response to be a download ──
-                self._page.route("**/*", self._force_pdf_download)
-                try:
-                    with self._page.expect_download(
-                        timeout=self._config.download_timeout,
-                    ) as dl_info:
-                        clickable.click()
-                        accetta = self._page.get_by_role("button", name="Accetta")
-                        if accetta.is_visible(timeout=8000):
-                            accetta.click()
+                # ── Intercept PDF response: capture bytes in Python,
+                #    abort the route so the browser never receives the
+                #    PDF (no inline viewer, no browser-side download). ──
+                captured = {"data": None}
+                logger = self._logger
 
-                    download = dl_info.value
-                    self._logger.info(
-                        f"Download avviato: {download.url[:120]} "
-                        f"→ {download.suggested_filename}"
-                    )
-
-                    ext = Path(download.suggested_filename).suffix or ".pdf"
-                    unique_name = (
-                        f"{patient_name}_{row_index}{ext}".replace(" ", "_")
-                    )
-                    save_path = self._config.download_dir / unique_name
-
-                    # Timeout: cancel download if save_as hangs
-                    cancel_timer = threading.Timer(
-                        self._SAVE_TIMEOUT, download.cancel,
-                    )
-                    cancel_timer.start()
+                def _intercept_pdf(route):
+                    # Let static assets pass through untouched
+                    if route.request.resource_type in (
+                        "stylesheet", "image", "font", "script", "media",
+                    ):
+                        route.continue_()
+                        return
                     try:
-                        download.save_as(str(save_path))
-                    finally:
-                        cancel_timer.cancel()
-
-                    failure = download.failure()
-                    if failure:
-                        save_path.unlink(missing_ok=True)
-                        raise RuntimeError(
-                            f"Browser ha segnalato errore: {failure}"
+                        response = route.fetch()
+                    except Exception:
+                        route.continue_()
+                        return
+                    ct = response.headers.get("content-type", "")
+                    if ("pdf" in ct or "octet-stream" in ct) and captured["data"] is None:
+                        captured["data"] = response.body()
+                        logger.info(
+                            f"PDF intercettato: {route.request.url[:120]} "
+                            f"({len(captured['data']):,} bytes)"
                         )
+                        # Abort so the browser receives nothing — no
+                        # PDF viewer, no Edge download-panel entry.
+                        route.abort()
+                    else:
+                        route.fulfill(response=response)
 
+                self._page.route("**/*", _intercept_pdf)
+                try:
+                    clickable.click()
+                    accetta = self._page.get_by_role("button", name="Accetta")
+                    if accetta.is_visible(timeout=8000):
+                        accetta.click()
+
+                    # Poll until the route handler captures the PDF
+                    deadline = time.time() + self._PDF_INTERCEPT_TIMEOUT
+                    while captured["data"] is None and time.time() < deadline:
+                        self._page.wait_for_timeout(500)
+
+                    if captured["data"] is None:
+                        raise RuntimeError(
+                            "Timeout: nessuna risposta PDF intercettata "
+                            f"entro {self._PDF_INTERCEPT_TIMEOUT}s"
+                        )
                 finally:
-                    self._page.unroute("**/*", self._force_pdf_download)
+                    self._page.unroute("**/*", _intercept_pdf)
                     # Close any popup tabs the PDF viewer may have opened
                     if self._context:
                         for page in self._context.pages:
@@ -1595,9 +1581,14 @@ class FSEBrowser:
                                 except Exception:
                                     pass
 
+                # ── Save captured bytes to disk ──
+                unique_name = (
+                    f"{patient_name}_{row_index}.pdf".replace(" ", "_")
+                )
+                save_path = self._config.download_dir / unique_name
+                save_path.write_bytes(captured["data"])
+
                 # ── Validate ──
-                if not save_path.exists():
-                    raise RuntimeError("File non creato")
                 file_size = save_path.stat().st_size
                 if file_size == 0:
                     save_path.unlink(missing_ok=True)
