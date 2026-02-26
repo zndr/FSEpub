@@ -1,8 +1,8 @@
 {
-    "Version": "2.3.14",
+    "Version": "2.3.15",
     "ReleaseNotes": "Fix sessione SISS in modalita CDP e ripristino download manager browser.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.14/FSE_Processor_Setup_2.3.14_QT6.exe",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.15/FSE_Processor_Setup_2.3.15_QT6.exe",
     "ReleaseDate": "2026-02-26",
-    "Sha256Hash": "a383c566be72739995ff8f4776247be998472424e68a6654e6eb27146f4ff02e",
-    "FileSize": 73288818
+    "Sha256Hash": "",
+    "FileSize": 0
 }

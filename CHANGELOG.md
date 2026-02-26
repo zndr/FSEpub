@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.15] - 2026-02-26
+
+### Aggiunto
+
+- Guida utente: nuova sezione 6 "Estrazione testo e analisi referti con A.I." con documentazione completa delle funzionalita di text extraction, anonimizzazione, provider AI supportati (Claude, ChatGPT, Gemini, Mistral, Claude CLI, endpoint custom), configurazione API key, costi di utilizzo, analisi manuale e batch
+- Guida utente: nuova voce troubleshooting per errori API key e analisi A.I.
+
 ## [2.3.14] - 2026-02-26
 
 ### Corretto
