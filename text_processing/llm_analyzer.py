@@ -28,7 +28,7 @@ DEFAULT_MODELS: dict[str, str] = {
     "openai_api": "gpt-4o",
     "gemini_api": "gemini-2.0-flash",
     "mistral_api": "mistral-large-latest",
-    "claude_cli": "",
+    "claude_cli": "claude-sonnet-4-6",
     "custom_url": "",
 }
 

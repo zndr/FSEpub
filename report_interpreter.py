@@ -51,7 +51,7 @@ _MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "openai_api": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
     "gemini_api": ["gemini-2.0-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
     "mistral_api": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
-    "claude_cli": [],
+    "claude_cli": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
     "custom_url": [],
 }
 
