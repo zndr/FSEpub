@@ -1521,15 +1521,17 @@ class FSEBrowser:
                     clickable = visualizza_cell
 
                 # ── Intercept PDF response: capture bytes in Python,
-                #    abort the route so the browser never receives the
-                #    PDF (no inline viewer, no browser-side download). ──
+                #    fulfill with an empty text response so the browser
+                #    never opens the PDF viewer or triggers a download. ──
                 captured = {"data": None}
                 logger = self._logger
 
                 def _intercept_pdf(route):
-                    # Let static assets pass through untouched
-                    if route.request.resource_type in (
-                        "stylesheet", "image", "font", "script", "media",
+                    # Only intercept request types that could carry a PDF.
+                    # Let everything else (CSS, images, JS, etc.) through
+                    # untouched so the Angular SPA keeps working.
+                    if route.request.resource_type not in (
+                        "document", "xhr", "fetch", "other",
                     ):
                         route.continue_()
                         return
@@ -1545,9 +1547,14 @@ class FSEBrowser:
                             f"PDF intercettato: {route.request.url[:120]} "
                             f"({len(captured['data']):,} bytes)"
                         )
-                        # Abort so the browser receives nothing — no
-                        # PDF viewer, no Edge download-panel entry.
-                        route.abort()
+                        # Fulfill with a tiny non-PDF response so the
+                        # browser doesn't hang (no abort!) and doesn't
+                        # open a PDF viewer or trigger a download.
+                        route.fulfill(
+                            status=200,
+                            body="",
+                            headers={"content-type": "text/plain"},
+                        )
                     else:
                         route.fulfill(response=response)
 
