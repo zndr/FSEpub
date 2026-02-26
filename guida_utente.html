@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FSE Processor v2.3.10 — Guida Utente</title>
+<title>FSE Processor v2.3.14 — Guida Utente</title>
 <style>
   :root {
     --blue-900: #1a2744;
@@ -275,7 +275,7 @@
 <!-- ======================== HEADER ======================== -->
 <header class="hero" id="top">
   <h1>FSE Processor</h1>
-  <div class="version">Versione 2.3.10</div>
+  <div class="version">Versione 2.3.14</div>
   <p class="subtitle">Guida Utente &mdash; Scarico e organizzazione automatica dei referti dal Fascicolo Sanitario Elettronico</p>
 </header>
 
@@ -329,8 +329,28 @@
 <section id="configurazione">
 <h2>2. Primo avvio e configurazione</h2>
 
-<p>Al primo avvio l'applicazione mostra il <strong>Tab Impostazioni</strong>. Le impostazioni vengono
-  salvate nel file <code>settings.env</code> e persistono tra le sessioni.</p>
+<h3>Wizard di configurazione guidata</h3>
+<p>Al <strong>primo avvio</strong> (quando <code>settings.env</code> non esiste o il campo
+  <code>EMAIL_USER</code> &egrave; vuoto) l'app mostra automaticamente un wizard in 7 passaggi
+  che guida nella configurazione iniziale:</p>
+<ol class="steps">
+  <li><strong>Benvenuto</strong> &mdash; Presentazione dell'app e panoramica della configurazione.</li>
+  <li><strong>Account Email</strong> &mdash; Inserimento email e password per l'accesso IMAP.</li>
+  <li><strong>Server IMAP</strong> &mdash; Configurazione server e porta, con pulsante <strong>Test connessione</strong> per verifica immediata e <strong>Sfoglia cartelle</strong> per selezionare le cartelle da monitorare.</li>
+  <li><strong>Cartelle IMAP</strong> &mdash; Selezione delle cartelle in cui cercare le notifiche FSE.</li>
+  <li><strong>Browser e PDF</strong> &mdash; Scelta del browser per l'automazione, directory di download, lettore PDF, opzione CDP e headless.</li>
+  <li><strong>Parametri</strong> &mdash; Timeout download/pagina e dimensione font della console.</li>
+  <li><strong>Riepilogo</strong> &mdash; Riepilogo delle impostazioni configurate prima del salvataggio.</li>
+</ol>
+
+<div class="box box-tip">
+  <strong>Rieseguire il wizard</strong>
+  Il wizard &egrave; accessibile in qualsiasi momento dal menu <strong>Aiuto &gt; Configurazione guidata</strong>.
+</div>
+
+<h3>Impostazioni manuali</h3>
+<p>Le impostazioni sono sempre modificabili dal <strong>Tab Impostazioni</strong>.
+  I valori vengono salvati nel file <code>settings.env</code> e persistono tra le sessioni.</p>
 
 <h3>Server Posta</h3>
 <p>Configurazione dell'accesso al server di posta per leggere le notifiche FSE.</p>
@@ -699,6 +719,16 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
   <code>browser_data</code>. Questo permette in alcuni casi di riutilizzare una sessione SSO
   ancora valida senza dover ripetere il login manuale.</p>
 
+<h3>Segnalazione problemi</h3>
+<p>Dal menu <strong>Aiuto &gt; Segnala problema</strong> &egrave; possibile inviare una
+  segnalazione dettagliata allo sviluppatore. Il dialog consente di:</p>
+<ul>
+  <li>Descrivere il problema nel campo di testo.</li>
+  <li>Allegare screenshot tramite il pulsante <strong>Aggiungi immagine...</strong> (selezione file)
+    oppure <strong>Incolla da clipboard</strong> (per screenshot catturati con <kbd>Stamp</kbd>).</li>
+  <li>L'email inviata include automaticamente i log recenti e le immagini allegate.</li>
+</ul>
+
 <a href="#top" class="top-link">&uarr; Torna all'inizio</a>
 </section>
 
@@ -857,6 +887,45 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
 </details>
 
 <details>
+  <summary>Download manuali non funzionano dopo lo scarico referti</summary>
+  <div>
+    <p><strong>Sintomo:</strong> Dopo aver utilizzato l'app per scaricare referti, i download
+      manuali nel browser restano incompleti, e la scorciatoia <kbd>Ctrl</kbd>+<kbd>J</kbd>
+      per aprire la cartella download non funziona.</p>
+    <p><strong>Causa:</strong> In versioni precedenti alla 2.3.13, la disconnessione CDP non
+      ripristinava il gestore download del browser, lasciandolo in uno stato non funzionale.</p>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li><strong>Aggiornare FSE Processor</strong> alla versione 2.3.13 o successiva: il problema
+        &egrave; stato corretto e il download manager viene ripristinato automaticamente al termine
+        di ogni sessione.</li>
+      <li>Come workaround temporaneo: chiudere completamente il browser e riaprirlo.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary>Sessione SISS invalidata / Millewin disconnesso (modalit&agrave; CDP)</summary>
+  <div>
+    <p><strong>Sintomo:</strong> In modalit&agrave; CDP, il portale FSE richiede un nuovo login
+      manuale, e il nuovo accesso invalida la sessione SISS in uso da altre applicazioni
+      (es. Millewin). A volte la pagina di login non appare.</p>
+    <p><strong>Causa:</strong> In versioni precedenti alla 2.3.13, il tab creato dall'automazione
+      non ereditava il <code>sessionStorage</code> dai tab esistenti (il <code>sessionStorage</code>
+      &egrave; isolato per tab nel browser). Il portale SISS, non trovando i token di sessione,
+      iniziava un nuovo flusso SSO.</p>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li><strong>Aggiornare FSE Processor</strong> alla versione 2.3.13 o successiva: l'app ora
+        clona automaticamente il <code>sessionStorage</code> dai tab SISS esistenti nel tab
+        di automazione, preservando la sessione corrente.</li>
+      <li>Se il problema persiste, verificare che il browser abbia un tab aperto sul portale
+        SISS prima di avviare l'app.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
   <summary>Tipologia documento non trovata</summary>
   <div>
     <p><strong>Messaggio:</strong> <code>Colonna 'Tipologia' non trovata</code></p>
@@ -877,7 +946,7 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
 
 <!-- ======================== FOOTER ======================== -->
 <footer>
-  FSE Processor v2.3.10 &mdash; Guida Utente<br>
+  FSE Processor v2.3.14 &mdash; Guida Utente<br>
   Ultimo aggiornamento: febbraio 2026
 </footer>
 

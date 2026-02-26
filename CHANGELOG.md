@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.3.14] - 2026-02-26
+
+### Corretto
+
+- Sessione SISS preservata in modalita CDP: il sessionStorage viene clonato dai tab esistenti e iniettato nel tab di automazione via init script, evitando nuovi login SSO che invalidavano l'accesso di Millewin
+- Download manager del browser ripristinato dopo la disconnessione CDP: reset di Browser.setDownloadBehavior prima del distacco, risolvendo download manuali incompleti e Ctrl+J non funzionante
+- Tab esistenti (about:blank, newtab) vengono riutilizzati invece di crearne di nuovi
+- Guida utente aggiornata alla v2.3.14: documentazione wizard configurazione, segnalazione problemi con allegati, troubleshooting download e sessioni CDP
+
 ## [2.3.12] - 2026-02-23
 
 ### Aggiunto
