@@ -243,7 +243,8 @@ class ReportInterpreterDialog(QDialog):
         is_custom = provider == "custom_url"
         self._base_url_label.setVisible(is_custom)
         self._base_url.setVisible(is_custom)
-        # API key
+        # Reset API key — each provider needs its own key
+        self._api_key.clear()
         needs_key = provider != "claude_cli"
         self._api_key.setEnabled(needs_key)
         self._show_key_btn.setEnabled(needs_key)
@@ -251,18 +252,17 @@ class ReportInterpreterDialog(QDialog):
             self._api_key.setPlaceholderText("(non necessaria)")
         else:
             self._api_key.setPlaceholderText("API key")
-        # Model suggestions
-        current = self._model_combo.currentText()
+        # Model suggestions — reset to new provider's default
+        self._model_combo.blockSignals(True)
         self._model_combo.clear()
+        self._model_combo.clearEditText()
         suggestions = _MODEL_SUGGESTIONS.get(provider, [])
         if suggestions:
             self._model_combo.addItems(suggestions)
-        if current and current not in suggestions:
-            self._model_combo.setCurrentText(current)
-        elif suggestions:
             default = DEFAULT_MODELS.get(provider, "")
             if default in suggestions:
                 self._model_combo.setCurrentText(default)
+        self._model_combo.blockSignals(False)
 
     # ----------------------------------------------------------------
     # Build LLMConfig from current fields

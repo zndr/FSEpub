@@ -1168,7 +1168,8 @@ class SetupWizard(QDialog):
         is_custom = provider == "custom_url"
         self._wiz_base_url_label.setVisible(is_custom)
         self._wiz_llm_base_url.setVisible(is_custom)
-        # API key needed?
+        # Reset API key — each provider needs its own key
+        self._wiz_llm_api_key.clear()
         needs_key = provider != "claude_cli"
         self._wiz_llm_api_key.setEnabled(needs_key)
         if not needs_key:
@@ -1188,17 +1189,16 @@ class SetupWizard(QDialog):
             "claude_cli": [],
             "custom_url": [],
         }
-        current = self._wiz_llm_model.currentText()
+        self._wiz_llm_model.blockSignals(True)
         self._wiz_llm_model.clear()
+        self._wiz_llm_model.clearEditText()
         suggestions = model_suggestions.get(provider, [])
         if suggestions:
             self._wiz_llm_model.addItems(suggestions)
-        if current and current not in suggestions:
-            self._wiz_llm_model.setCurrentText(current)
-        elif suggestions:
             default = self._wiz_default_models.get(provider, "")
             if default in suggestions:
                 self._wiz_llm_model.setCurrentText(default)
+        self._wiz_llm_model.blockSignals(False)
 
     def _wiz_test_llm(self) -> None:
         """Test LLM connection from the wizard."""
@@ -3561,7 +3561,8 @@ class FSEApp(QMainWindow):
         is_custom = provider == "custom_url"
         self._llm_base_url_label.setVisible(is_custom)
         self._llm_base_url_entry.setVisible(is_custom)
-        # Show/hide API key (not needed for claude_cli)
+        # Reset API key — each provider needs its own key
+        self._llm_api_key_entry.clear()
         needs_key = provider != "claude_cli"
         self._llm_api_key_entry.setEnabled(needs_key)
         self._llm_show_key_btn.setEnabled(needs_key)
@@ -3582,18 +3583,16 @@ class FSEApp(QMainWindow):
             "claude_cli": [],
             "custom_url": [],
         }
-        current_text = self._llm_model_combo.currentText()
+        self._llm_model_combo.blockSignals(True)
         self._llm_model_combo.clear()
+        self._llm_model_combo.clearEditText()
         suggestions = model_suggestions.get(provider, [])
         if suggestions:
             self._llm_model_combo.addItems(suggestions)
-        # Restore previous text if it was custom, or set default
-        if current_text and current_text not in suggestions:
-            self._llm_model_combo.setCurrentText(current_text)
-        elif suggestions:
             default = self._llm_default_models.get(provider, "")
             if default in suggestions:
                 self._llm_model_combo.setCurrentText(default)
+        self._llm_model_combo.blockSignals(False)
 
     def _test_llm_connection(self) -> None:
         """Test the LLM connection in a background thread."""
