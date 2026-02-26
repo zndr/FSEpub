@@ -1498,6 +1498,10 @@ class FSEBrowser:
     # download event fires.  If the FSE server stalls mid-transfer, the
     # timer cancels the download so the process does not hang forever.
     _SAVE_TIMEOUT = 120
+    # Shorter timeout (ms) for expect_download: if the browser opens the
+    # PDF inline (no download event), we fall back to response interception
+    # rather than blocking for the full download_timeout.
+    _DOWNLOAD_EVENT_TIMEOUT = 30_000
 
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,
                            visualizza_col: int | None, data_rows=None) -> DocumentResult:
@@ -1521,63 +1525,119 @@ class FSEBrowser:
                 # Click the first clickable element in the cell
                 clickable = visualizza_cell.locator("a, button, img, svg, i, span[class*='icon'], span[class*='glyph']").first
                 if clickable.count() == 0:
-                    # Fallback: click the cell itself
                     clickable = visualizza_cell
 
-                with self._page.expect_download(timeout=self._config.download_timeout) as download_info:
-                    clickable.click()
-                    # Wait for Accetta button and click it if it appears
-                    # (FSE can be slow to show the consent modal)
-                    accetta = self._page.get_by_role("button", name="Accetta")
-                    if accetta.is_visible(timeout=8000):
-                        accetta.click()
+                # ── Track PDF responses as fallback ──
+                # If the browser opens the PDF inline instead of downloading,
+                # expect_download never fires.  We capture the HTTP response
+                # object so we can read the body later.
+                captured_pdf_responses: list = []
 
-                download = download_info.value
-                self._logger.info(
-                    f"Download avviato: {download.url[:120]} → {download.suggested_filename}"
-                )
+                def _on_response(resp):
+                    ct = resp.headers.get("content-type", "")
+                    if "pdf" in ct or "octet-stream" in ct:
+                        captured_pdf_responses.append(resp)
 
-                # Generate unique filename to avoid overwrites
-                ext = Path(download.suggested_filename).suffix or ".pdf"
-                unique_name = f"{patient_name}_{row_index}{ext}".replace(" ", "_")
-                save_path = self._config.download_dir / unique_name
+                self._page.on("response", _on_response)
 
-                # Save with timeout: if the file transfer stalls, cancel the
-                # download instead of blocking the whole process forever.
-                cancel_timer = threading.Timer(self._SAVE_TIMEOUT, download.cancel)
-                cancel_timer.start()
+                download_obj = None
+                save_path = None
+
                 try:
-                    download.save_as(str(save_path))
-                finally:
-                    cancel_timer.cancel()
+                    # ── Path A: try standard Playwright download ──
+                    try:
+                        with self._page.expect_download(timeout=self._DOWNLOAD_EVENT_TIMEOUT) as dl_info:
+                            clickable.click()
+                            accetta = self._page.get_by_role("button", name="Accetta")
+                            if accetta.is_visible(timeout=8000):
+                                accetta.click()
+                        download_obj = dl_info.value
+                    except Exception as dl_err:
+                        self._logger.info(
+                            f"Nessun evento download catturato ({dl_err}), "
+                            "verifico risposta HTTP intercettata..."
+                        )
 
-                # Check for download failure reported by the browser
-                failure = download.failure()
-                if failure:
-                    save_path.unlink(missing_ok=True)
-                    raise RuntimeError(f"Browser ha segnalato errore download: {failure}")
+                    if download_obj:
+                        self._logger.info(
+                            f"Download avviato: {download_obj.url[:120]} "
+                            f"→ {download_obj.suggested_filename}"
+                        )
+                        ext = Path(download_obj.suggested_filename).suffix or ".pdf"
+                        unique_name = f"{patient_name}_{row_index}{ext}".replace(" ", "_")
+                        save_path = self._config.download_dir / unique_name
 
-                # Validate the saved file
-                if not save_path.exists():
-                    raise RuntimeError("File non creato dopo save_as")
-                file_size = save_path.stat().st_size
-                if file_size == 0:
-                    save_path.unlink(missing_ok=True)
-                    raise RuntimeError("File scaricato vuoto (0 bytes)")
-                with open(save_path, "rb") as f:
-                    header = f.read(5)
-                if header[:4] != b"%PDF":
-                    self._logger.warning(
-                        f"File non sembra un PDF (header: {header!r}, size: {file_size})"
+                        cancel_timer = threading.Timer(
+                            self._SAVE_TIMEOUT, download_obj.cancel,
+                        )
+                        cancel_timer.start()
+                        try:
+                            download_obj.save_as(str(save_path))
+                        finally:
+                            cancel_timer.cancel()
+
+                        failure = download_obj.failure()
+                        if failure:
+                            save_path.unlink(missing_ok=True)
+                            raise RuntimeError(
+                                f"Browser ha segnalato errore download: {failure}"
+                            )
+
+                    # ── Path B: response interception fallback ──
+                    elif captured_pdf_responses:
+                        resp = captured_pdf_responses[0]
+                        self._logger.info(
+                            f"PDF intercettato dalla risposta HTTP ({resp.url[:120]})"
+                        )
+                        pdf_data = resp.body()
+                        unique_name = f"{patient_name}_{row_index}.pdf".replace(" ", "_")
+                        save_path = self._config.download_dir / unique_name
+                        with open(save_path, "wb") as f:
+                            f.write(pdf_data)
+
+                    else:
+                        raise RuntimeError(
+                            "Nessun download avviato e nessuna risposta PDF "
+                            "intercettata. Il documento potrebbe non essere "
+                            "disponibile."
+                        )
+
+                    # ── Validate saved file ──
+                    if not save_path.exists():
+                        raise RuntimeError("File non creato")
+                    file_size = save_path.stat().st_size
+                    if file_size == 0:
+                        save_path.unlink(missing_ok=True)
+                        raise RuntimeError("File scaricato vuoto (0 bytes)")
+                    with open(save_path, "rb") as f:
+                        header = f.read(5)
+                    if header[:4] != b"%PDF":
+                        self._logger.warning(
+                            f"File non sembra un PDF "
+                            f"(header: {header!r}, size: {file_size})"
+                        )
+
+                    self._logger.info(
+                        f"Download completato: {save_path.name} "
+                        f"({file_size:,} bytes, tipologia: {tipologia})"
                     )
-                    # Keep the file but warn — some FSE docs might be CDA XML
+                    return DocumentResult(
+                        disciplina=tipologia, skipped=False,
+                        download_path=save_path, error=None,
+                    )
 
-                self._logger.info(
-                    f"Download completato: {save_path.name} ({file_size:,} bytes, tipologia: {tipologia})"
-                )
-                return DocumentResult(
-                    disciplina=tipologia, skipped=False, download_path=save_path, error=None
-                )
+                finally:
+                    self._page.remove_listener("response", _on_response)
+                    # Close any popup tabs opened by the PDF viewer
+                    if self._context:
+                        for page in self._context.pages:
+                            if page != self._page:
+                                try:
+                                    url = page.url.lower()
+                                    if "blob:" in url or url.endswith(".pdf"):
+                                        page.close()
+                                except Exception:
+                                    pass
 
             except Exception as e:
                 if attempt == 0:
@@ -1588,17 +1648,21 @@ class FSEBrowser:
                     try:
                         self._page.reload(wait_until="networkidle")
                         self._wait_for_spinner()
-                        self._page.wait_for_selector("table tbody tr", state="visible", timeout=15000)
+                        self._page.wait_for_selector(
+                            "table tbody tr", state="visible", timeout=15000,
+                        )
                     except Exception:
                         pass
                 else:
                     self._logger.error(
-                        f"Download fallito definitivamente per riga {row_index + 1} ({tipologia}): {e}"
+                        f"Download fallito definitivamente per riga "
+                        f"{row_index + 1} ({tipologia}): {e}"
                     )
                     self._take_debug_screenshot(f"{patient_name}_row{row_index + 1}")
 
         return DocumentResult(
-            disciplina=tipologia, skipped=False, download_path=None, error="Download fallito dopo retry"
+            disciplina=tipologia, skipped=False, download_path=None,
+            error="Download fallito dopo retry",
         )
 
     def _take_debug_screenshot(self, label: str) -> None:
