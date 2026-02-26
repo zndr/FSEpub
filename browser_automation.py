@@ -31,7 +31,7 @@ PROGID_TO_BROWSER: dict[str, tuple[str, str]] = {
     "FirefoxHTML-308046B0AF4A39CB": ("firefox", "firefox.exe"),
 }
 
-CDP_CONNECT_TIMEOUT = 15  # seconds to wait for CDP port to become available
+CDP_CONNECT_TIMEOUT = 20  # seconds to wait for CDP port to become available
 CDP_CONNECT_POLL = 0.5    # poll interval in seconds
 
 
@@ -250,20 +250,28 @@ def _is_cdp_port_available(port: int) -> bool:
             return False
 
 
-def _is_browser_process_running(process_name: str) -> bool:
+def _is_browser_process_running(process_name: str, logger=None) -> bool:
     """Check if a browser process is currently running via tasklist."""
     try:
         result = subprocess.run(
             ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/NH"],
             capture_output=True, text=True, timeout=5,
         )
-        return process_name.lower() in result.stdout.lower()
-    except Exception:
+        running = process_name.lower() in result.stdout.lower()
+        if logger:
+            logger.debug(f"_is_browser_process_running({process_name}): {running}")
+        return running
+    except Exception as e:
+        if logger:
+            logger.debug(f"_is_browser_process_running({process_name}): errore {e}")
         return False
 
 
-def _kill_browser_processes(process_name: str, timeout: int = 10) -> None:
+def _kill_browser_processes(process_name: str, timeout: int = 10, logger=None) -> None:
     """Kill all instances of a browser process and wait until they're gone."""
+    if logger:
+        logger.debug(f"_kill_browser_processes({process_name}) avviato")
+    t0 = time.time()
     for _ in range(3):
         subprocess.run(
             ["taskkill", "/IM", process_name, "/F", "/T"],
@@ -274,20 +282,28 @@ def _kill_browser_processes(process_name: str, timeout: int = 10) -> None:
     # Wait for processes to actually terminate
     elapsed = 0
     while elapsed < timeout:
-        if not _is_browser_process_running(process_name):
+        if not _is_browser_process_running(process_name, logger=logger):
+            if logger:
+                logger.debug(f"_kill_browser_processes completato in {time.time()-t0:.1f}s")
             return
         time.sleep(1)
         elapsed += 1
+    if logger:
+        logger.debug(f"_kill_browser_processes: timeout dopo {time.time()-t0:.1f}s")
 
 
-def _launch_browser_with_cdp(exe_path: str, port: int) -> None:
+def _launch_browser_with_cdp(exe_path: str, port: int, logger=None) -> None:
     """Launch a browser with --remote-debugging-port as a detached process."""
+    if logger:
+        logger.debug(f"_launch_browser_with_cdp({exe_path}, port={port})")
     subprocess.Popen(
         [exe_path, f"--remote-debugging-port={port}"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
     )
+    if logger:
+        logger.debug("Browser lanciato, in attesa della porta CDP...")
 
 
 @dataclass
@@ -372,6 +388,7 @@ class FSEBrowser:
         browser_info = detect_default_browser()
         process_name = None
         exe_path = None
+        self._logger.debug(f"[CDP] detect_default_browser() -> {browser_info}")
 
         if browser_info:
             process_name = browser_info["process_name"]
@@ -379,11 +396,16 @@ class FSEBrowser:
 
         if not exe_path:
             exe_path = self._resolve_exe_from_channel(channel)
+            self._logger.debug(f"[CDP] exe_path da channel '{channel}': {exe_path}")
         if not process_name and channel in ("msedge", "chrome"):
             process_name = "msedge.exe" if channel == "msedge" else "chrome.exe"
 
+        self._logger.debug(f"[CDP] process_name={process_name}, exe_path={exe_path}, port={port}")
+
         # 2. CDP port already available → connect directly
-        if _is_cdp_port_available(port):
+        cdp_available = _is_cdp_port_available(port)
+        self._logger.debug(f"[CDP] Step 2: _is_cdp_port_available({port}) -> {cdp_available}")
+        if cdp_available:
             self._logger.info(f"Porta CDP {port} disponibile, connessione diretta...")
             try:
                 self._connect_cdp(endpoint, port)
@@ -396,8 +418,8 @@ class FSEBrowser:
                         "Connessione CDP fallita nonostante la porta sia aperta. "
                         "Rilancio del browser..."
                     )
-                    _kill_browser_processes(process_name)
-                    _launch_browser_with_cdp(exe_path, port)
+                    _kill_browser_processes(process_name, logger=self._logger)
+                    _launch_browser_with_cdp(exe_path, port, logger=self._logger)
 
                     elapsed = 0.0
                     while elapsed < CDP_CONNECT_TIMEOUT:
@@ -413,16 +435,20 @@ class FSEBrowser:
                 raise  # Re-raise if recovery not possible or also failed
 
         # 3. Browser running without CDP
-        if process_name and _is_browser_process_running(process_name):
+        browser_running = _is_browser_process_running(process_name, logger=self._logger) if process_name else False
+        self._logger.debug(f"[CDP] Step 3: browser_running={browser_running}")
+        if process_name and browser_running:
             # If CDP is enabled in registry, kill and relaunch
             progid = browser_info["progid"] if browser_info else None
-            if progid and get_cdp_registry_status(progid, port) and exe_path:
+            cdp_in_registry = get_cdp_registry_status(progid, port) if progid else False
+            self._logger.debug(f"[CDP] Step 3: progid={progid}, cdp_in_registry={cdp_in_registry}")
+            if progid and cdp_in_registry and exe_path:
                 self._logger.info(
                     f"Browser in esecuzione senza CDP ma CDP abilitato nel registro. "
                     f"Chiusura e rilancio..."
                 )
-                _kill_browser_processes(process_name)
-                _launch_browser_with_cdp(exe_path, port)
+                _kill_browser_processes(process_name, logger=self._logger)
+                _launch_browser_with_cdp(exe_path, port, logger=self._logger)
 
                 elapsed = 0.0
                 while elapsed < CDP_CONNECT_TIMEOUT:
@@ -448,9 +474,10 @@ class FSEBrowser:
             )
 
         # 4. Browser not running → launch it with CDP
+        self._logger.debug(f"[CDP] Step 4: browser non in esecuzione, exe_path={exe_path}")
         if exe_path and Path(exe_path).exists():
             self._logger.info(f"Browser non in esecuzione, lancio con CDP: {exe_path}")
-            _launch_browser_with_cdp(exe_path, port)
+            _launch_browser_with_cdp(exe_path, port, logger=self._logger)
 
             # Wait for CDP port to become available
             elapsed = 0.0
@@ -468,6 +495,7 @@ class FSEBrowser:
             )
 
         # 5. Cannot determine browser to launch
+        self._logger.debug("[CDP] Step 5: nessun browser rilevato")
         raise ConnectionError(
             f"Impossibile connettersi via CDP alla porta {port}.\n"
             f"Nessun browser rilevato. Avvia manualmente il browser con:\n"
@@ -489,6 +517,7 @@ class FSEBrowser:
 
         # Use the default context (carries existing cookies/session)
         contexts = self._browser.contexts
+        self._logger.debug(f"[CDP] Contesti trovati: {len(contexts)}")
         if not contexts:
             raise ConnectionError(
                 "Browser connesso via CDP ma nessun contesto trovato. "
@@ -497,12 +526,25 @@ class FSEBrowser:
         self._context = contexts[0]
         self._attached = True
 
+        # Log all pages and their URLs for diagnostics
+        for i, p in enumerate(self._context.pages):
+            try:
+                try:
+                    url = p.evaluate("window.location.href")
+                except Exception:
+                    url = p.url
+                self._logger.debug(f"[CDP] Tab {i}: {url}")
+            except Exception as e:
+                self._logger.debug(f"[CDP] Tab {i}: non accessibile ({e})")
+
         # Capture SISS sessionStorage from any existing tab before creating ours
         siss_storage = self._capture_siss_session_storage()
+        self._logger.debug(f"[CDP] SISS sessionStorage catturato: {siss_storage is not None}")
 
         # Prefer reusing an existing blank tab to avoid unnecessary tab creation
         self._page = self._find_reusable_page()
         if self._page is None:
+            self._logger.debug("[CDP] Nessun tab riutilizzabile, creazione nuovo tab")
             self._page = self._context.new_page()
 
         # Inject SISS sessionStorage so the SSO session is preserved and
@@ -526,11 +568,16 @@ class FSEBrowser:
         BLANK_URLS = ("about:blank", "")
         for page in self._context.pages:
             try:
-                url = page.url.lower()
+                try:
+                    url = page.evaluate("window.location.href").lower()
+                except Exception:
+                    url = page.url.lower()
+                self._logger.debug(f"  Tab candidata: {url}")
                 if url in BLANK_URLS or "newtab" in url or "ntp" in url:
-                    self._logger.info(f"Tab esistente riutilizzato: {page.url}")
+                    self._logger.info(f"Tab esistente riutilizzato: {url}")
                     return page
-            except Exception:
+            except Exception as e:
+                self._logger.debug(f"  Tab non accessibile: {e}")
                 continue
         return None
 
@@ -538,7 +585,11 @@ class FSEBrowser:
         """Extract sessionStorage from an existing tab on the SISS domain."""
         for page in self._context.pages:
             try:
-                if "operatorisiss" in page.url or "servizirl" in page.url:
+                try:
+                    url = page.evaluate("window.location.href")
+                except Exception:
+                    url = page.url
+                if "operatorisiss" in url or "servizirl" in url:
                     data = page.evaluate(
                         "() => {"
                         "  const s = {};"
@@ -551,12 +602,15 @@ class FSEBrowser:
                     )
                     if data:
                         self._logger.info(
-                            f"SessionStorage SISS catturato da tab esistente "
-                            f"({len(data)} chiavi)"
+                            f"SessionStorage SISS catturato ({len(data)} chiavi)"
                         )
                         return data
-            except Exception:
+                    else:
+                        self._logger.debug(f"Tab SISS trovato ma sessionStorage vuoto: {url}")
+            except Exception as e:
+                self._logger.debug(f"Errore cattura sessionStorage: {e}")
                 continue
+        self._logger.debug("Nessun tab SISS trovato per cattura sessionStorage")
         return None
 
     def _inject_siss_session(self, storage: dict) -> None:

@@ -84,6 +84,7 @@ SETTINGS_SPEC = [
     ("DOWNLOAD_TIMEOUT", "Download timeout (sec)", "120", "int"),
     ("PAGE_TIMEOUT", "Page timeout (sec)", "60", "int"),
     ("CONSOLE_FONT_SIZE", "Dim. carattere console", "8", "int"),
+    ("DEBUG_LOGGING", "Abilita info debug", "false", "bool"),
     ("MARK_AS_READ", "Marca come letto dopo elaborazione", "true", "bool"),
     ("DELETE_AFTER_PROCESSING", "Elimina email dopo elaborazione", "false", "bool"),
     ("MAX_EMAILS", "Max email da processare (0=tutte)", "3", "int"),
@@ -2276,7 +2277,7 @@ class FSEApp(QMainWindow):
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
             handler = TextHandler(self._mw_console, self._bridge)
-            handler.setLevel(logging.INFO)
+            handler.setLevel(logging.DEBUG if config.debug_logging else logging.INFO)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
@@ -2582,6 +2583,17 @@ class FSEApp(QMainWindow):
         self._fields["CONSOLE_FONT_SIZE"] = spec["CONSOLE_FONT_SIZE"][1]
 
         params_layout.addLayout(params_row0)
+
+        params_row1 = QHBoxLayout()
+        self._debug_cb = QCheckBox("Abilita info debug")
+        self._debug_cb.setChecked(spec["DEBUG_LOGGING"][1].lower() == "true")
+        self._debug_cb.setToolTip(
+            "Mostra messaggi di debug dettagliati nella console (utile per diagnostica)"
+        )
+        params_row1.addWidget(self._debug_cb)
+        params_row1.addStretch()
+        params_layout.addLayout(params_row1)
+        self._fields["DEBUG_LOGGING"] = spec["DEBUG_LOGGING"][1]
 
         self._fields["MAX_EMAILS"] = spec["MAX_EMAILS"][1]
         self._fields["MARK_AS_READ"] = spec["MARK_AS_READ"][1]
@@ -3766,6 +3778,7 @@ class FSEApp(QMainWindow):
         self._fields["HEADLESS"] = "true" if self._headless_cb.isChecked() else "false"
         self._fields["USE_EXISTING_BROWSER"] = "true" if self._cdp_cb.isChecked() else "false"
         self._fields["OPEN_AFTER_DOWNLOAD"] = "true" if self._open_after_cb.isChecked() else "false"
+        self._fields["DEBUG_LOGGING"] = "true" if self._debug_cb.isChecked() else "false"
         self._fields["MOVE_DIR"] = self._move_dir_entry.text()
         if self._mode_radio_none.isChecked():
             self._fields["PROCESS_TEXT"] = "false"
@@ -3838,6 +3851,8 @@ class FSEApp(QMainWindow):
                 self._pg_timeout_entry.setText(val)
             elif key == "CONSOLE_FONT_SIZE":
                 self._font_size_entry.setText(val)
+            elif key == "DEBUG_LOGGING":
+                self._debug_cb.setChecked(val.lower() == "true")
             elif key == "HEADLESS":
                 self._headless_cb.setChecked(val.lower() == "true")
             elif key == "USE_EXISTING_BROWSER":
@@ -4084,7 +4099,7 @@ class FSEApp(QMainWindow):
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
             handler = TextHandler(self._console, self._bridge)
-            handler.setLevel(logging.INFO)
+            handler.setLevel(logging.DEBUG if config.debug_logging else logging.INFO)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
@@ -4141,7 +4156,7 @@ class FSEApp(QMainWindow):
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
             handler = TextHandler(self._patient_console, self._bridge)
-            handler.setLevel(logging.INFO)
+            handler.setLevel(logging.DEBUG if config.debug_logging else logging.INFO)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
@@ -4236,7 +4251,7 @@ class FSEApp(QMainWindow):
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
             handler = TextHandler(self._patient_console, self._bridge)
-            handler.setLevel(logging.INFO)
+            handler.setLevel(logging.DEBUG if config.debug_logging else logging.INFO)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 

@@ -34,6 +34,7 @@ class Config:
     use_existing_browser: bool
     cdp_port: int
     max_emails: int  # 0 = unlimited
+    debug_logging: bool
     move_dir: Path | None
     process_text: bool
     text_dir: Path | None
@@ -79,6 +80,7 @@ class Config:
         use_existing_browser = os.getenv("USE_EXISTING_BROWSER", "true").lower() == "true"
         cdp_port = int(os.getenv("CDP_PORT", "9222"))
         max_emails = int(os.getenv("MAX_EMAILS", "0"))
+        debug_logging = os.getenv("DEBUG_LOGGING", "false").lower() == "true"
         move_dir_str = os.getenv("MOVE_DIR", "")
         move_dir = Path(move_dir_str) if move_dir_str else None
         process_text = os.getenv("PROCESS_TEXT", "false").lower() == "true"
@@ -112,6 +114,7 @@ class Config:
             use_existing_browser=use_existing_browser,
             cdp_port=cdp_port,
             max_emails=max_emails,
+            debug_logging=debug_logging,
             move_dir=move_dir,
             process_text=process_text,
             text_dir=text_dir,
