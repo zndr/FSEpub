@@ -1986,6 +1986,13 @@ class FSEApp(QMainWindow):
         self._cf_entry.setFont(QFont("Consolas", 11))
         cf_layout.addWidget(self._cf_entry, 0, 1)
         cf_layout.setColumnStretch(1, 1)
+        if _is_millewin_installed():
+            mw_btn = QPushButton("MW")
+            mw_btn.setToolTip("Copia codice fiscale del paziente attivo in Millewin")
+            mw_btn.setStyleSheet("padding: 2px 4px;")
+            mw_btn.setFixedWidth(38)
+            mw_btn.clicked.connect(self._copy_cf_from_millewin)
+            cf_layout.addWidget(mw_btn, 0, 2)
         right_layout.addWidget(cf_group)
 
         # Filters: Ente/Struttura and Date
@@ -2132,6 +2139,17 @@ class FSEApp(QMainWindow):
         group_layout.addLayout(other_row)
 
         return tutti_cb, doc_cbs
+
+    def _copy_cf_from_millewin(self) -> None:
+        """Read CF from Millewin window title and paste it into the patient CF field."""
+        cf = self._read_millewin_cf()
+        if cf:
+            self._cf_entry.setText(cf)
+        else:
+            QMessageBox.information(
+                self, "Millewin",
+                "Nessun paziente aperto in Millewin (finestra non trovata o CF assente nel titolo)."
+            )
 
     def _build_millewin_tab(self, parent: QWidget) -> None:
         """Build the Millewin → FSE tab content."""
