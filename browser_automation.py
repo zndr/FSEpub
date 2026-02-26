@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -496,13 +497,91 @@ class FSEBrowser:
         self._context = contexts[0]
         self._attached = True
 
-        # Open a new tab for our automation
-        self._page = self._context.new_page()
+        # Capture SISS sessionStorage from any existing tab before creating ours
+        siss_storage = self._capture_siss_session_storage()
+
+        # Prefer reusing an existing blank tab to avoid unnecessary tab creation
+        self._page = self._find_reusable_page()
+        if self._page is None:
+            self._page = self._context.new_page()
+
+        # Inject SISS sessionStorage so the SSO session is preserved and
+        # a new login (which would invalidate Millewin's access) is avoided
+        if siss_storage:
+            self._inject_siss_session(siss_storage)
+
         self._page.set_default_timeout(self._config.page_timeout)
         self._logger.info(
             f"Connesso a browser esistente (CDP porta {port}, "
             f"{len(self._context.pages)} tab totali)"
         )
+
+    def _find_reusable_page(self) -> Page | None:
+        """Find an existing blank/new-tab page to reuse instead of creating a new one.
+
+        Reusing an existing tab avoids the sessionStorage isolation that comes
+        with new_page() — though we still inject sessionStorage via init script
+        as a safety net.
+        """
+        BLANK_URLS = ("about:blank", "")
+        for page in self._context.pages:
+            try:
+                url = page.url.lower()
+                if url in BLANK_URLS or "newtab" in url or "ntp" in url:
+                    self._logger.info(f"Tab esistente riutilizzato: {page.url}")
+                    return page
+            except Exception:
+                continue
+        return None
+
+    def _capture_siss_session_storage(self) -> dict | None:
+        """Extract sessionStorage from an existing tab on the SISS domain."""
+        for page in self._context.pages:
+            try:
+                if "operatorisiss" in page.url or "servizirl" in page.url:
+                    data = page.evaluate(
+                        "() => {"
+                        "  const s = {};"
+                        "  for (let i = 0; i < sessionStorage.length; i++) {"
+                        "    const k = sessionStorage.key(i);"
+                        "    s[k] = sessionStorage.getItem(k);"
+                        "  }"
+                        "  return s;"
+                        "}"
+                    )
+                    if data:
+                        self._logger.info(
+                            f"SessionStorage SISS catturato da tab esistente "
+                            f"({len(data)} chiavi)"
+                        )
+                        return data
+            except Exception:
+                continue
+        return None
+
+    def _inject_siss_session(self, storage: dict) -> None:
+        """Inject SISS sessionStorage into the automation page via init script.
+
+        Uses add_init_script so the data is available before any SPA code runs.
+        Only injects when sessionStorage is empty (first load on that origin)
+        to avoid overwriting fresh tokens after a manual re-login.
+        """
+        storage_json = json.dumps(storage)
+        self._page.add_init_script(
+            "() => {"
+            "  if ((location.hostname.includes('operatorisiss') ||"
+            "       location.hostname.includes('servizirl')) &&"
+            "      sessionStorage.length === 0) {"
+            "    try {"
+            "      const data = " + storage_json + ";"
+            "      Object.entries(data).forEach(([k, v]) => {"
+            "        try { sessionStorage.setItem(k, v); } catch(e) {}"
+            "      });"
+            "    } catch(e) {}"
+            "  }"
+            "}"
+        )
+        self._logger.info("Init script SISS sessionStorage iniettato nel tab di automazione")
 
     def _launch_bundled_chromium(self) -> BrowserContext:
         """Launch Playwright's bundled Chromium as fallback when system browser is incompatible."""
@@ -594,9 +673,27 @@ class FSEBrowser:
         except Exception:
             return False
 
+    def _reset_download_behavior(self) -> None:
+        """Reset browser download behavior to defaults before disconnecting CDP.
+
+        Playwright intercepts downloads via Browser.setDownloadBehavior (CDP).
+        If not reset before disconnect, the browser's download manager stays in
+        a broken state: manual downloads remain incomplete and Ctrl+J stops working.
+        """
+        if not self._page or not self._context:
+            return
+        try:
+            cdp = self._context.new_cdp_session(self._page)
+            cdp.send("Browser.setDownloadBehavior", {"behavior": "default"})
+            cdp.detach()
+            self._logger.info("Download behavior del browser ripristinato")
+        except Exception:
+            pass
+
     def stop(self) -> None:
         if self._attached:
-            # CDP mode: close only our tab, leave the browser running
+            # CDP mode: restore browser state, close our tab, leave browser running
+            self._reset_download_behavior()
             if self._page:
                 try:
                     self._page.close()
