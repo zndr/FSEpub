@@ -53,6 +53,8 @@ from version import __version__
 from browser_automation import (
     FSEBrowser,
     FSE_BASE_URL,
+    PatientDocumentInfo,
+    _is_tipologia_valida,
     detect_default_browser,
     get_cdp_registry_status,
     enable_cdp_in_registry,
@@ -112,13 +114,12 @@ SISS_DOCUMENT_TYPES = [
 ]
 
 PATIENT_DOCUMENT_TYPES = [
-    ("REFERTO", "Tutti i referti specialistici", True),
-    ("REFERTO SPECIALISTICO", "non def.", False),
+    ("REFERTO SPECIALISTICO", "non definiti", False),
     ("REFERTO SPECIALISTICO LABORATORIO", "Lab", False),
-    ("REFERTO SPECIALISTICO RADIOLOGIA", "Imaging", False),
-    ("REFERTO ANATOMIA PATOLOGICA", "Anat. pat.", False),
+    ("REFERTO SPECIALISTICO RADIOLOGIA", "Radiologia", False),
+    ("REFERTO ANATOMIA PATOLOGICA", "Anatomia patologica", False),
     ("LETTERA DIMISSIONE", "Lettera Dimissione", True),
-    ("VERBALE PRONTO SOCCORSO", "Verbale PS", True),
+    ("VERBALE PRONTO SOCCORSO", "Verbale Pronto soccorso", True),
 ]
 
 REFERTO_SUBTYPES = {
@@ -1668,6 +1669,67 @@ def _is_millewin_installed() -> bool:
     return exe_exists and service_exists
 
 
+class DocumentListDialog(QDialog):
+    """Modal dialog showing a list of patient documents with checkboxes."""
+
+    def __init__(self, docs: list[PatientDocumentInfo],
+                 allowed_types: set[str] | None = None,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Seleziona referti da scaricare")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(400)
+
+        layout = QVBoxLayout(self)
+
+        # Select all / Deselect all buttons
+        btn_row = QHBoxLayout()
+        btn_select_all = QPushButton("Seleziona tutti")
+        btn_select_all.clicked.connect(self._select_all)
+        btn_row.addWidget(btn_select_all)
+        btn_deselect_all = QPushButton("Deseleziona tutti")
+        btn_deselect_all.clicked.connect(self._deselect_all)
+        btn_row.addWidget(btn_deselect_all)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # List widget
+        self._list = QListWidget()
+        self._docs = docs
+        for doc in docs:
+            text = f"{doc.date_text}  |  {doc.tipo_text}  |  {doc.ente_text}"
+            item = QListWidgetItem(text)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            # Pre-filter: uncheck documents not matching allowed types
+            if allowed_types is not None and not _is_tipologia_valida(doc.tipo_text, allowed_types):
+                item.setCheckState(Qt.CheckState.Unchecked)
+            else:
+                item.setCheckState(Qt.CheckState.Checked)
+            self._list.addItem(item)
+        layout.addWidget(self._list)
+
+        # OK / Cancel
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _select_all(self) -> None:
+        for i in range(self._list.count()):
+            self._list.item(i).setCheckState(Qt.CheckState.Checked)
+
+    def _deselect_all(self) -> None:
+        for i in range(self._list.count()):
+            self._list.item(i).setCheckState(Qt.CheckState.Unchecked)
+
+    def get_selected_row_indices(self) -> set[int]:
+        result: set[int] = set()
+        for i in range(self._list.count()):
+            if self._list.item(i).checkState() == Qt.CheckState.Checked:
+                result.add(self._docs[i].row_index)
+        return result
+
+
 class FSEApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -1688,6 +1750,11 @@ class FSEApp(QMainWindow):
         self._mw_browser: FSEBrowser | None = None
         self._mw_auto_timer: QTimer | None = None
         self._mw_last_cf: str | None = None
+        self._btn_mw_start: QPushButton | None = None
+        self._btn_mw_stop: QPushButton | None = None
+        self._mw_auto_cb: QCheckBox | None = None
+        self._selected_row_indices: set[int] | None = None
+        self._list_docs_worker: threading.Thread | None = None
         self._fields: dict[str, str | bool] = {}  # key -> current value
         self._btn_analyze: QPushButton | None = None  # created in _build_ui
 
@@ -1741,7 +1808,7 @@ class FSEApp(QMainWindow):
         file_menu = menu_bar.addMenu("File")
 
         act_settings = QAction("Impostazioni", self)
-        act_settings.triggered.connect(lambda: self._notebook.setCurrentIndex(3))
+        act_settings.triggered.connect(lambda: self._notebook.setCurrentIndex(2))
         file_menu.addAction(act_settings)
 
         file_menu.addSeparator()
@@ -1792,15 +1859,11 @@ class FSEApp(QMainWindow):
         siss_tab = QWidget()
         self._notebook.addTab(siss_tab, "Scarica referti non letti")
 
-        # Tab 2: Scarica referti singolo paziente
+        # Tab 2: Referti singolo paziente
         patient_tab = QWidget()
-        self._notebook.addTab(patient_tab, "Scarica referti singolo paziente")
+        self._notebook.addTab(patient_tab, "Referti singolo paziente")
 
-        # Tab 3: Millewin → FSE
-        mw_tab = QWidget()
-        self._notebook.addTab(mw_tab, "Millewin \u2192 FSE")
-
-        # Tab 4: Impostazioni (built first so fields exist for SISS tab)
+        # Tab 3: Impostazioni (built first so fields exist for SISS tab)
         settings_tab = QWidget()
         self._notebook.addTab(settings_tab, "Impostazioni")
         self._build_settings_tab(settings_tab)
@@ -1808,11 +1871,6 @@ class FSEApp(QMainWindow):
         # Build SISS tab after settings so fields exist
         self._build_siss_tab(siss_tab)
         self._build_patient_tab(patient_tab)
-        self._build_millewin_tab(mw_tab)
-
-        # Hide Millewin tab if Millewin is not installed
-        if not _is_millewin_installed():
-            self._notebook.removeTab(2)
 
         # Bottom bar: Reset console (left) — Analizza referti — Apri cartella download (right)
         bottom_row = QHBoxLayout()
@@ -1836,8 +1894,6 @@ class FSEApp(QMainWindow):
             self._console.clear()
         elif idx == 1:
             self._patient_console.clear()
-        elif idx == 2:
-            self._mw_console.clear()
 
     def _open_download_dir(self) -> None:
         """Open the configured download directory in the file explorer."""
@@ -1962,41 +2018,70 @@ class FSEApp(QMainWindow):
             return None
         return {key for key, cb in doc_cbs.items() if cb.isChecked()}
 
+    def _get_patient_selected_types(self) -> set[str] | None:
+        """Return the set of selected patient document type keys.
+
+        Returns None if radio 'Tutti' is checked.
+        When referto_tutti_cb is checked, adds 'REFERTO' to match all subtypes.
+        """
+        if self._patient_radio_tutti.isChecked():
+            return None
+        result: set[str] = set()
+        if self._patient_referto_tutti_cb.isChecked():
+            result.add("REFERTO")
+        for key, cb in self._patient_doc_cbs.items():
+            if cb.isChecked():
+                result.add(key)
+        return result if result else set()
+
     def _build_patient_tab(self, parent: QWidget) -> None:
-        """Build the Download Paziente tab content with two-column layout."""
+        """Build the Referti singolo paziente tab with two-column top layout."""
         layout = QVBoxLayout(parent)
         layout.setContentsMargins(8, 8, 8, 8)
 
         # Top frame: two columns
         top_layout = QHBoxLayout()
 
-        # ── Left column: Tipologia documenti ──
-        self._patient_tutti_cb, self._patient_doc_cbs = self._build_patient_doc_type_checkboxes()
-        top_layout.addWidget(self._patient_doc_group, 1)
+        # ── Left column: Paziente + Origine e data ──
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
 
-        # ── Right column: CF + Origine e data + bottoni ──
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-
-        # CF input
-        cf_group = QGroupBox("Codice Fiscale")
-        cf_layout = QGridLayout(cf_group)
-        cf_layout.addWidget(QLabel("CF:"), 0, 0)
+        # Paziente group
+        paziente_group = QGroupBox("Paziente")
+        paz_layout = QGridLayout(paziente_group)
+        paz_layout.addWidget(QLabel("CF:"), 0, 0)
         self._cf_entry = QLineEdit()
         self._cf_entry.setFont(QFont("Consolas", 11))
-        cf_layout.addWidget(self._cf_entry, 0, 1)
-        cf_layout.setColumnStretch(1, 1)
-        if _is_millewin_installed():
+        paz_layout.addWidget(self._cf_entry, 0, 1)
+        paz_layout.setColumnStretch(1, 1)
+        mw_installed = _is_millewin_installed()
+        if mw_installed:
             mw_btn = QPushButton("MW")
             mw_btn.setToolTip("Copia codice fiscale del paziente attivo in Millewin")
             mw_btn.setStyleSheet("padding: 2px 4px;")
             mw_btn.setFixedWidth(38)
             mw_btn.clicked.connect(self._copy_cf_from_millewin)
-            cf_layout.addWidget(mw_btn, 0, 2)
-        right_layout.addWidget(cf_group)
+            paz_layout.addWidget(mw_btn, 0, 2)
+        if mw_installed:
+            mw_row = QHBoxLayout()
+            self._btn_mw_start = QPushButton("FSE del paziente")
+            self._btn_mw_start.setToolTip("Apri la scheda di un paziente in Millewin, poi premi il pulsante")
+            self._btn_mw_start.clicked.connect(lambda: self._start_mw_workflow())
+            mw_row.addWidget(self._btn_mw_start)
+            self._btn_mw_stop = QPushButton("Stop")
+            self._btn_mw_stop.clicked.connect(self._stop_mw_workflow)
+            self._btn_mw_stop.setEnabled(False)
+            mw_row.addWidget(self._btn_mw_stop)
+            self._mw_auto_cb = QCheckBox("Sincro automatico")
+            self._mw_auto_cb.setToolTip("Monitora Millewin e naviga automaticamente al FSE quando cambi paziente")
+            self._mw_auto_cb.toggled.connect(self._on_mw_auto_toggled)
+            mw_row.addWidget(self._mw_auto_cb)
+            mw_row.addStretch()
+            paz_layout.addLayout(mw_row, 1, 0, 1, 3)
+        left_layout.addWidget(paziente_group)
 
-        # Filters: Ente/Struttura and Date
+        # Origine e data group
         filter_group = QGroupBox("Origine e data")
         filter_layout = QGridLayout(filter_group)
         filter_layout.setColumnStretch(1, 1)
@@ -2030,17 +2115,30 @@ class FSEApp(QMainWindow):
         self._date_to_entry.setEnabled(False)
         filter_layout.addWidget(self._date_to_entry, 2, 3)
 
-        right_layout.addWidget(filter_group)
+        left_layout.addWidget(filter_group)
+        left_layout.addStretch()
+        top_layout.addWidget(left_widget, 1)
 
-        # Controls
+        # ── Right column: Tipologia documenti ──
+        self._patient_radio_tutti, self._patient_radio_seleziona, self._patient_referto_tutti_cb, self._patient_doc_cbs = self._build_patient_doc_type_checkboxes()
+        top_layout.addWidget(self._patient_doc_group, 1)
+
+        layout.addLayout(top_layout)
+
+        # Button row (full width)
         ctrl_layout = QHBoxLayout()
         ctrl_layout.addStretch()
-        self._btn_load_enti = QPushButton("Carica strutture")
+        self._btn_load_enti = QPushButton("Elenca strutture")
         self._btn_load_enti.setToolTip("Apre il browser e carica le strutture disponibili per il paziente")
         self._btn_load_enti.clicked.connect(self._start_ente_scan)
         ctrl_layout.addWidget(self._btn_load_enti)
 
-        self._btn_patient_start = QPushButton("Avvia Download")
+        self._btn_list_docs = QPushButton("Elenca Referti Selezionati")
+        self._btn_list_docs.setToolTip("Apre il browser e mostra la lista dei referti per selezionarli manualmente")
+        self._btn_list_docs.clicked.connect(self._start_list_documents)
+        ctrl_layout.addWidget(self._btn_list_docs)
+
+        self._btn_patient_start = QPushButton("Avvia download")
         self._btn_patient_start.clicked.connect(self._start_patient_download)
         ctrl_layout.addWidget(self._btn_patient_start)
 
@@ -2049,12 +2147,7 @@ class FSEApp(QMainWindow):
         self._btn_patient_stop.setEnabled(False)
         ctrl_layout.addWidget(self._btn_patient_stop)
         ctrl_layout.addStretch()
-        right_layout.addLayout(ctrl_layout)
-
-        right_layout.addStretch()
-        top_layout.addWidget(right_widget, 1)
-
-        layout.addLayout(top_layout)
+        layout.addLayout(ctrl_layout)
 
         # Console
         console_group = QGroupBox("Console")
@@ -2067,70 +2160,58 @@ class FSEApp(QMainWindow):
         console_layout.addWidget(self._patient_console)
         layout.addWidget(console_group, 1)
 
-    def _build_patient_doc_type_checkboxes(self) -> tuple[QCheckBox, dict[str, QCheckBox]]:
-        """Create Patient document type checkboxes with hierarchy."""
+    def _build_patient_doc_type_checkboxes(self) -> tuple[QRadioButton, QRadioButton, QCheckBox, dict[str, QCheckBox]]:
+        """Create Patient document type checkboxes with radio Tutti/Seleziona.
+
+        Returns (radio_tutti, radio_seleziona, referto_tutti_cb, doc_cbs).
+        """
         self._patient_doc_group = QGroupBox("Tipologia documenti")
         group_layout = QVBoxLayout(self._patient_doc_group)
         group_layout.setSpacing(2)
 
-        tutti_cb = QCheckBox("Tutti")
         doc_cbs: dict[str, QCheckBox] = {}
         all_cbs: list[QCheckBox] = []
-        referto_parent_cb: QCheckBox | None = None
         referto_sub_cbs: list[QCheckBox] = []
 
-        def on_tutti_changed(checked):
-            for cb in all_cbs:
-                cb.setEnabled(not checked)
-            if not checked and referto_parent_cb and referto_parent_cb.isChecked():
-                for cb in referto_sub_cbs:
-                    cb.setEnabled(False)
+        # Radio buttons: Tutti / Seleziona
+        radio_tutti = QRadioButton("Tutti")
+        radio_seleziona = QRadioButton("Seleziona")
+        radio_tutti.setChecked(True)
 
-        def on_referto_parent_changed(checked):
-            if tutti_cb.isChecked():
-                return
-            for cb in referto_sub_cbs:
-                cb.setEnabled(not checked)
+        radio_row = QHBoxLayout()
+        radio_row.addWidget(radio_tutti)
+        radio_row.addWidget(radio_seleziona)
+        radio_row.addStretch()
+        group_layout.addLayout(radio_row)
 
-        tutti_cb.toggled.connect(on_tutti_changed)
-        group_layout.addWidget(tutti_cb)
+        # Referti specialistici label + row
+        group_layout.addWidget(QLabel("Referti specialistici:"))
+        referto_tutti_cb = QCheckBox("Tutti")
+        referto_tutti_cb.setChecked(True)
 
-        # Referto parent
-        for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
-            if type_key == "REFERTO":
-                cb = QCheckBox(label)
-                cb.setChecked(default_on)
-                referto_parent_cb = cb
-                cb.toggled.connect(on_referto_parent_changed)
-                group_layout.addWidget(cb)
-                doc_cbs[type_key] = cb
-                all_cbs.append(cb)
-                break
+        sub_row = QHBoxLayout()
+        sub_row.setContentsMargins(12, 0, 0, 0)
+        sub_row.addWidget(referto_tutti_cb)
 
-        # Referto sub-types (single indented row, compact)
-        sub_items = [
+        referto_items = [
             (tkey, dlabel, dfl) for tkey, dlabel, dfl in PATIENT_DOCUMENT_TYPES
             if tkey in REFERTO_SUBTYPES
         ]
-        sub_row = QHBoxLayout()
-        sub_row.setContentsMargins(24, 0, 0, 0)
-        for type_key, label, default_on in sub_items:
+        for type_key, label, default_on in referto_items:
             cb = QCheckBox(label)
             cb.setToolTip(type_key.title())
             cb.setChecked(default_on)
-            if referto_parent_cb and referto_parent_cb.isChecked():
-                cb.setEnabled(False)
             sub_row.addWidget(cb)
-            sub_row.addStretch()
             doc_cbs[type_key] = cb
             all_cbs.append(cb)
             referto_sub_cbs.append(cb)
+        sub_row.addStretch()
         group_layout.addLayout(sub_row)
 
-        # Other types
+        # Other types (non-referto)
         other_row = QHBoxLayout()
         for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
-            if type_key not in REFERTO_SUBTYPES and type_key != "REFERTO":
+            if type_key not in REFERTO_SUBTYPES:
                 cb = QCheckBox(label)
                 cb.setChecked(default_on)
                 other_row.addWidget(cb)
@@ -2139,7 +2220,49 @@ class FSEApp(QMainWindow):
         other_row.addStretch()
         group_layout.addLayout(other_row)
 
-        return tutti_cb, doc_cbs
+        # ── Interactions ──
+
+        def on_radio_tutti(checked):
+            """When 'Tutti' radio selected, disable all checkboxes."""
+            if checked:
+                referto_tutti_cb.setEnabled(False)
+                for cb in all_cbs:
+                    cb.setEnabled(False)
+            else:
+                referto_tutti_cb.setEnabled(True)
+                for cb in all_cbs:
+                    cb.setEnabled(True)
+                # Re-apply referto_tutti logic
+                if referto_tutti_cb.isChecked():
+                    for cb in referto_sub_cbs:
+                        cb.setEnabled(True)  # stay enabled but unchecked individually
+
+        def on_referto_tutti_changed(checked):
+            """When 'Tutti referti' is checked, uncheck individual referto subtypes."""
+            if radio_tutti.isChecked():
+                return
+            if checked:
+                for cb in referto_sub_cbs:
+                    cb.setChecked(False)
+
+        def on_referto_sub_changed(checked):
+            """When any individual referto subtype is checked, uncheck 'Tutti referti'."""
+            if radio_tutti.isChecked():
+                return
+            if checked:
+                referto_tutti_cb.setChecked(False)
+
+        radio_tutti.toggled.connect(on_radio_tutti)
+        referto_tutti_cb.toggled.connect(on_referto_tutti_changed)
+        for cb in referto_sub_cbs:
+            cb.toggled.connect(on_referto_sub_changed)
+
+        # Initial state: radio "Tutti" is checked, so disable all
+        referto_tutti_cb.setEnabled(False)
+        for cb in all_cbs:
+            cb.setEnabled(False)
+
+        return radio_tutti, radio_seleziona, referto_tutti_cb, doc_cbs
 
     def _copy_cf_from_millewin(self) -> None:
         """Read CF from Millewin window title and paste it into the patient CF field."""
@@ -2151,57 +2274,6 @@ class FSEApp(QMainWindow):
                 self, "Millewin",
                 "Nessun paziente aperto in Millewin (finestra non trovata o CF assente nel titolo)."
             )
-
-    def _build_millewin_tab(self, parent: QWidget) -> None:
-        """Build the Millewin → FSE tab content."""
-        layout = QVBoxLayout(parent)
-        layout.setContentsMargins(8, 8, 8, 8)
-
-        # Info label
-        info_label = QLabel(
-            "Apri la scheda di un paziente in Millewin, poi premi il pulsante."
-        )
-        layout.addWidget(info_label)
-
-        # Controls group
-        ctrl_group = QGroupBox("Controlli")
-        ctrl_layout = QHBoxLayout(ctrl_group)
-
-        self._btn_mw_start = QPushButton("Vai al FSE del paziente corrente")
-        self._btn_mw_start.clicked.connect(lambda: self._start_mw_workflow())
-        ctrl_layout.addWidget(self._btn_mw_start)
-
-        self._btn_mw_stop = QPushButton("Interrompi")
-        self._btn_mw_stop.clicked.connect(self._stop_mw_workflow)
-        self._btn_mw_stop.setEnabled(False)
-        ctrl_layout.addWidget(self._btn_mw_stop)
-
-        ctrl_layout.addStretch()
-        layout.addWidget(ctrl_group)
-
-        # Auto-polling checkbox
-        self._mw_auto_cb = QCheckBox("Sincronizzazione automatica al cambio paziente")
-        self._mw_auto_cb.setToolTip(
-            "Monitora Millewin e naviga automaticamente al FSE quando cambi paziente"
-        )
-        self._mw_auto_cb.toggled.connect(self._on_mw_auto_toggled)
-        layout.addWidget(self._mw_auto_cb)
-
-        # CF extracted label
-        self._mw_cf_label = QLabel("")
-        self._mw_cf_label.setFont(QFont("Consolas", 14))
-        layout.addWidget(self._mw_cf_label)
-
-        # Console
-        console_group = QGroupBox("Console")
-        console_layout = QVBoxLayout(console_group)
-        font_size = int(self._get_field("CONSOLE_FONT_SIZE") or "8")
-        self._mw_console = QTextEdit()
-        self._mw_console.setReadOnly(True)
-        self._mw_console.setFont(QFont("Consolas", font_size))
-        self._mw_console.setMinimumHeight(200)
-        console_layout.addWidget(self._mw_console)
-        layout.addWidget(console_group, 1)
 
     def _on_mw_auto_toggled(self, checked: bool) -> None:
         """Toggle automatic polling of Millewin window."""
@@ -2232,7 +2304,7 @@ class FSEApp(QMainWindow):
         if cf == self._mw_last_cf:
             return
         self._mw_last_cf = cf
-        self._mw_cf_label.setText(cf)
+        self._bridge.call_on_main.emit(lambda c=cf: self._cf_entry.setText(c))
         self._mw_log(f"Cambio paziente rilevato: {cf}")
         self._start_mw_workflow(cf_override=cf)
 
@@ -2247,7 +2319,7 @@ class FSEApp(QMainWindow):
         self._btn_mw_start.setEnabled(False)
         self._btn_mw_stop.setEnabled(True)
         if cf_override is None:
-            self._mw_cf_label.setText("")
+            self._cf_entry.clear()
         self._mw_log("--- Avvio workflow Millewin → FSE ---")
 
         self._mw_worker = threading.Thread(
@@ -2271,12 +2343,12 @@ class FSEApp(QMainWindow):
                     return
 
             self._mw_log(f"CF estratto: {cf}")
-            self._bridge.call_on_main.emit(lambda c=cf: self._mw_cf_label.setText(c))
+            self._bridge.call_on_main.emit(lambda c=cf: self._cf_entry.setText(c))
 
             # Step 2: Create/reuse FSEBrowser
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
-            handler = TextHandler(self._mw_console, self._bridge)
+            handler = TextHandler(self._patient_console, self._bridge)
             handler.setLevel(logging.DEBUG if config.debug_logging else logging.INFO)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
@@ -2316,9 +2388,11 @@ class FSEApp(QMainWindow):
             return
         self._mw_poll_timer.stop()
         # If auto-polling is active, keep manual button disabled
-        if not self._mw_auto_cb.isChecked():
-            self._btn_mw_start.setEnabled(True)
-        self._btn_mw_stop.setEnabled(False)
+        if self._mw_auto_cb is not None and not self._mw_auto_cb.isChecked():
+            if self._btn_mw_start is not None:
+                self._btn_mw_start.setEnabled(True)
+        if self._btn_mw_stop is not None:
+            self._btn_mw_stop.setEnabled(False)
         self._mw_log("--- Workflow terminato ---")
 
     def _stop_mw_workflow(self) -> None:
@@ -2328,8 +2402,8 @@ class FSEApp(QMainWindow):
         self._btn_mw_stop.setEnabled(False)
 
     def _mw_log(self, msg: str) -> None:
-        """Append a message to the Millewin console (main-thread safe)."""
-        self._bridge.append_text.emit(self._mw_console, msg)
+        """Append a message to the patient console (main-thread safe)."""
+        self._bridge.append_text.emit(self._patient_console, msg)
 
     def _read_millewin_cf(self) -> str | None:
         """Read the codice fiscale from the Millewin window title."""
@@ -4137,6 +4211,7 @@ class FSEApp(QMainWindow):
 
         self._btn_load_enti.setEnabled(False)
         self._btn_patient_start.setEnabled(False)
+        self._btn_list_docs.setEnabled(False)
         self._btn_patient_stop.setEnabled(True)
         self._patient_stop_event.clear()
         self._patient_log("--- Scansione strutture in corso... ---")
@@ -4186,8 +4261,112 @@ class FSEApp(QMainWindow):
         self._ente_scan_poll_timer.stop()
         self._btn_load_enti.setEnabled(True)
         self._btn_patient_start.setEnabled(True)
+        self._btn_list_docs.setEnabled(True)
         self._btn_patient_stop.setEnabled(False)
         self._patient_log("--- Scansione strutture terminata ---")
+
+    # ---- List documents workflow ----
+
+    def _start_list_documents(self) -> None:
+        """Validate CF and start the list documents worker."""
+        if self._list_docs_worker and self._list_docs_worker.is_alive():
+            QMessageBox.warning(self, "Attenzione", "Elencazione referti gia' in corso")
+            return
+        if self._patient_worker and self._patient_worker.is_alive():
+            QMessageBox.warning(self, "Attenzione", "Download paziente in corso, attendere il completamento")
+            return
+
+        cf = self._cf_entry.text().strip().upper()
+        if not re.match(r"^[A-Z0-9]{16}$", cf):
+            QMessageBox.warning(self, "Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
+            return
+
+        self._save_settings_quietly()
+        self._patient_stop_event.clear()
+        self._btn_list_docs.setEnabled(False)
+        self._btn_patient_start.setEnabled(False)
+        self._btn_load_enti.setEnabled(False)
+        self._btn_patient_stop.setEnabled(True)
+        self._patient_log("--- Elencazione referti in corso... ---")
+
+        self._list_docs_worker = threading.Thread(
+            target=self._list_docs_worker_fn, args=(cf,), daemon=True,
+        )
+        self._list_docs_worker.start()
+        self._list_docs_poll_timer = QTimer(self)
+        self._list_docs_poll_timer.timeout.connect(self._poll_list_docs)
+        self._list_docs_poll_timer.start(500)
+
+    def _list_docs_worker_fn(self, codice_fiscale: str) -> None:
+        """Worker: open browser, list documents, then signal main thread to show dialog."""
+        try:
+            config = Config.load(ENV_FILE)
+            logger = ProcessingLogger(config.log_dir)
+            handler = TextHandler(self._patient_console, self._bridge)
+            handler.setLevel(logging.DEBUG if config.debug_logging else logging.INFO)
+            handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+            logger._logger.addHandler(handler)
+
+            # Reuse browser if available
+            reused = False
+            if self._patient_browser is not None:
+                try:
+                    if self._patient_browser._is_alive():
+                        browser = self._patient_browser
+                        reused = True
+                        logger.info("Riutilizzo browser esistente")
+                except Exception:
+                    pass
+            if not reused:
+                browser = FSEBrowser(config, logger)
+                browser.start()
+                browser.wait_for_manual_login(stop_event=self._patient_stop_event)
+
+            def on_enti_found(enti):
+                self._bridge.call_on_main.emit(lambda e=enti: self._update_ente_combobox(e))
+
+            docs = browser.list_patient_documents(
+                codice_fiscale,
+                stop_event=self._patient_stop_event,
+                on_enti_found=on_enti_found,
+            )
+
+            # Save browser for reuse by download worker
+            self._patient_browser = browser
+
+            # Show dialog on main thread
+            self._bridge.call_on_main.emit(lambda d=docs: self._show_document_list_dialog(d))
+        except InterruptedError:
+            self._patient_log("Elencazione interrotta dall'utente")
+        except Exception as e:
+            self._patient_log(f"Errore elencazione referti: {e}")
+
+    def _show_document_list_dialog(self, docs: list[PatientDocumentInfo]) -> None:
+        """Show the document selection dialog on the main thread."""
+        if not docs:
+            self._patient_log("Nessun referto trovato nella tabella")
+            return
+
+        allowed_types = self._get_patient_selected_types()
+        dlg = DocumentListDialog(docs, allowed_types=allowed_types, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._selected_row_indices = dlg.get_selected_row_indices()
+            count = len(self._selected_row_indices)
+            self._patient_log(f"Selezionati {count} referti su {len(docs)} totali")
+        else:
+            self._selected_row_indices = None
+            self._patient_log("Selezione annullata")
+
+    def _poll_list_docs(self) -> None:
+        """Poll the list documents worker thread."""
+        if self._list_docs_worker and self._list_docs_worker.is_alive():
+            return
+        self._list_docs_poll_timer.stop()
+        self._btn_list_docs.setEnabled(True)
+        self._btn_patient_start.setEnabled(True)
+        self._btn_load_enti.setEnabled(True)
+        self._btn_patient_stop.setEnabled(False)
+        self._patient_log("--- Elencazione referti terminata ---")
 
     # ---- Patient download ----
 
@@ -4204,7 +4383,7 @@ class FSEApp(QMainWindow):
             QMessageBox.warning(self, "Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
             return
 
-        selected = self._get_selected_types(self._patient_tutti_cb, self._patient_doc_cbs)
+        selected = self._get_patient_selected_types()
         if selected is not None and not selected:
             QMessageBox.warning(self, "Errore", "Seleziona almeno una tipologia di documento")
             return
@@ -4212,17 +4391,19 @@ class FSEApp(QMainWindow):
         ente_filter = self._ente_combo.currentText().strip()
         date_from = self._parse_user_date(self._date_from_entry.text())
         date_to = self._parse_user_date(self._date_to_entry.text())
+        row_indices = self._selected_row_indices
 
         self._save_settings_quietly()
         self._patient_stop_event.clear()
         self._btn_patient_start.setEnabled(False)
         self._btn_patient_stop.setEnabled(True)
         self._btn_load_enti.setEnabled(False)
+        self._btn_list_docs.setEnabled(False)
         self._patient_log(f"--- Avvio download per CF: {cf} ---")
 
         self._patient_worker = threading.Thread(
             target=self._patient_download_worker,
-            args=(cf, selected, ente_filter, date_from, date_to),
+            args=(cf, selected, ente_filter, date_from, date_to, row_indices),
             daemon=True,
         )
         self._patient_worker.start()
@@ -4246,7 +4427,8 @@ class FSEApp(QMainWindow):
                                  allowed_types: set[str] | None,
                                  ente_filter: str = "",
                                  date_from: date | None = None,
-                                 date_to: date | None = None) -> None:
+                                 date_to: date | None = None,
+                                 selected_row_indices: set[int] | None = None) -> None:
         try:
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
@@ -4257,7 +4439,7 @@ class FSEApp(QMainWindow):
 
             file_manager = FileManager(config, logger)
 
-            # Reuse browser from ente scan if still alive
+            # Reuse browser from ente scan or list docs if still alive
             reused = False
             if self._patient_browser is not None:
                 try:
@@ -4265,7 +4447,7 @@ class FSEApp(QMainWindow):
                         browser = self._patient_browser
                         self._patient_browser = None
                         reused = True
-                        logger.info("Riutilizzo browser dalla scansione strutture")
+                        logger.info("Riutilizzo browser esistente")
                 except Exception:
                     pass
             if not reused:
@@ -4281,7 +4463,10 @@ class FSEApp(QMainWindow):
                     codice_fiscale, self._patient_stop_event, allowed_types,
                     ente_filter=ente_filter, date_from=date_from, date_to=date_to,
                     on_enti_found=on_enti_found,
+                    selected_row_indices=selected_row_indices,
                 )
+                # Reset row selection after use
+                self._selected_row_indices = None
 
                 # Initialize text processor
                 text_processor = None
@@ -4354,6 +4539,7 @@ class FSEApp(QMainWindow):
         self._btn_patient_start.setEnabled(True)
         self._btn_patient_stop.setEnabled(False)
         self._btn_load_enti.setEnabled(True)
+        self._btn_list_docs.setEnabled(True)
         self._patient_log("--- Download terminato ---")
 
     def _stop_patient_download(self) -> None:

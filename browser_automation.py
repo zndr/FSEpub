@@ -314,6 +314,14 @@ class DocumentResult:
     error: str | None
 
 
+@dataclass
+class PatientDocumentInfo:
+    row_index: int
+    date_text: str
+    tipo_text: str
+    ente_text: str
+
+
 class FSEBrowser:
     def __init__(self, config: Config, logger: ProcessingLogger) -> None:
         self._config = config
@@ -1289,13 +1297,76 @@ class FSEBrowser:
         self._logger.info(f"Enti trovati: {sorted(ente_set)}")
         return sorted(ente_set)
 
+    def list_patient_documents(self, codice_fiscale: str,
+                               stop_event: threading.Event | None = None,
+                               on_enti_found: callable | None = None) -> list[PatientDocumentInfo]:
+        """Navigate to the FSE and read the document table without downloading anything.
+
+        Returns a list of PatientDocumentInfo for every row in the table.
+        """
+        if stop_event is not None and stop_event.is_set():
+            return []
+
+        if not self._is_alive():
+            self._restart()
+
+        fse_link = f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}"
+        self._logger.info(f"Navigazione FSE per elenco documenti: {fse_link}")
+
+        self._navigate_and_login(fse_link, codice_fiscale)
+
+        referti_table = self._page.locator("table:has(th:has-text('Tipologia documento'))")
+        referti_table.wait_for(state="attached", timeout=10000)
+
+        headers = referti_table.locator("thead th")
+        header_count = headers.count()
+        header_texts = [headers.nth(j).inner_text().strip() for j in range(header_count)]
+
+        date_col = tipo_col = ente_col = None
+        for idx, h in enumerate(header_texts):
+            h_upper = h.upper()
+            if "DATA" in h_upper and date_col is None:
+                date_col = idx
+            elif "TIPOLOGIA" in h_upper:
+                tipo_col = idx
+            elif "ENTE" in h_upper or "STRUTTURA" in h_upper:
+                ente_col = idx
+
+        if tipo_col is None:
+            raise RuntimeError(f"Colonna 'Tipologia' non trovata nelle intestazioni: {header_texts}")
+
+        data_rows = referti_table.locator("tbody tr:has(td)")
+        row_count = data_rows.count()
+        self._logger.info(f"Trovate {row_count} righe nella tabella referti")
+
+        docs: list[PatientDocumentInfo] = []
+        ente_set: set[str] = set()
+        for i in range(row_count):
+            cells = data_rows.nth(i).locator("td")
+            cell_count = cells.count()
+            if cell_count <= (tipo_col or 0):
+                continue
+            date_text = cells.nth(date_col).inner_text().strip() if date_col is not None else ""
+            tipo_text = cells.nth(tipo_col).inner_text().strip()
+            ente_text = cells.nth(ente_col).inner_text().strip() if ente_col is not None else ""
+            docs.append(PatientDocumentInfo(row_index=i, date_text=date_text, tipo_text=tipo_text, ente_text=ente_text))
+            if ente_text:
+                ente_set.add(ente_text)
+
+        if on_enti_found and ente_set:
+            on_enti_found(sorted(ente_set))
+
+        self._logger.info(f"Elencati {len(docs)} documenti")
+        return docs
+
     def process_patient_all_dates(self, codice_fiscale: str,
                                   stop_event: threading.Event | None = None,
                                   allowed_types: set[str] | None = None,
                                   ente_filter: str = "",
                                   date_from: date | None = None,
                                   date_to: date | None = None,
-                                  on_enti_found: callable | None = None) -> list[DocumentResult]:
+                                  on_enti_found: callable | None = None,
+                                  selected_row_indices: set[int] | None = None) -> list[DocumentResult]:
         """Download ALL documents (all dates) for a patient, filtered by allowed types, ente, and date range."""
         patient_name = codice_fiscale  # Use CF as label since we don't have name
 
@@ -1373,6 +1444,11 @@ class FSEBrowser:
             # Pre-filter to identify matching rows and count
             rows_to_download: list[tuple[int, str, str, str]] = []
             for i, date_text, tipo_text, ente_text in row_info:
+                if selected_row_indices is not None and i not in selected_row_indices:
+                    results.append(DocumentResult(
+                        disciplina=tipo_text, skipped=True, download_path=None, error=None
+                    ))
+                    continue
                 if not _is_tipologia_valida(tipo_text, allowed_types):
                     results.append(DocumentResult(
                         disciplina=tipo_text, skipped=True, download_path=None, error=None
