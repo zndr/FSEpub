@@ -1494,6 +1494,11 @@ class FSEBrowser:
 
         return results
 
+    # Maximum time (seconds) to wait for save_as() to complete after the
+    # download event fires.  If the FSE server stalls mid-transfer, the
+    # timer cancels the download so the process does not hang forever.
+    _SAVE_TIMEOUT = 120
+
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,
                            visualizza_col: int | None, data_rows=None) -> DocumentResult:
         for attempt in range(2):  # max 1 retry
@@ -1522,19 +1527,53 @@ class FSEBrowser:
                 with self._page.expect_download(timeout=self._config.download_timeout) as download_info:
                     clickable.click()
                     # Wait for Accetta button and click it if it appears
+                    # (FSE can be slow to show the consent modal)
                     accetta = self._page.get_by_role("button", name="Accetta")
-                    if accetta.is_visible(timeout=5000):
+                    if accetta.is_visible(timeout=8000):
                         accetta.click()
 
                 download = download_info.value
+                self._logger.info(
+                    f"Download avviato: {download.url[:120]} → {download.suggested_filename}"
+                )
+
                 # Generate unique filename to avoid overwrites
                 ext = Path(download.suggested_filename).suffix or ".pdf"
                 unique_name = f"{patient_name}_{row_index}{ext}".replace(" ", "_")
                 save_path = self._config.download_dir / unique_name
-                download.save_as(str(save_path))
+
+                # Save with timeout: if the file transfer stalls, cancel the
+                # download instead of blocking the whole process forever.
+                cancel_timer = threading.Timer(self._SAVE_TIMEOUT, download.cancel)
+                cancel_timer.start()
+                try:
+                    download.save_as(str(save_path))
+                finally:
+                    cancel_timer.cancel()
+
+                # Check for download failure reported by the browser
+                failure = download.failure()
+                if failure:
+                    save_path.unlink(missing_ok=True)
+                    raise RuntimeError(f"Browser ha segnalato errore download: {failure}")
+
+                # Validate the saved file
+                if not save_path.exists():
+                    raise RuntimeError("File non creato dopo save_as")
+                file_size = save_path.stat().st_size
+                if file_size == 0:
+                    save_path.unlink(missing_ok=True)
+                    raise RuntimeError("File scaricato vuoto (0 bytes)")
+                with open(save_path, "rb") as f:
+                    header = f.read(5)
+                if header[:4] != b"%PDF":
+                    self._logger.warning(
+                        f"File non sembra un PDF (header: {header!r}, size: {file_size})"
+                    )
+                    # Keep the file but warn — some FSE docs might be CDA XML
 
                 self._logger.info(
-                    f"Download completato: {save_path.name} (tipologia: {tipologia})"
+                    f"Download completato: {save_path.name} ({file_size:,} bytes, tipologia: {tipologia})"
                 )
                 return DocumentResult(
                     disciplina=tipologia, skipped=False, download_path=save_path, error=None
@@ -1548,7 +1587,8 @@ class FSEBrowser:
                     )
                     try:
                         self._page.reload(wait_until="networkidle")
-                        self._page.wait_for_selector("table tbody tr", state="visible")
+                        self._wait_for_spinner()
+                        self._page.wait_for_selector("table tbody tr", state="visible", timeout=15000)
                     except Exception:
                         pass
                 else:
