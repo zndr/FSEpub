@@ -1494,9 +1494,6 @@ class FSEBrowser:
 
         return results
 
-    # Timeout (seconds) for waiting for the PDF response to arrive.
-    _PDF_INTERCEPT_TIMEOUT = 30
-
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,
                            visualizza_col: int | None, data_rows=None) -> DocumentResult:
         for attempt in range(2):  # max 1 retry
@@ -1520,92 +1517,57 @@ class FSEBrowser:
                 if clickable.count() == 0:
                     clickable = visualizza_cell
 
-                # ── Intercept PDF response: capture bytes in Python,
-                #    fulfill with an empty text response so the browser
-                #    never opens the PDF viewer or triggers a download. ──
-                captured = {"data": None}
-                logger = self._logger
+                # ── Observe the PDF response (no route interception).
+                #    expect_response just watches network traffic via CDP
+                #    without proxying or modifying any request. ──
+                def _is_pdf_response(resp):
+                    ct = resp.headers.get("content-type", "")
+                    return "pdf" in ct or "octet-stream" in ct
 
-                def _intercept_pdf(route):
-                    # Only intercept request types that could carry a PDF.
-                    # Let everything else (CSS, images, JS, etc.) through
-                    # untouched so the Angular SPA keeps working.
-                    if route.request.resource_type not in (
-                        "document", "xhr", "fetch", "other",
-                    ):
-                        route.continue_()
-                        return
-                    try:
-                        response = route.fetch()
-                    except Exception:
-                        route.continue_()
-                        return
-                    ct = response.headers.get("content-type", "")
-                    if ("pdf" in ct or "octet-stream" in ct) and captured["data"] is None:
-                        captured["data"] = response.body()
-                        logger.info(
-                            f"PDF intercettato: {route.request.url[:120]} "
-                            f"({len(captured['data']):,} bytes)"
-                        )
-                        # Fulfill with a tiny non-PDF response so the
-                        # browser doesn't hang (no abort!) and doesn't
-                        # open a PDF viewer or trigger a download.
-                        route.fulfill(
-                            status=200,
-                            body="",
-                            headers={"content-type": "text/plain"},
-                        )
-                    else:
-                        route.fulfill(response=response)
-
-                self._page.route("**/*", _intercept_pdf)
-                try:
+                with self._page.expect_response(
+                    _is_pdf_response,
+                    timeout=self._config.download_timeout,
+                ) as resp_info:
                     clickable.click()
                     accetta = self._page.get_by_role("button", name="Accetta")
                     if accetta.is_visible(timeout=8000):
                         accetta.click()
 
-                    # Poll until the route handler captures the PDF
-                    deadline = time.time() + self._PDF_INTERCEPT_TIMEOUT
-                    while captured["data"] is None and time.time() < deadline:
-                        self._page.wait_for_timeout(500)
+                response = resp_info.value
+                self._logger.info(
+                    f"Risposta PDF catturata: {response.url[:120]} "
+                    f"(status: {response.status})"
+                )
+                pdf_bytes = response.body()
+                self._logger.info(f"Body PDF letto: {len(pdf_bytes):,} bytes")
 
-                    if captured["data"] is None:
-                        raise RuntimeError(
-                            "Timeout: nessuna risposta PDF intercettata "
-                            f"entro {self._PDF_INTERCEPT_TIMEOUT}s"
-                        )
-                finally:
-                    self._page.unroute("**/*", _intercept_pdf)
-                    # Close any popup tabs the PDF viewer may have opened
-                    if self._context:
-                        for page in self._context.pages:
-                            if page != self._page:
-                                try:
-                                    url = page.url.lower()
-                                    if "blob:" in url or url.endswith(".pdf"):
-                                        page.close()
-                                except Exception:
-                                    pass
+                # Close any popup tabs the PDF viewer may have opened
+                if self._context:
+                    for pg in self._context.pages:
+                        if pg != self._page:
+                            try:
+                                url = pg.url.lower()
+                                if "blob:" in url or url.endswith(".pdf"):
+                                    pg.close()
+                            except Exception:
+                                pass
 
                 # ── Save captured bytes to disk ──
                 unique_name = (
                     f"{patient_name}_{row_index}.pdf".replace(" ", "_")
                 )
                 save_path = self._config.download_dir / unique_name
-                save_path.write_bytes(captured["data"])
+                save_path.write_bytes(pdf_bytes)
 
                 # ── Validate ──
-                file_size = save_path.stat().st_size
+                file_size = len(pdf_bytes)
                 if file_size == 0:
                     save_path.unlink(missing_ok=True)
                     raise RuntimeError("File scaricato vuoto (0 bytes)")
-                with open(save_path, "rb") as f:
-                    header = f.read(5)
-                if header[:4] != b"%PDF":
+                if pdf_bytes[:4] != b"%PDF":
                     self._logger.warning(
                         f"File non sembra un PDF "
-                        f"(header: {header!r}, size: {file_size})"
+                        f"(header: {pdf_bytes[:5]!r}, size: {file_size})"
                     )
 
                 self._logger.info(
