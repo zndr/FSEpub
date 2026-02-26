@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FSE Processor v2.3.14 — Guida Utente</title>
+<title>FSE Processor v2.3.15 — Guida Utente</title>
 <style>
   :root {
     --blue-900: #1a2744;
@@ -287,6 +287,7 @@
     <li><a href="#siss">Tab SISS</a></li>
     <li><a href="#paziente">Tab Paziente</a></li>
     <li><a href="#file">File scaricati</a></li>
+    <li><a href="#analisi">Analisi referti</a></li>
     <li><a href="#avanzate">Avanzate</a></li>
     <li><a href="#problemi">Problemi</a></li>
   </ul>
@@ -588,9 +589,187 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
 <a href="#top" class="top-link">&uarr; Torna all'inizio</a>
 </section>
 
-<!-- ====================== 6. AVANZATE ====================== -->
+<!-- ====================== 6. ANALISI REFERTI ====================== -->
+<section id="analisi">
+<h2>6. Estrazione testo e analisi referti con A.I.</h2>
+
+<p>
+  FSE Processor pu&ograve; estrarre il testo dai PDF scaricati e, opzionalmente, inviarlo a un
+  servizio di intelligenza artificiale per ottenere un'interpretazione strutturata del referto.
+</p>
+
+<div class="box box-warn">
+  <strong>Costi di utilizzo</strong>
+  L'analisi con A.I. utilizza servizi cloud a pagamento (Claude, ChatGPT, Gemini, Mistral).
+  Ogni referto analizzato comporta un costo variabile in base al provider e al modello scelto
+  (indicativamente da 0,001 a 0,02 USD per referto). L'uso dell'A.I. richiede una
+  <strong>API key</strong> personale ottenuta dal sito del provider scelto.
+  L'estrazione del testo e l'anonimizzazione sono invece gratuite e vengono eseguite localmente.
+</div>
+
+<h3>Le tre modalit&agrave; di elaborazione</h3>
+<p>Nel <strong>Tab Impostazioni &gt; Analisi referti</strong> &egrave; possibile scegliere una delle tre
+  modalit&agrave;:</p>
+<table>
+  <tr><th>Modalit&agrave;</th><th>Cosa fa</th><th>Richiede API key</th><th>Costo</th></tr>
+  <tr>
+    <td><strong>Nessuna</strong></td>
+    <td>I PDF vengono scaricati senza alcuna elaborazione aggiuntiva.</td>
+    <td>No</td>
+    <td>Nessuno</td>
+  </tr>
+  <tr>
+    <td><strong>Solo estrazione</strong></td>
+    <td>Il testo viene estratto dal PDF, anonimizzato (rimozione dati personali) e salvato
+      come file <code>.txt</code> nella cartella configurata. Non viene contattato alcun
+      servizio esterno.</td>
+    <td>No</td>
+    <td>Nessuno</td>
+  </tr>
+  <tr>
+    <td><strong>Estrazione e analisi con A.I.</strong></td>
+    <td>Come sopra, ma il testo anonimizzato viene inviato al provider A.I. selezionato.
+      Il risultato include una classificazione dei reperti per gravit&agrave; e il testo
+      ripulito del referto.</td>
+    <td><strong>S&igrave;</strong></td>
+    <td><strong>A consumo</strong></td>
+  </tr>
+</table>
+
+<h3>Estrazione del testo dai PDF</h3>
+<p>L'estrazione avviene localmente sul PC senza inviare dati all'esterno. L'app utilizza
+  diverse strategie in base al tipo di documento:</p>
+<ul>
+  <li><strong>Estrazione semplice</strong> &mdash; per referti specialistici, verbali PS e lettere
+    di dimissione. Estrae il testo direttamente dal PDF.</li>
+  <li><strong>Estrazione tabellare</strong> &mdash; per referti di laboratorio. Riconosce e preserva
+    la struttura delle tabelle (esame, valore, unit&agrave;, intervallo).</li>
+  <li><strong>OCR (opzionale)</strong> &mdash; per PDF contenenti solo immagini (es. referti scansionati).
+    Richiede l'installazione di Tesseract OCR sul sistema.</li>
+</ul>
+
+<h3>Anonimizzazione automatica</h3>
+<p>Prima di qualsiasi invio all'A.I., il testo viene anonimizzato localmente rimuovendo:</p>
+<ul>
+  <li>Codice fiscale, tessera sanitaria, codice sanitario</li>
+  <li>Nome e cognome del paziente</li>
+  <li>Intestazioni, pi&egrave; di pagina e metadati amministrativi</li>
+  <li>Firme digitali e riferimenti normativi</li>
+</ul>
+<div class="box box-tip">
+  <strong>Privacy</strong>
+  Il testo inviato all'A.I. &egrave; privo di dati identificativi del paziente. L'anonimizzazione
+  &egrave; sempre attiva e non pu&ograve; essere disabilitata.
+</div>
+
+<h3>Provider A.I. supportati</h3>
+<table>
+  <tr><th>Provider</th><th>Modelli disponibili</th><th>API key</th><th>Costo indicativo per referto</th></tr>
+  <tr>
+    <td><strong>Claude (Anthropic)</strong></td>
+    <td>claude-sonnet-4-6, claude-haiku-4-5, claude-opus-4-6</td>
+    <td>Richiesta &mdash; <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a></td>
+    <td>~0,003 USD</td>
+  </tr>
+  <tr>
+    <td><strong>ChatGPT (OpenAI)</strong></td>
+    <td>gpt-4o, gpt-4o-mini, o3-mini</td>
+    <td>Richiesta &mdash; <a href="https://platform.openai.com/" target="_blank">platform.openai.com</a></td>
+    <td>~0,005&ndash;0,015 USD</td>
+  </tr>
+  <tr>
+    <td><strong>Gemini (Google)</strong></td>
+    <td>gemini-2.0-flash, gemini-2.5-pro, gemini-2.5-flash</td>
+    <td>Richiesta &mdash; <a href="https://aistudio.google.com/" target="_blank">aistudio.google.com</a></td>
+    <td>~0,001 USD</td>
+  </tr>
+  <tr>
+    <td><strong>Mistral</strong></td>
+    <td>mistral-large, mistral-medium, mistral-small</td>
+    <td>Richiesta &mdash; <a href="https://console.mistral.ai/" target="_blank">console.mistral.ai</a></td>
+    <td>~0,003 USD</td>
+  </tr>
+  <tr>
+    <td><strong>Claude CLI (locale)</strong></td>
+    <td>Usa l'installazione locale di Claude</td>
+    <td><strong>Non richiesta</strong></td>
+    <td><strong>Gratuito</strong></td>
+  </tr>
+  <tr>
+    <td><strong>Endpoint personalizzato</strong></td>
+    <td>Qualsiasi modello compatibile OpenAI</td>
+    <td>Dipende dal servizio</td>
+    <td>Dipende dal servizio</td>
+  </tr>
+</table>
+
+<div class="box box-info">
+  <strong>Come ottenere una API key</strong>
+  Registrarsi sul sito del provider scelto, accedere alla sezione API/Developer e generare
+  una chiave. La maggior parte dei provider offre un credito iniziale gratuito. L'API key va
+  inserita nel campo dedicato nelle Impostazioni &gt; Analisi referti &gt; sezione A.I.
+  La chiave viene salvata in forma crittografata nel file <code>settings.env</code>.
+</div>
+
+<h3>Configurazione nel Tab Impostazioni</h3>
+<p>Selezionando la modalit&agrave; <strong>Estrazione e analisi con A.I.</strong> compaiono
+  i seguenti campi aggiuntivi:</p>
+<table>
+  <tr><th>Campo</th><th>Descrizione</th></tr>
+  <tr><td>Provider</td><td>Menu a tendina per selezionare il servizio A.I.</td></tr>
+  <tr><td>API Key</td><td>Chiave di accesso al servizio (campo password, con pulsante &ldquo;Mostra&rdquo;)</td></tr>
+  <tr><td>Modello</td><td>Modello da utilizzare; i suggerimenti cambiano in base al provider</td></tr>
+  <tr><td>URL base</td><td>Solo per endpoint personalizzato: indirizzo del servizio</td></tr>
+  <tr><td>Timeout</td><td>Tempo massimo di attesa per la risposta dell'A.I. (default: 120 secondi)</td></tr>
+  <tr><td>Testa connessione</td><td>Verifica che API key e provider siano configurati correttamente</td></tr>
+  <tr><td>Salva i testi in</td><td>Cartella dove salvare i file <code>.txt</code> estratti/analizzati</td></tr>
+</table>
+
+<h3>Analisi manuale: Interpreta referto</h3>
+<p>Dal menu <strong>Strumenti &gt; Interpreta referto</strong> &egrave; possibile analizzare
+  un singolo referto in qualsiasi momento, anche senza avviare un download:</p>
+<ol class="steps">
+  <li>Caricare il testo del referto: tramite <strong>Carica PDF</strong>,
+    <strong>Carica TXT</strong> oppure <strong>Incolla</strong> dagli appunti.</li>
+  <li>Selezionare il provider A.I. e inserire l'API key (se non gi&agrave; configurata).</li>
+  <li>Premere <strong>Anonimizza e Analizza</strong>.</li>
+  <li>Il risultato appare nel pannello di destra, con i reperti classificati per gravit&agrave;:
+    <ul>
+      <li><code>(+++)</code> &mdash; Urgente/critico (richiede attenzione immediata)</li>
+      <li><code>(++)</code> &mdash; Da monitorare (alterazioni moderate)</li>
+      <li><code>(+)</code> &mdash; Reperto incidentale/minore</li>
+    </ul>
+  </li>
+  <li>&Egrave; possibile copiare o salvare il risultato con i pulsanti <strong>Copia</strong>
+    e <strong>Salva</strong>.</li>
+</ol>
+
+<h3>Analisi batch (pi&ugrave; referti)</h3>
+<p>Nel Tab Impostazioni &gt; Analisi referti &egrave; possibile scegliere l'ambito
+  dell'analisi:</p>
+<ul>
+  <li><strong>Tutti i referti scaricati</strong> &mdash; analizza automaticamente ogni PDF
+    al momento del download.</li>
+  <li><strong>Scegli referti</strong> &mdash; apre una finestra di selezione che elenca i PDF
+    presenti nella cartella di download. Spuntare i referti desiderati e premere
+    <strong>Analizza selezionati</strong>.</li>
+</ul>
+<p>In entrambi i casi l'avanzamento &egrave; mostrato da una barra di progresso con stato
+  file per file.</p>
+
+<div class="box box-warn">
+  <strong>Attenzione ai costi in modalit&agrave; batch</strong>
+  L'analisi batch invia ogni referto selezionato al servizio A.I. Il costo totale &egrave;
+  proporzionale al numero di referti analizzati. Si consiglia di verificare il funzionamento
+  su pochi referti prima di avviare un'analisi su un numero elevato di documenti.
+</div>
+
+<a href="#top" class="top-link">&uarr; Torna all'inizio</a>
+</section>
+
+<!-- ====================== 7. AVANZATE ====================== -->
 <section id="avanzate">
-<h2>6. Funzionalit&agrave; avanzate</h2>
+<h2>7. Funzionalit&agrave; avanzate</h2>
 
 <h3>Modalit&agrave; CDP (Chrome DevTools Protocol)</h3>
 <p>La modalit&agrave; CDP consente all'app di collegarsi a un'istanza del browser gi&agrave; in
@@ -732,9 +911,9 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
 <a href="#top" class="top-link">&uarr; Torna all'inizio</a>
 </section>
 
-<!-- ====================== 7. RISOLUZIONE PROBLEMI ====================== -->
+<!-- ====================== 8. RISOLUZIONE PROBLEMI ====================== -->
 <section id="problemi">
-<h2>7. Risoluzione problemi</h2>
+<h2>8. Risoluzione problemi</h2>
 
 <p>Fare clic su ciascun problema per espandere la soluzione.</p>
 
@@ -926,6 +1105,29 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
 </details>
 
 <details>
+  <summary>Analisi A.I. fallita / Errore API key</summary>
+  <div>
+    <p><strong>Messaggi possibili:</strong></p>
+    <ul>
+      <li><code>API key non configurata</code> &mdash; nessuna chiave inserita</li>
+      <li><code>401 Unauthorized</code> o <code>403 Forbidden</code> &mdash; chiave errata o scaduta</li>
+      <li><code>Timeout</code> &mdash; il servizio A.I. non ha risposto in tempo</li>
+      <li><code>429 Too Many Requests</code> &mdash; superato il limite di richieste o credito esaurito</li>
+    </ul>
+    <p><strong>Soluzione:</strong></p>
+    <ul>
+      <li>Verificare che l'API key sia stata inserita correttamente nelle Impostazioni &gt; Analisi referti.</li>
+      <li>Usare il pulsante <strong>Testa connessione</strong> per diagnosticare il problema.</li>
+      <li>Controllare sul sito del provider che la chiave sia attiva e che ci sia credito residuo.</li>
+      <li>In caso di timeout, aumentare il valore nelle impostazioni (default: 120 secondi).</li>
+      <li>Se il problema persiste, provare un provider o modello diverso.</li>
+      <li>L'estrazione del testo locale (modalit&agrave; &ldquo;Solo estrazione&rdquo;) funziona
+        sempre anche senza API key.</li>
+    </ul>
+  </div>
+</details>
+
+<details>
   <summary>Tipologia documento non trovata</summary>
   <div>
     <p><strong>Messaggio:</strong> <code>Colonna 'Tipologia' non trovata</code></p>
@@ -946,7 +1148,7 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
 
 <!-- ======================== FOOTER ======================== -->
 <footer>
-  FSE Processor v2.3.14 &mdash; Guida Utente<br>
+  FSE Processor v2.3.15 &mdash; Guida Utente<br>
   Ultimo aggiornamento: febbraio 2026
 </footer>
 
