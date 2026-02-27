@@ -566,6 +566,35 @@ class FSEBrowser:
             f"{len(self._context.pages)} tab totali)"
         )
 
+    def _get_real_url(self, page: Page | None = None) -> str:
+        """Get the real current URL via JS evaluation (page.url can be stale in CDP)."""
+        p = page or self._page
+        try:
+            return p.evaluate("window.location.href")
+        except Exception:
+            return p.url
+
+    def _is_siss_authenticated(self, page: Page | None = None) -> bool:
+        """Check if a page shows an authenticated SISS session (not SSO login)."""
+        url = self._get_real_url(page)
+        return (
+            ("operatorisiss" in url or "servizirl" in url)
+            and "idpcrlmain" not in url
+            and "ssoauth" not in url
+        )
+
+    def _find_authenticated_siss_page(self) -> Page | None:
+        """Search all browser tabs for one with an active SISS session."""
+        if not self._context:
+            return None
+        for page in self._context.pages:
+            try:
+                if self._is_siss_authenticated(page):
+                    return page
+            except Exception:
+                continue
+        return None
+
     def _find_reusable_page(self) -> Page | None:
         """Find an existing blank/new-tab page to reuse instead of creating a new one.
 
@@ -786,10 +815,27 @@ class FSEBrowser:
         self._logger.info("Browser chiuso")
 
     def wait_for_manual_login(self, stop_event: threading.Event | None = None) -> None:
-        """Navigate to the FSE portal and wait for the user to complete SSO login."""
+        """Navigate to the FSE portal and wait for the user to complete SSO login.
+
+        First checks if an active SISS session already exists (e.g. from Millewin)
+        to avoid unnecessary manual login that would invalidate other apps' sessions.
+        """
         import time
 
-        self._logger.info("Navigazione al portale FSE per login manuale...")
+        # ── Step 0: Check if ANY existing tab already has an active SISS session ──
+        existing_siss = self._find_authenticated_siss_page()
+        if existing_siss:
+            self._page = existing_siss
+            self._page.set_default_timeout(self._config.page_timeout)
+            url = self._get_real_url()
+            self._logger.info(
+                f"Sessione SISS attiva trovata su tab esistente: {url} — "
+                f"login manuale non necessario"
+            )
+            return
+
+        # ── Step 1: Navigate to FSE and try to authenticate via existing cookies ──
+        self._logger.info("Navigazione al portale FSE per verifica sessione...")
         self._page.goto(FSE_BASE_URL, wait_until="networkidle")
 
         # Try clicking "Accedi" to trigger SSO redirect
@@ -801,7 +847,27 @@ class FSEBrowser:
         except Exception:
             pass  # Button might not be there, that's ok
 
-        # If we're on the SSO page, wait for the user to complete login
+        # ── Step 2: Check if we ended up on an authenticated page (no SSO redirect) ──
+        if self._is_siss_authenticated():
+            self._logger.info(
+                f"Sessione SISS attiva: {self._get_real_url()} — "
+                f"login manuale non necessario"
+            )
+            return
+
+        # Also check other tabs — the SSO redirect might have opened a new tab,
+        # or the authenticated session might be on a different page
+        auth_page = self._find_authenticated_siss_page()
+        if auth_page:
+            self._page = auth_page
+            self._page.set_default_timeout(self._config.page_timeout)
+            self._logger.info(
+                f"Sessione SISS attiva trovata su altro tab: {self._get_real_url()} — "
+                f"login manuale non necessario"
+            )
+            return
+
+        # ── Step 3: No active session found — wait for manual login ──
         self._logger.info(
             "LOGIN MANUALE RICHIESTO - Completa l'accesso nel browser. "
             "L'app proseguira' automaticamente dopo il login."
@@ -817,26 +883,24 @@ class FSEBrowser:
                 raise InterruptedError("Attesa login interrotta dall'utente")
 
             try:
-                # Check all pages using JS to get the real URL (page.url can be stale)
+                # Check all pages using JS to get the real URL
                 for page in self._context.pages:
                     try:
-                        real_url = page.evaluate("window.location.href")
+                        if self._is_siss_authenticated(page):
+                            self._page = page
+                            self._page.set_default_timeout(self._config.page_timeout)
+                            self._logger.info(f"Login rilevato su: {self._get_real_url()}")
+                            break
                     except Exception:
-                        real_url = page.url
-                    if "operatorisiss" in real_url and "idpcrlmain" not in real_url and "ssoauth" not in real_url:
-                        self._page = page
-                        self._page.set_default_timeout(self._config.page_timeout)
-                        self._logger.info(f"Login rilevato su: {real_url}")
-                        break
+                        continue
                 else:
                     # Not found yet - every 30s try navigating to FSE as fallback
                     if elapsed > 0 and elapsed % 30 == 0:
                         self._logger.info(f"Poll login [{elapsed}s] - tentativo navigazione diretta FSE...")
                         try:
                             self._page.goto(FSE_BASE_URL, wait_until="networkidle", timeout=10000)
-                            real_url = self._page.evaluate("window.location.href")
-                            if "operatorisiss" in real_url and "idpcrlmain" not in real_url:
-                                self._logger.info(f"Login rilevato dopo navigazione diretta: {real_url}")
+                            if self._is_siss_authenticated():
+                                self._logger.info(f"Login rilevato dopo navigazione diretta: {self._get_real_url()}")
                                 break
                         except Exception:
                             pass
@@ -905,7 +969,7 @@ class FSEBrowser:
             self._page.get_by_text("Referti").first.click()
         self._page.wait_for_load_state("networkidle")
         self._wait_for_spinner()
-        self._logger.info(f"Pagina referti caricata: {self._page.url}")
+        self._logger.info(f"Pagina referti caricata: {self._get_real_url()}")
 
     def navigate_for_millewin(self, codice_fiscale: str,
                               stop_event: threading.Event | None = None) -> None:
@@ -919,22 +983,13 @@ class FSEBrowser:
         5. No FSE page open → open new one
         """
         # Step 1: Find or open an FSE page
-        fse_page = None
-        if self._context:
-            for page in self._context.pages:
-                try:
-                    real_url = page.evaluate("window.location.href")
-                except Exception:
-                    real_url = page.url
-                if "operatorisiss" in real_url and "idpcrlmain" not in real_url and "ssoauth" not in real_url:
-                    fse_page = page
-                    break
+        fse_page = self._find_authenticated_siss_page()
 
         if fse_page:
             self._page = fse_page
             self._page.set_default_timeout(self._config.page_timeout)
             self._page.bring_to_front()
-            self._logger.info(f"Pagina FSE esistente trovata: {self._page.url}")
+            self._logger.info(f"Pagina FSE esistente trovata: {self._get_real_url()}")
         else:
             self._logger.info("Nessuna pagina FSE trovata, apertura nuova pagina...")
             self._page = self._context.new_page()
@@ -942,11 +997,7 @@ class FSEBrowser:
             self._page.goto(FSE_BASE_URL, wait_until="networkidle")
 
             # Check if we landed on SSO login
-            try:
-                current_url = self._page.evaluate("window.location.href")
-            except Exception:
-                current_url = self._page.url
-            if "idpcrlmain" in current_url or "ssoauth" in current_url:
+            if not self._is_siss_authenticated():
                 self.wait_for_manual_login(stop_event)
 
         if stop_event is not None and stop_event.is_set():
@@ -991,11 +1042,7 @@ class FSEBrowser:
                 self._page.goto(FSE_BASE_URL, wait_until="networkidle")
                 self._wait_for_spinner()
                 # Check for SSO redirect
-                try:
-                    current_url = self._page.evaluate("window.location.href")
-                except Exception:
-                    current_url = self._page.url
-                if "idpcrlmain" in current_url or "ssoauth" in current_url:
+                if not self._is_siss_authenticated():
                     self.wait_for_manual_login(stop_event)
                     self._wait_for_spinner()
                 cf_input = self._page.locator("#inputcf")
@@ -1085,7 +1132,7 @@ class FSEBrowser:
                 self._wait_for_spinner()
 
             # Check if we got redirected to SSO (session expired)
-            if "idpcrlmain" in self._page.url or "ssoauth" in self._page.url:
+            if not self._is_siss_authenticated():
                 import time
                 self._logger.warning(
                     "Sessione SSO scaduta - completa il login nel browser. "
@@ -1095,8 +1142,13 @@ class FSEBrowser:
                 elapsed = 0
                 while elapsed < max_wait:
                     try:
-                        current_url = self._page.url
-                        if "operatorisiss" in current_url and "idpcrlmain" not in current_url:
+                        if self._is_siss_authenticated():
+                            break
+                        # Also check other tabs for re-login
+                        auth_page = self._find_authenticated_siss_page()
+                        if auth_page:
+                            self._page = auth_page
+                            self._page.set_default_timeout(self._config.page_timeout)
                             break
                     except Exception:
                         pass
@@ -1219,7 +1271,7 @@ class FSEBrowser:
             self._wait_for_spinner()
 
         # Check if we got redirected to SSO (session expired)
-        if "idpcrlmain" in self._page.url or "ssoauth" in self._page.url:
+        if not self._is_siss_authenticated():
             import time
             self._logger.warning(
                 "Sessione SSO scaduta - completa il login nel browser. "
@@ -1229,8 +1281,12 @@ class FSEBrowser:
             elapsed = 0
             while elapsed < max_wait:
                 try:
-                    current_url = self._page.url
-                    if "operatorisiss" in current_url and "idpcrlmain" not in current_url:
+                    if self._is_siss_authenticated():
+                        break
+                    auth_page = self._find_authenticated_siss_page()
+                    if auth_page:
+                        self._page = auth_page
+                        self._page.set_default_timeout(self._config.page_timeout)
                         break
                 except Exception:
                     pass
@@ -1517,29 +1573,101 @@ class FSEBrowser:
                 if clickable.count() == 0:
                     clickable = visualizza_cell
 
-                # ── Observe the PDF response (no route interception).
-                #    expect_response just watches network traffic via CDP
-                #    without proxying or modifying any request. ──
+                unique_name = (
+                    f"{patient_name}_{row_index}.pdf".replace(" ", "_")
+                )
+                save_path = self._config.download_dir / unique_name
+
+                # ── Hybrid download: try response body first, fall back to
+                #    browser download event if body is unavailable.
+                #    In CDP mode, Browser.setDownloadBehavior may consume the
+                #    response body, making Network.getResponseBody fail. ──
+
                 def _is_pdf_response(resp):
                     ct = resp.headers.get("content-type", "")
                     return "pdf" in ct or "octet-stream" in ct
 
-                with self._page.expect_response(
-                    _is_pdf_response,
-                    timeout=self._config.download_timeout,
-                ) as resp_info:
-                    clickable.click()
-                    accetta = self._page.get_by_role("button", name="Accetta")
-                    if accetta.is_visible(timeout=8000):
-                        accetta.click()
+                # Register a download listener BEFORE clicking, so we can
+                # catch downloads triggered by the browser's download manager
+                captured_downloads: list = []
 
-                response = resp_info.value
-                self._logger.info(
-                    f"Risposta PDF catturata: {response.url[:120]} "
-                    f"(status: {response.status})"
-                )
-                pdf_bytes = response.body()
-                self._logger.info(f"Body PDF letto: {len(pdf_bytes):,} bytes")
+                def _on_download(dl):
+                    captured_downloads.append(dl)
+
+                self._page.on("download", _on_download)
+
+                pdf_bytes = None
+                try:
+                    with self._page.expect_response(
+                        _is_pdf_response,
+                        timeout=self._config.download_timeout,
+                    ) as resp_info:
+                        clickable.click()
+                        accetta = self._page.get_by_role("button", name="Accetta")
+                        if accetta.is_visible(timeout=8000):
+                            accetta.click()
+
+                    response = resp_info.value
+                    self._logger.info(
+                        f"Risposta PDF catturata: {response.url[:120]} "
+                        f"(status: {response.status})"
+                    )
+                    try:
+                        pdf_bytes = response.body()
+                        if pdf_bytes and len(pdf_bytes) > 0:
+                            self._logger.info(f"Body PDF letto via response: {len(pdf_bytes):,} bytes")
+                        else:
+                            pdf_bytes = None
+                            self._logger.debug("response.body() vuoto, provo fallback download")
+                    except Exception as body_err:
+                        self._logger.debug(
+                            f"response.body() fallito ({body_err}), provo fallback download"
+                        )
+
+                except Exception as resp_err:
+                    self._logger.debug(f"expect_response fallito: {resp_err}")
+
+                finally:
+                    self._page.remove_listener("download", _on_download)
+
+                # ── Fallback 1: use browser download event ──
+                if not pdf_bytes and captured_downloads:
+                    dl = captured_downloads[0]
+                    self._logger.info(
+                        f"Uso download browser (file: {dl.suggested_filename})"
+                    )
+                    dl.save_as(str(save_path))
+                    pdf_bytes = save_path.read_bytes()
+                    self._logger.info(f"Body PDF letto via download.save_as: {len(pdf_bytes):,} bytes")
+
+                # ── Fallback 2: read PDF from popup tab (inline viewer) ──
+                if not pdf_bytes and self._context:
+                    for pg in self._context.pages:
+                        if pg == self._page:
+                            continue
+                        try:
+                            pg_url = pg.url.lower()
+                            if "blob:" in pg_url or pg_url.endswith(".pdf"):
+                                # Try to extract the PDF content from the tab
+                                self._logger.info(f"Tentativo lettura PDF da tab popup: {pg_url[:100]}")
+                                tab_resp = pg.goto(pg.url)
+                                if tab_resp:
+                                    try:
+                                        pdf_bytes = tab_resp.body()
+                                        if pdf_bytes and len(pdf_bytes) > 0:
+                                            self._logger.info(
+                                                f"Body PDF letto da tab popup: {len(pdf_bytes):,} bytes"
+                                            )
+                                    except Exception:
+                                        pass
+                                break
+                        except Exception:
+                            continue
+
+                if not pdf_bytes:
+                    raise RuntimeError(
+                        "Nessun contenuto PDF ottenuto (ne' via rete ne' via download browser)"
+                    )
 
                 # Close any popup tabs the PDF viewer may have opened
                 if self._context:
@@ -1553,11 +1681,8 @@ class FSEBrowser:
                                 pass
 
                 # ── Save captured bytes to disk ──
-                unique_name = (
-                    f"{patient_name}_{row_index}.pdf".replace(" ", "_")
-                )
-                save_path = self._config.download_dir / unique_name
-                save_path.write_bytes(pdf_bytes)
+                if not save_path.exists() or save_path.stat().st_size == 0:
+                    save_path.write_bytes(pdf_bytes)
 
                 # ── Validate ──
                 file_size = len(pdf_bytes)
