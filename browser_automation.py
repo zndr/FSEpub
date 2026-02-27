@@ -389,12 +389,17 @@ class FSEBrowser:
         self._logger.info(f"Browser avviato (channel={channel}, headless={self._config.headless})")
 
     def _start_cdp(self) -> None:
-        """Smart CDP connection: attach to existing browser, or launch one if needed."""
+        """Smart CDP connection: attach to existing browser, or launch one if needed.
+
+        IMPORTANT: This method NEVER kills the user's browser. If the browser
+        is running but CDP isn't available, it raises an error with instructions
+        instead of destroying the user's session (SISS, Millewin, etc.).
+        """
         port = self._config.cdp_port
         endpoint = f"http://localhost:{port}"
         channel = self._config.browser_channel
 
-        # 1. Detect browser info (needed for recovery)
+        # 1. Detect browser info (needed for launch-only recovery)
         browser_info = detect_default_browser()
         process_name = None
         exe_path = None
@@ -421,66 +426,26 @@ class FSEBrowser:
                 self._connect_cdp(endpoint, port)
                 return
             except ConnectionError:
-                # CDP port responds but handshake failed (stale session, browser busy).
-                # Try to kill and relaunch if we know the browser.
-                if process_name and exe_path and Path(exe_path).exists():
-                    self._logger.warning(
-                        "Connessione CDP fallita nonostante la porta sia aperta. "
-                        "Rilancio del browser..."
-                    )
-                    _kill_browser_processes(process_name, logger=self._logger)
-                    _launch_browser_with_cdp(exe_path, port, logger=self._logger)
+                # CDP port responds but handshake failed — do NOT kill the browser.
+                # Just report the error and let the user decide.
+                raise ConnectionError(
+                    f"La porta CDP {port} risponde ma la connessione e' fallita.\n"
+                    f"Il browser potrebbe essere occupato. Riprova tra qualche secondo.\n"
+                    f"Se il problema persiste, chiudi manualmente il browser e riprova."
+                )
 
-                    elapsed = 0.0
-                    while elapsed < CDP_CONNECT_TIMEOUT:
-                        if _is_cdp_port_available(port):
-                            self._logger.info(
-                                f"Porta CDP {port} disponibile dopo rilancio ({elapsed:.1f}s)"
-                            )
-                            self._connect_cdp(endpoint, port)
-                            return
-                        time.sleep(CDP_CONNECT_POLL)
-                        elapsed += CDP_CONNECT_POLL
-
-                raise  # Re-raise if recovery not possible or also failed
-
-        # 3. Browser running without CDP
+        # 3. Browser running without CDP — NEVER kill it
         browser_running = _is_browser_process_running(process_name, logger=self._logger) if process_name else False
         self._logger.debug(f"[CDP] Step 3: browser_running={browser_running}")
         if process_name and browser_running:
-            # If CDP is enabled in registry, kill and relaunch
-            progid = browser_info["progid"] if browser_info else None
-            cdp_in_registry = get_cdp_registry_status(progid, port) if progid else False
-            self._logger.debug(f"[CDP] Step 3: progid={progid}, cdp_in_registry={cdp_in_registry}")
-            if progid and cdp_in_registry and exe_path:
-                self._logger.info(
-                    f"Browser in esecuzione senza CDP ma CDP abilitato nel registro. "
-                    f"Chiusura e rilancio..."
-                )
-                _kill_browser_processes(process_name, logger=self._logger)
-                _launch_browser_with_cdp(exe_path, port, logger=self._logger)
-
-                elapsed = 0.0
-                while elapsed < CDP_CONNECT_TIMEOUT:
-                    if _is_cdp_port_available(port):
-                        self._logger.info(f"Porta CDP {port} disponibile dopo rilancio ({elapsed:.1f}s)")
-                        self._connect_cdp(endpoint, port)
-                        return
-                    time.sleep(CDP_CONNECT_POLL)
-                    elapsed += CDP_CONNECT_POLL
-
-                raise ConnectionError(
-                    f"Browser rilanciato ma la porta CDP {port} non ha risposto "
-                    f"entro {CDP_CONNECT_TIMEOUT} secondi."
-                )
-
             browser_display = browser_info["progid"] if browser_info else channel
             raise ConnectionError(
                 f"Il browser ({browser_display}) e' in esecuzione ma la porta CDP {port} non risponde.\n"
+                f"Per usare la sessione SISS esistente, il browser deve essere avviato con CDP.\n"
                 f"Opzioni:\n"
-                f"  1. Chiudi tutte le finestre del browser e riprova (l'app lo lancera' con CDP)\n"
-                f"  2. Abilita 'CDP nel registro' nelle impostazioni, poi riavvia il browser\n"
-                f"  3. Avvia manualmente il browser con: --remote-debugging-port={port}"
+                f"  1. Abilita 'CDP nel registro' nelle impostazioni, poi chiudi e riapri il browser\n"
+                f"  2. Avvia manualmente il browser con: --remote-debugging-port={port}\n"
+                f"NOTA: l'app NON chiudera' il browser per proteggere la sessione SISS attiva."
             )
 
         # 4. Browser not running → launch it with CDP
