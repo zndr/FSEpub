@@ -53,6 +53,7 @@ from version import __version__
 from browser_automation import (
     FSEBrowser,
     FSE_BASE_URL,
+    BrowserCDPNotActive,
     PatientDocumentInfo,
     _is_tipologia_valida,
     detect_default_browser,
@@ -245,6 +246,31 @@ QCheckBox::indicator:unchecked {
     color: #6b7b8d;
 }
 """
+
+
+def _validate_provider_model(provider: str, model: str) -> str:
+    """Check that a model name is plausible for the given provider.
+
+    Returns an error message string, or empty string if valid.
+    """
+    provider_prefixes: dict[str, tuple[str, ...]] = {
+        "claude_api": ("claude-",),
+        "claude_cli": ("claude-",),
+        "openai_api": ("gpt-", "o1", "o3", "o4", "chatgpt-"),
+        "gemini_api": ("gemini-",),
+        "mistral_api": ("mistral-",),
+    }
+    prefixes = provider_prefixes.get(provider)
+    if prefixes and not model.lower().startswith(prefixes):
+        from text_processing.llm_analyzer import PROVIDER_LABELS
+        label = PROVIDER_LABELS.get(provider, provider)
+        expected = ", ".join(p + "..." for p in prefixes)
+        return (
+            f"Il modello '{model}' non sembra compatibile con {label}.\n"
+            f"I modelli per questo provider iniziano con: {expected}\n\n"
+            f"Correggi il modello o cambia provider."
+        )
+    return ""
 
 
 def _version_tuple(v: str) -> tuple[int, ...]:
@@ -1174,6 +1200,7 @@ class SetupWizard(QDialog):
         self._wiz_llm_api_key.clear()
         needs_key = provider != "claude_cli"
         self._wiz_llm_api_key.setEnabled(needs_key)
+        self._wiz_llm_api_key.setReadOnly(False)  # ensure always writable
         if not needs_key:
             self._wiz_llm_api_key.setPlaceholderText("(non necessaria)")
         else:
@@ -1194,6 +1221,7 @@ class SetupWizard(QDialog):
         self._wiz_llm_model.blockSignals(True)
         self._wiz_llm_model.clear()
         self._wiz_llm_model.clearEditText()
+        self._wiz_llm_model.setEditable(True)  # re-assert after clear
         suggestions = model_suggestions.get(provider, [])
         if suggestions:
             self._wiz_llm_model.addItems(suggestions)
@@ -1204,6 +1232,22 @@ class SetupWizard(QDialog):
 
     def _wiz_test_llm(self) -> None:
         """Test LLM connection from the wizard."""
+        provider_label = self._wiz_llm_provider.currentText()
+        provider = self._wiz_label_to_provider.get(provider_label, "")
+        model = self._wiz_llm_model.currentText().strip()
+
+        if not provider:
+            QMessageBox.warning(self, "Test AI", "Seleziona un provider prima di testare.")
+            return
+        if not model:
+            QMessageBox.warning(self, "Test AI", "Inserisci un modello prima di testare.")
+            return
+
+        error = _validate_provider_model(provider, model)
+        if error:
+            QMessageBox.warning(self, "Test AI", error)
+            return
+
         self._wiz_test_btn.setEnabled(False)
         self._wiz_test_btn.setText("Test in corso...")
         threading.Thread(target=self._wiz_test_llm_worker, daemon=True).start()
@@ -2370,7 +2414,7 @@ class FSEApp(QMainWindow):
 
             if not reused:
                 browser = FSEBrowser(config, logger)
-                browser.start()
+                self._start_browser_safe(browser)
                 self._mw_browser = browser
 
             # Step 3: Navigate to FSE documents page
@@ -2381,6 +2425,50 @@ class FSEApp(QMainWindow):
             self._mw_log("Workflow interrotto dall'utente")
         except Exception as e:
             self._mw_log(f"Errore: {e}")
+
+    def _start_browser_safe(self, browser: FSEBrowser) -> None:
+        """Start browser with automatic BrowserCDPNotActive handling.
+
+        If the browser is running without CDP, asks the user for consent
+        to restart it. Raises the original exception if user declines.
+        """
+        try:
+            browser.start()
+        except BrowserCDPNotActive as e:
+            if self._ask_restart_browser(e):
+                browser.restart_browser_with_cdp(
+                    e.process_name, e.exe_path, e.port
+                )
+            else:
+                raise InterruptedError("Connessione annullata dall'utente")
+
+    def _ask_restart_browser(self, exc: BrowserCDPNotActive) -> bool:
+        """Ask the user (on main thread) whether to restart the browser with CDP.
+
+        Returns True if user accepts, False otherwise. Thread-safe.
+        """
+        result = [False]
+        event = threading.Event()
+
+        def _show_dialog():
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                "Riavvio browser necessario",
+                "Il browser e' in esecuzione ma senza CDP attivo.\n"
+                "Per connettersi al FSE, il browser deve essere riavviato "
+                "con il supporto CDP.\n\n"
+                "ATTENZIONE: le tab aperte nel browser verranno chiuse.\n\n"
+                "Vuoi riavviare il browser ora?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            result[0] = (reply == QMessageBox.StandardButton.Yes)
+            event.set()
+
+        self._bridge.call_on_main.emit(_show_dialog)
+        event.wait()
+        return result[0]
 
     def _poll_mw_worker(self) -> None:
         """Poll the Millewin workflow worker thread."""
@@ -3669,6 +3757,7 @@ class FSEApp(QMainWindow):
         self._llm_api_key_entry.clear()
         needs_key = provider != "claude_cli"
         self._llm_api_key_entry.setEnabled(needs_key)
+        self._llm_api_key_entry.setReadOnly(False)  # ensure always writable
         self._llm_show_key_btn.setEnabled(needs_key)
         if not needs_key:
             self._llm_api_key_entry.setPlaceholderText("(non necessaria)")
@@ -3677,20 +3766,23 @@ class FSEApp(QMainWindow):
         # Update model suggestions
         self._update_model_combo_items(provider)
 
+    # Model suggestions per provider — also used for test validation
+    _MODEL_SUGGESTIONS: dict[str, list[str]] = {
+        "claude_api": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
+        "openai_api": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
+        "gemini_api": ["gemini-2.0-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+        "mistral_api": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
+        "claude_cli": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
+        "custom_url": [],
+    }
+
     def _update_model_combo_items(self, provider: str) -> None:
         """Populate model combo with suggestions for the given provider."""
-        model_suggestions = {
-            "claude_api": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
-            "openai_api": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
-            "gemini_api": ["gemini-2.0-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
-            "mistral_api": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
-            "claude_cli": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
-            "custom_url": [],
-        }
         self._llm_model_combo.blockSignals(True)
         self._llm_model_combo.clear()
         self._llm_model_combo.clearEditText()
-        suggestions = model_suggestions.get(provider, [])
+        self._llm_model_combo.setEditable(True)  # re-assert after clear
+        suggestions = self._MODEL_SUGGESTIONS.get(provider, [])
         if suggestions:
             self._llm_model_combo.addItems(suggestions)
             default = self._llm_default_models.get(provider, "")
@@ -3700,6 +3792,24 @@ class FSEApp(QMainWindow):
 
     def _test_llm_connection(self) -> None:
         """Test the LLM connection in a background thread."""
+        # Pre-flight validation on UI thread before spawning background work
+        provider_label = self._llm_provider_combo.currentText()
+        provider = self._llm_label_to_provider.get(provider_label, "")
+        model = self._llm_model_combo.currentText().strip()
+
+        if not provider:
+            QMessageBox.warning(self, "Test AI", "Seleziona un provider prima di testare.")
+            return
+        if not model:
+            QMessageBox.warning(self, "Test AI", "Inserisci un modello prima di testare.")
+            return
+
+        # Validate model is compatible with the selected provider
+        error = _validate_provider_model(provider, model)
+        if error:
+            QMessageBox.warning(self, "Test AI", error)
+            return
+
         self._llm_test_btn.setEnabled(False)
         self._llm_test_btn.setText("Test in corso...")
         threading.Thread(target=self._test_llm_worker, daemon=True).start()
@@ -3717,7 +3827,7 @@ class FSEApp(QMainWindow):
             config = LLMConfig(
                 provider=provider,
                 api_key=api_key,
-                model=self._llm_model_combo.currentText(),
+                model=self._llm_model_combo.currentText().strip(),
                 timeout=15,
                 base_url=self._llm_base_url_entry.text().strip(),
             )
@@ -4177,7 +4287,11 @@ class FSEApp(QMainWindow):
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
-            run_processing(config, logger, self._stop_event, allowed_types=allowed_types)
+            run_processing(
+                config, logger, self._stop_event,
+                allowed_types=allowed_types,
+                on_cdp_restart_needed=self._ask_restart_browser,
+            )
         except Exception as e:
             self._bridge.append_text.emit(self._console, f"Errore fatale: {e}")
 
@@ -4236,7 +4350,7 @@ class FSEApp(QMainWindow):
             logger._logger.addHandler(handler)
 
             browser = FSEBrowser(config, logger)
-            browser.start()
+            self._start_browser_safe(browser)
             browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
             enti = browser.scan_patient_enti(codice_fiscale)
@@ -4319,7 +4433,7 @@ class FSEApp(QMainWindow):
                     pass
             if not reused:
                 browser = FSEBrowser(config, logger)
-                browser.start()
+                self._start_browser_safe(browser)
                 browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
             def on_enti_found(enti):
@@ -4452,7 +4566,7 @@ class FSEApp(QMainWindow):
                     pass
             if not reused:
                 browser = FSEBrowser(config, logger)
-                browser.start()
+                self._start_browser_safe(browser)
                 browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
             try:

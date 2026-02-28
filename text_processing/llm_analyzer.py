@@ -352,9 +352,11 @@ class LLMAnalyzer:
 
     def _test_claude_cli(self) -> bool:
         try:
+            model = self.config.model or DEFAULT_MODELS["claude_cli"]
+            # Use --model with a minimal prompt to verify both CLI and model work
             result = subprocess.run(
-                ["claude", "--version"],
-                capture_output=True, timeout=10,
+                ["claude", "--model", model, "--print", "Rispondi solo OK."],
+                capture_output=True, timeout=15,
                 creationflags=0x08000000,  # CREATE_NO_WINDOW
             )
             return result.returncode == 0

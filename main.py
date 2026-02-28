@@ -19,14 +19,19 @@ if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
 from config import Config
 from logger_module import ProcessingLogger
 from email_client import EmailClient
-from browser_automation import FSEBrowser
+from browser_automation import FSEBrowser, BrowserCDPNotActive
 from file_manager import FileManager
 from text_processing import TextProcessor, ProcessingMode, LLMConfig
 
 
 def run_processing(config: Config, logger: ProcessingLogger, stop_event: threading.Event | None = None,
-                    allowed_types: set[str] | None = None) -> None:
-    """Core processing logic, reusable from CLI and GUI."""
+                    allowed_types: set[str] | None = None,
+                    on_cdp_restart_needed: callable = None) -> None:
+    """Core processing logic, reusable from CLI and GUI.
+
+    on_cdp_restart_needed: optional callback(BrowserCDPNotActive) -> bool.
+        Called when browser needs restart for CDP. Return True to restart.
+    """
 
     def stopped() -> bool:
         return stop_event is not None and stop_event.is_set()
@@ -89,7 +94,15 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
     file_manager = FileManager(config, logger)
     browser = FSEBrowser(config, logger)
     try:
-        browser.start()
+        try:
+            browser.start()
+        except BrowserCDPNotActive as e:
+            if on_cdp_restart_needed and on_cdp_restart_needed(e):
+                browser.restart_browser_with_cdp(
+                    e.process_name, e.exe_path, e.port
+                )
+            else:
+                raise
         browser.wait_for_manual_login(stop_event=stop_event)
     except Exception as e:
         logger.error(f"Avvio browser fallito: {e}")
