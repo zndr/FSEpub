@@ -608,21 +608,27 @@ class FSEBrowser:
             except Exception as e:
                 self._logger.debug(f"[CDP] Tab {i}: non accessibile ({e})")
 
-        # Capture SISS sessionStorage from any existing tab before creating ours
-        siss_storage = self._capture_siss_session_storage()
-        self._logger.debug(f"[CDP] SISS sessionStorage catturato: {siss_storage is not None}")
+        # Cerca pagina SISS autenticata tra i tab esistenti
+        siss_page = self._find_authenticated_siss_page()
+        if siss_page:
+            self._page = siss_page
+            self._owned_page = None  # Non chiudere su stop() — non è nostra
+            self._logger.info(
+                f"Pagina SISS autenticata riutilizzata: {self._get_real_url(siss_page)}"
+            )
+        else:
+            # Nessuna sessione attiva — cattura sessionStorage e crea tab di lavoro
+            siss_storage = self._capture_siss_session_storage()
+            self._logger.debug(f"[CDP] SISS sessionStorage catturato: {siss_storage is not None}")
 
-        # Prefer reusing an existing blank tab to avoid unnecessary tab creation
-        self._page = self._find_reusable_page()
-        if self._page is None:
-            self._logger.debug("[CDP] Nessun tab riutilizzabile, creazione nuovo tab")
-            self._page = self._context.new_page()
-        self._owned_page = self._page  # Track: this is OUR tab, safe to close
+            self._page = self._find_reusable_page()
+            if self._page is None:
+                self._logger.debug("[CDP] Nessun tab riutilizzabile, creazione nuovo tab")
+                self._page = self._context.new_page()
+            self._owned_page = self._page  # Track: this is OUR tab, safe to close
 
-        # Inject SISS sessionStorage so the SSO session is preserved and
-        # a new login (which would invalidate Millewin's access) is avoided
-        if siss_storage:
-            self._inject_siss_session(siss_storage)
+            if siss_storage:
+                self._inject_siss_session(siss_storage)
 
         self._page.set_default_timeout(self._config.page_timeout)
         self._logger.info(
@@ -902,22 +908,16 @@ class FSEBrowser:
         import time
 
         # ── Step 0: Check if ANY existing tab already has an active SISS session ──
-        #    If found, DON'T steal that tab — just use it as proof that cookies
-        #    are valid, then navigate OUR page with the same cookies.
         existing_siss = self._find_authenticated_siss_page()
         if existing_siss:
             siss_url = self._get_real_url(existing_siss)
             self._logger.info(
-                f"Sessione SISS attiva trovata su tab esistente: {siss_url} — "
-                f"cookies valide, navigazione con sessione esistente"
+                f"Sessione SISS attiva trovata: {siss_url} — riutilizzo diretto"
             )
-            # If our own page is already the SISS page, just use it
-            if existing_siss == self._page:
-                return
-            # Otherwise capture sessionStorage and navigate our own page
-            siss_storage = self._capture_siss_session_storage()
-            if siss_storage:
-                self._inject_siss_session(siss_storage)
+            if existing_siss != self._page:
+                self._page = existing_siss
+            self._page.bring_to_front()
+            return
 
         # ── Step 1: Navigate OUR page to FSE, authenticate via existing cookies ──
         self._logger.info("Navigazione al portale FSE per verifica sessione...")
@@ -997,16 +997,13 @@ class FSEBrowser:
                 if found_elsewhere:
                     break
 
-                # Not found yet - every 30s try navigating to FSE as fallback
+                # Not found yet - log progress every 30s (no navigation to avoid
+                # disrupting SSO login the user may be completing)
                 if elapsed > 0 and elapsed % 30 == 0:
-                    self._logger.info(f"Poll login [{elapsed}s] - tentativo navigazione diretta FSE...")
-                    try:
-                        self._page.goto(FSE_BASE_URL, wait_until="networkidle", timeout=10000)
-                        if self._is_siss_authenticated():
-                            self._logger.info(f"Login rilevato dopo navigazione diretta: {self._get_real_url()}")
-                            break
-                    except Exception:
-                        pass
+                    self._logger.info(
+                        f"Attesa login [{elapsed}s/{max_wait}s] — "
+                        f"completa l'accesso SSO nel browser..."
+                    )
                 time.sleep(2)
                 elapsed += 2
             except Exception as e:
