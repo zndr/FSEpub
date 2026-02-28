@@ -1,7 +1,23 @@
 import json
 import logging
+import sys
+import threading
 from datetime import datetime
 from pathlib import Path
+
+
+class _InlineAwareStreamHandler(logging.StreamHandler):
+    """StreamHandler that prints inline records without newline/prefix."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "inline", False):
+            try:
+                self.stream.write(record.getMessage())
+                self.stream.flush()
+            except Exception:
+                self.handleError(record)
+        else:
+            super().emit(record)
 
 
 class ProcessingLogger:
@@ -14,18 +30,19 @@ class ProcessingLogger:
         self._logger.setLevel(logging.DEBUG)
         self._logger.handlers.clear()
 
-        # Console handler
-        console = logging.StreamHandler()
+        # Console handler (inline-aware: prints dots without newline)
+        console = _InlineAwareStreamHandler(sys.stderr)
         console.setLevel(logging.INFO)
         console.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
         self._logger.addHandler(console)
 
-        # File handler
+        # File handler (skip inline dot records — they're just UI animation)
         file_handler = logging.FileHandler(self._log_file, encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
         )
+        file_handler.addFilter(lambda r: not getattr(r, "inline", False))
         self._logger.addHandler(file_handler)
 
         # Counters
@@ -36,6 +53,10 @@ class ProcessingLogger:
         self.documents_renamed = 0
         self.documents_skipped = 0
         self.errors = 0
+
+        # Progress indicator state
+        self._progress_stop = threading.Event()
+        self._progress_thread: threading.Thread | None = None
 
     def info(self, msg: str) -> None:
         self._logger.info(msg)
@@ -49,6 +70,35 @@ class ProcessingLogger:
 
     def debug(self, msg: str) -> None:
         self._logger.debug(msg)
+
+    def _emit_inline(self, text: str) -> None:
+        """Emit an inline log record (appends to current line, no newline)."""
+        record = self._logger.makeRecord(
+            self._logger.name, logging.INFO, "", 0, text, (), None,
+        )
+        record.inline = True
+        self._logger.handle(record)
+
+    def start_progress(self, msg: str, interval: float = 1.5) -> None:
+        """Log *msg* then append dots every *interval* seconds until stopped."""
+        self.stop_progress()  # stop any previous progress
+        self.info(msg)
+        self._progress_stop.clear()
+
+        def _tick():
+            while not self._progress_stop.wait(interval):
+                self._emit_inline(" .")
+
+        t = threading.Thread(target=_tick, daemon=True)
+        t.start()
+        self._progress_thread = t
+
+    def stop_progress(self) -> None:
+        """Stop the dot animation (if running)."""
+        if self._progress_thread is not None:
+            self._progress_stop.set()
+            self._progress_thread.join(timeout=2)
+            self._progress_thread = None
 
     def save_summary(self) -> None:
         summary = {

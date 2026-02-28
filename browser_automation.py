@@ -1219,6 +1219,7 @@ class FSEBrowser:
         results: list[DocumentResult] = []
 
         try:
+            self._logger.start_progress("Accesso al fascicolo sanitario")
             self._page.goto(fse_link, wait_until="networkidle")
             self._wait_for_spinner()
 
@@ -1231,6 +1232,7 @@ class FSEBrowser:
 
             # Check if we got redirected to SSO (session expired)
             if not self._is_siss_authenticated():
+                self._logger.stop_progress()
                 import time
                 self._logger.warning(
                     "Sessione SSO scaduta - completa il login nel browser. "
@@ -1269,8 +1271,10 @@ class FSEBrowser:
 
             # Wait for table to appear
             self._page.wait_for_selector("table tbody tr", state="attached")
+            self._logger.stop_progress()
 
         except Exception as e:
+            self._logger.stop_progress()
             self._logger.error(f"Errore navigazione FSE per {patient_name}: {e}")
             self._take_debug_screenshot(patient_name)
             return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
@@ -1308,7 +1312,7 @@ class FSEBrowser:
 
             # Debug: log first data row
             first_row_html = data_rows.nth(0).inner_html()
-            self._logger.info(f"HTML prima riga dati: {first_row_html[:500]}")
+            self._logger.debug(f"HTML prima riga dati: {first_row_html[:500]}")
 
             # Extract data from data rows
             row_data: list[tuple[int, str, str]] = []
@@ -1539,15 +1543,20 @@ class FSEBrowser:
         results: list[DocumentResult] = []
 
         try:
+            self._logger.start_progress("Accesso al fascicolo sanitario")
             self._navigate_and_login(fse_link, codice_fiscale)
+            self._logger.stop_progress()
         except Exception as e:
+            self._logger.stop_progress()
             self._logger.error(f"Errore navigazione FSE per {codice_fiscale}: {e}")
             self._take_debug_screenshot(codice_fiscale)
             return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
 
         try:
+            self._logger.start_progress("Caricamento tabella referti")
             referti_table = self._page.locator("table:has(th:has-text('Tipologia documento'))")
             referti_table.wait_for(state="attached", timeout=10000)
+            self._logger.stop_progress()
 
             headers = referti_table.locator("thead th")
             header_count = headers.count()
@@ -1577,6 +1586,7 @@ class FSEBrowser:
                 return results
 
             # Phase 1: Scan all rows to extract data and collect unique enti
+            self._logger.start_progress(f"Analisi {row_count} righe della tabella")
             row_info: list[tuple[int, str, str, str]] = []  # (index, date_text, tipo_text, ente_text)
             ente_set: set[str] = set()
             for i in range(row_count):
@@ -1590,6 +1600,7 @@ class FSEBrowser:
                 row_info.append((i, date_text, tipo_text, ente_text))
                 if ente_text:
                     ente_set.add(ente_text)
+            self._logger.stop_progress()
 
             # Notify callback with unique enti
             if on_enti_found and ente_set:
@@ -1651,6 +1662,25 @@ class FSEBrowser:
 
         return results
 
+    def _close_pdf_popup_tabs(self) -> None:
+        """Close any popup tabs opened by Chrome's PDF viewer.
+
+        The built-in PDF viewer renders embedded PNGs, which can cause
+        'libpng error: Read Error' spam on Chrome's stderr.  Closing these
+        tabs as early as possible silences the noise.
+        """
+        if not self._context:
+            return
+        for pg in self._context.pages:
+            if pg == self._page:
+                continue
+            try:
+                url = pg.url.lower()
+                if "blob:" in url or url.endswith(".pdf"):
+                    pg.close()
+            except Exception:
+                pass
+
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,
                            visualizza_col: int | None, data_rows=None) -> DocumentResult:
         for attempt in range(2):  # max 1 retry
@@ -1666,7 +1696,7 @@ class FSEBrowser:
                     visualizza_cell = row.locator("td").last
 
                 cell_html = visualizza_cell.inner_html()
-                self._logger.info(f"HTML cella Visualizza: {cell_html[:200]}")
+                self._logger.debug(f"HTML cella Visualizza: {cell_html[:200]}")
 
                 clickable = visualizza_cell.locator(
                     "a, button, img, svg, i, span[class*='icon'], span[class*='glyph']"
@@ -1698,25 +1728,40 @@ class FSEBrowser:
                 self._page.on("download", _on_download)
 
                 pdf_bytes = None
+                self._logger.start_progress(
+                    f"Scaricamento PDF per {tipologia}"
+                )
                 try:
                     with self._page.expect_response(
                         _is_pdf_response,
                         timeout=self._config.download_timeout,
                     ) as resp_info:
                         clickable.click()
-                        accetta = self._page.get_by_role("button", name="Accetta")
-                        if accetta.is_visible(timeout=8000):
-                            accetta.click()
+                        # "Accetta" consent button may appear before the PDF
+                        # is served.  Use a short timeout — if the dialog is
+                        # going to show, it appears within ~2 s.
+                        try:
+                            accetta = self._page.get_by_role(
+                                "button", name="Accetta",
+                            )
+                            accetta.click(timeout=3000)
+                        except Exception:
+                            pass  # no consent dialog — continue
 
+                    self._logger.stop_progress()
                     response = resp_info.value
                     self._logger.info(
-                        f"Risposta PDF catturata: {response.url[:120]} "
-                        f"(status: {response.status})"
+                        f"Risposta PDF: status {response.status}"
                     )
+
+                    # Close popup PDF viewer tabs immediately to stop
+                    # Chrome rendering (and the resulting libpng errors).
+                    self._close_pdf_popup_tabs()
+
                     try:
                         pdf_bytes = response.body()
                         if pdf_bytes and len(pdf_bytes) > 0:
-                            self._logger.info(f"Body PDF letto via response: {len(pdf_bytes):,} bytes")
+                            self._logger.info(f"PDF letto via response: {len(pdf_bytes):,} bytes")
                         else:
                             pdf_bytes = None
                             self._logger.debug("response.body() vuoto, provo fallback download")
@@ -1726,6 +1771,7 @@ class FSEBrowser:
                         )
 
                 except Exception as resp_err:
+                    self._logger.stop_progress()
                     self._logger.debug(f"expect_response fallito: {resp_err}")
 
                 finally:
@@ -1739,7 +1785,8 @@ class FSEBrowser:
                     )
                     dl.save_as(str(save_path))
                     pdf_bytes = save_path.read_bytes()
-                    self._logger.info(f"Body PDF letto via download.save_as: {len(pdf_bytes):,} bytes")
+                    self._logger.info(f"PDF letto via download: {len(pdf_bytes):,} bytes")
+                    self._close_pdf_popup_tabs()
 
                 # ── Fallback 2: read PDF from popup tab (inline viewer) ──
                 if not pdf_bytes and self._context:
@@ -1749,37 +1796,27 @@ class FSEBrowser:
                         try:
                             pg_url = pg.url.lower()
                             if "blob:" in pg_url or pg_url.endswith(".pdf"):
-                                # Try to extract the PDF content from the tab
-                                self._logger.info(f"Tentativo lettura PDF da tab popup: {pg_url[:100]}")
+                                self._logger.info(f"Lettura PDF da tab popup: {pg_url[:100]}")
                                 tab_resp = pg.goto(pg.url)
                                 if tab_resp:
                                     try:
                                         pdf_bytes = tab_resp.body()
                                         if pdf_bytes and len(pdf_bytes) > 0:
                                             self._logger.info(
-                                                f"Body PDF letto da tab popup: {len(pdf_bytes):,} bytes"
+                                                f"PDF letto da tab popup: {len(pdf_bytes):,} bytes"
                                             )
                                     except Exception:
                                         pass
                                 break
                         except Exception:
                             continue
+                    # Close popup tabs used by fallback
+                    self._close_pdf_popup_tabs()
 
                 if not pdf_bytes:
                     raise RuntimeError(
                         "Nessun contenuto PDF ottenuto (ne' via rete ne' via download browser)"
                     )
-
-                # Close any popup tabs the PDF viewer may have opened
-                if self._context:
-                    for pg in self._context.pages:
-                        if pg != self._page:
-                            try:
-                                url = pg.url.lower()
-                                if "blob:" in url or url.endswith(".pdf"):
-                                    pg.close()
-                            except Exception:
-                                pass
 
                 # ── Save captured bytes to disk ──
                 if not save_path.exists() or save_path.stat().st_size == 0:
@@ -1798,7 +1835,7 @@ class FSEBrowser:
 
                 self._logger.info(
                     f"Download completato: {save_path.name} "
-                    f"({file_size:,} bytes, tipologia: {tipologia})"
+                    f"({file_size:,} bytes)"
                 )
                 return DocumentResult(
                     disciplina=tipologia, skipped=False,
@@ -1806,12 +1843,14 @@ class FSEBrowser:
                 )
 
             except Exception as e:
+                self._logger.stop_progress()
                 if attempt == 0:
                     self._logger.warning(
                         f"Download fallito per riga {row_index + 1} "
                         f"({tipologia}), tentativo {attempt + 1}/2: {e}"
                     )
                     try:
+                        self._close_pdf_popup_tabs()
                         self._page.reload(wait_until="networkidle")
                         self._wait_for_spinner()
                         self._page.wait_for_selector(
@@ -1824,6 +1863,7 @@ class FSEBrowser:
                         f"Download fallito definitivamente per riga "
                         f"{row_index + 1} ({tipologia}): {e}"
                     )
+                    self._close_pdf_popup_tabs()
                     self._take_debug_screenshot(f"{patient_name}_row{row_index + 1}")
 
         return DocumentResult(

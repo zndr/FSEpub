@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
-from PySide6.QtGui import QAction, QColor, QFont, QPalette
+from PySide6.QtGui import QAction, QColor, QFont, QPalette, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -1648,6 +1648,7 @@ class SetupWizard(QDialog):
 class _SignalBridge(QObject):
     """Bridge for thread-safe communication from worker threads to GUI."""
     append_text = Signal(QTextEdit, str)
+    inline_text = Signal(QTextEdit, str)
     show_info = Signal(str, str)
     show_error = Signal(str, str)
     show_warning = Signal(str, str)
@@ -1656,6 +1657,7 @@ class _SignalBridge(QObject):
     def __init__(self) -> None:
         super().__init__()
         self.append_text.connect(self._on_append_text)
+        self.inline_text.connect(self._on_inline_text)
         self.show_info.connect(self._on_show_info)
         self.show_error.connect(self._on_show_error)
         self.show_warning.connect(self._on_show_warning)
@@ -1665,6 +1667,17 @@ class _SignalBridge(QObject):
     def _on_append_text(widget: QTextEdit, msg: str) -> None:
         widget.setReadOnly(False)
         widget.append(msg)
+        widget.setReadOnly(True)
+        widget.verticalScrollBar().setValue(widget.verticalScrollBar().maximum())
+
+    @staticmethod
+    def _on_inline_text(widget: QTextEdit, msg: str) -> None:
+        """Append text to the current last line (no newline)."""
+        widget.setReadOnly(False)
+        cursor = widget.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(msg)
+        widget.setTextCursor(cursor)
         widget.setReadOnly(True)
         widget.verticalScrollBar().setValue(widget.verticalScrollBar().maximum())
 
@@ -1694,8 +1707,12 @@ class TextHandler(logging.Handler):
         self._bridge = bridge
 
     def emit(self, record: logging.LogRecord) -> None:
-        msg = self.format(record)
-        self._bridge.append_text.emit(self._widget, msg)
+        if getattr(record, "inline", False):
+            # Inline text: append to current line without newline
+            self._bridge.inline_text.emit(self._widget, record.getMessage())
+        else:
+            msg = self.format(record)
+            self._bridge.append_text.emit(self._widget, msg)
 
 
 def _is_millewin_installed() -> bool:
