@@ -114,19 +114,18 @@ SISS_DOCUMENT_TYPES = [
     ("VERBALE PRONTO SOCCORSO", "Verbale Pronto Soccorso", True),
 ]
 
-PATIENT_DOCUMENT_TYPES = [
-    ("REFERTO SPECIALISTICO", "non definiti", False),
-    ("REFERTO SPECIALISTICO LABORATORIO", "Lab", False),
-    ("REFERTO SPECIALISTICO RADIOLOGIA", "Radiologia", False),
-    ("REFERTO ANATOMIA PATOLOGICA", "Anatomia patologica", False),
-    ("LETTERA DIMISSIONE", "Lettera Dimissione", True),
-    ("VERBALE PRONTO SOCCORSO", "Verbale Pronto soccorso", True),
+PATIENT_DOC_TYPES_MAIN = [
+    ("LETTERA DIMISSIONE", "Lettera Dimissione"),
+    ("VERBALE PRONTO SOCCORSO", "Verbale Pronto Soccorso"),
 ]
 
-REFERTO_SUBTYPES = {
-    "REFERTO SPECIALISTICO", "REFERTO SPECIALISTICO LABORATORIO",
-    "REFERTO SPECIALISTICO RADIOLOGIA", "REFERTO ANATOMIA PATOLOGICA",
-}
+REFERTO_SUBTYPE_ITEMS = [
+    ("Tutti", "REFERTO"),
+    ("Referto non specificato", "REFERTO SPECIALISTICO"),
+    ("Radiologia", "REFERTO SPECIALISTICO RADIOLOGIA"),
+    ("Laboratorio", "REFERTO SPECIALISTICO LABORATORIO"),
+    ("Anatomia patologica", "REFERTO ANATOMIA PATOLOGICA"),
+]
 
 DATE_PRESETS = ["Tutte", "Ultima settimana", "Ultimo mese", "Ultimo anno", "Personalizzato"]
 DATE_PRESET_DAYS = {"Ultima settimana": 7, "Ultimo mese": 30, "Ultimo anno": 365}
@@ -239,6 +238,28 @@ QCheckBox::indicator:unchecked {
     border: 1px solid #b0c4de;
     border-radius: 2px;
     background-color: white;
+}
+QCheckBox:disabled {
+    color: #a0a0a0;
+}
+QCheckBox::indicator:checked:disabled {
+    background-color: #b0c4de;
+    border-color: #c0c0c0;
+}
+QCheckBox::indicator:unchecked:disabled {
+    background-color: #e8e8e8;
+    border-color: #c0c0c0;
+}
+
+/* ---------- QRadioButton ---------- */
+QRadioButton:disabled {
+    color: #a0a0a0;
+}
+
+/* ---------- QListWidget ---------- */
+QListWidget:disabled {
+    background-color: #f0f0f0;
+    color: #a0a0a0;
 }
 
 /* ---------- Utility ---------- */
@@ -2083,16 +2104,25 @@ class FSEApp(QMainWindow):
         """Return the set of selected patient document type keys.
 
         Returns None if radio 'Tutti' is checked.
-        When referto_tutti_cb is checked, adds 'REFERTO' to match all subtypes.
+        Reads checked items from the referto QListWidget via UserRole data.
         """
         if self._patient_radio_tutti.isChecked():
             return None
         result: set[str] = set()
-        if self._patient_referto_tutti_cb.isChecked():
-            result.add("REFERTO")
+        # Main checkboxes (Lettera Dimissione, Verbale PS)
         for key, cb in self._patient_doc_cbs.items():
             if cb.isChecked():
                 result.add(key)
+        # Referto subtypes from the list widget
+        if self._patient_referti_cb.isChecked():
+            lst = self._patient_referto_list
+            for i in range(lst.count()):
+                item = lst.item(i)
+                if item.checkState() == Qt.Checked:
+                    filter_key = item.data(Qt.UserRole)
+                    result.add(filter_key)
+                    if filter_key == "REFERTO":
+                        break  # wildcard — matches all referto subtypes
         return result if result else set()
 
     def _build_patient_tab(self, parent: QWidget) -> None:
@@ -2181,7 +2211,10 @@ class FSEApp(QMainWindow):
         top_layout.addWidget(left_widget, 1)
 
         # ── Right column: Tipologia documenti ──
-        self._patient_radio_tutti, self._patient_radio_seleziona, self._patient_referto_tutti_cb, self._patient_doc_cbs = self._build_patient_doc_type_checkboxes()
+        (self._patient_radio_tutti,
+         self._patient_radio_seleziona,
+         self._patient_referto_list,
+         self._patient_doc_cbs) = self._build_patient_doc_type_checkboxes()
         top_layout.addWidget(self._patient_doc_group, 1)
 
         layout.addLayout(top_layout)
@@ -2221,20 +2254,17 @@ class FSEApp(QMainWindow):
         console_layout.addWidget(self._patient_console)
         layout.addWidget(console_group, 1)
 
-    def _build_patient_doc_type_checkboxes(self) -> tuple[QRadioButton, QRadioButton, QCheckBox, dict[str, QCheckBox]]:
+    def _build_patient_doc_type_checkboxes(self) -> tuple[QRadioButton, QRadioButton, QListWidget, dict[str, QCheckBox]]:
         """Create Patient document type checkboxes with radio Tutti/Seleziona.
 
-        Returns (radio_tutti, radio_seleziona, referto_tutti_cb, doc_cbs).
+        Returns (radio_tutti, radio_seleziona, referto_list, doc_cbs).
         """
         self._patient_doc_group = QGroupBox("Tipologia documenti")
         group_layout = QVBoxLayout(self._patient_doc_group)
-        group_layout.setSpacing(2)
 
         doc_cbs: dict[str, QCheckBox] = {}
-        all_cbs: list[QCheckBox] = []
-        referto_sub_cbs: list[QCheckBox] = []
 
-        # Radio buttons: Tutti / Seleziona
+        # ── Radio buttons row ──
         radio_tutti = QRadioButton("Tutti")
         radio_seleziona = QRadioButton("Seleziona")
         radio_tutti.setChecked(True)
@@ -2245,85 +2275,87 @@ class FSEApp(QMainWindow):
         radio_row.addStretch()
         group_layout.addLayout(radio_row)
 
-        # Referti specialistici label + row
-        group_layout.addWidget(QLabel("Referti specialistici:"))
-        referto_tutti_cb = QCheckBox("Tutti")
-        referto_tutti_cb.setChecked(True)
+        # ── Selection container (hidden when radio "Tutti") ──
+        selection_container = QWidget()
+        sel_layout = QVBoxLayout(selection_container)
+        sel_layout.setContentsMargins(0, 0, 0, 0)
 
-        sub_row = QHBoxLayout()
-        sub_row.setContentsMargins(12, 0, 0, 0)
-        sub_row.addWidget(referto_tutti_cb)
-
-        referto_items = [
-            (tkey, dlabel, dfl) for tkey, dlabel, dfl in PATIENT_DOCUMENT_TYPES
-            if tkey in REFERTO_SUBTYPES
-        ]
-        for type_key, label, default_on in referto_items:
+        # Main doc type checkboxes (vertical, with stretch between)
+        for type_key, label in PATIENT_DOC_TYPES_MAIN:
+            sel_layout.addStretch(1)
             cb = QCheckBox(label)
-            cb.setToolTip(type_key.title())
-            cb.setChecked(default_on)
-            sub_row.addWidget(cb)
+            cb.setChecked(True)
+            sel_layout.addWidget(cb)
             doc_cbs[type_key] = cb
-            all_cbs.append(cb)
-            referto_sub_cbs.append(cb)
-        sub_row.addStretch()
-        group_layout.addLayout(sub_row)
 
-        # Other types (non-referto)
-        other_row = QHBoxLayout()
-        for type_key, label, default_on in PATIENT_DOCUMENT_TYPES:
-            if type_key not in REFERTO_SUBTYPES:
-                cb = QCheckBox(label)
-                cb.setChecked(default_on)
-                other_row.addWidget(cb)
-                doc_cbs[type_key] = cb
-                all_cbs.append(cb)
-        other_row.addStretch()
-        group_layout.addLayout(other_row)
+        # Referti specialistici row (checkbox + list)
+        sel_layout.addStretch(1)
+        referto_row = QHBoxLayout()
+        self._patient_referti_cb = QCheckBox("Referti specialistici")
+        self._patient_referti_cb.setChecked(True)
+        referto_row.addWidget(self._patient_referti_cb)
+
+        referto_list = QListWidget()
+        referto_list.setMaximumHeight(110)
+        referto_list.setMaximumWidth(220)
+        for display_label, filter_key in REFERTO_SUBTYPE_ITEMS:
+            item = QListWidgetItem(display_label)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if display_label == "Tutti" else Qt.Unchecked)
+            item.setData(Qt.UserRole, filter_key)
+            referto_list.addItem(item)
+
+        referto_row.addWidget(referto_list)
+        referto_row.addStretch()
+        sel_layout.addLayout(referto_row)
+        sel_layout.addStretch(1)
+
+        group_layout.addWidget(selection_container)
+
+        # ── Initial state: radio "Tutti" checked → disable selection area ──
+        selection_container.setEnabled(False)
+        referto_list.setEnabled(False)
 
         # ── Interactions ──
 
-        def on_radio_tutti(checked):
-            """When 'Tutti' radio selected, disable all checkboxes."""
-            if checked:
-                referto_tutti_cb.setEnabled(False)
-                for cb in all_cbs:
-                    cb.setEnabled(False)
+        def on_radio_toggled(tutti_checked):
+            selection_container.setEnabled(not tutti_checked)
+            if not tutti_checked:
+                # Re-apply referti checkbox state after container enable
+                referto_list.setEnabled(self._patient_referti_cb.isChecked())
+
+        def on_referti_toggled(checked):
+            referto_list.setEnabled(checked)
+
+        def on_list_item_changed(item):
+            """Mutual exclusion: 'Tutti' vs individual items."""
+            referto_list.blockSignals(True)
+            tutti_item = referto_list.item(0)
+            if item is tutti_item:
+                # "Tutti" toggled — clear or set all others
+                new_state = tutti_item.checkState()
+                for i in range(1, referto_list.count()):
+                    referto_list.item(i).setCheckState(
+                        Qt.Unchecked if new_state == Qt.Checked else Qt.Unchecked
+                    )
             else:
-                referto_tutti_cb.setEnabled(True)
-                for cb in all_cbs:
-                    cb.setEnabled(True)
-                # Re-apply referto_tutti logic
-                if referto_tutti_cb.isChecked():
-                    for cb in referto_sub_cbs:
-                        cb.setEnabled(True)  # stay enabled but unchecked individually
+                # An individual item toggled — uncheck "Tutti"
+                if item.checkState() == Qt.Checked:
+                    tutti_item.setCheckState(Qt.Unchecked)
+                # If no individual is checked, re-check "Tutti"
+                any_checked = any(
+                    referto_list.item(i).checkState() == Qt.Checked
+                    for i in range(1, referto_list.count())
+                )
+                if not any_checked:
+                    tutti_item.setCheckState(Qt.Checked)
+            referto_list.blockSignals(False)
 
-        def on_referto_tutti_changed(checked):
-            """When 'Tutti referti' is checked, uncheck individual referto subtypes."""
-            if radio_tutti.isChecked():
-                return
-            if checked:
-                for cb in referto_sub_cbs:
-                    cb.setChecked(False)
+        radio_tutti.toggled.connect(on_radio_toggled)
+        self._patient_referti_cb.toggled.connect(on_referti_toggled)
+        referto_list.itemChanged.connect(on_list_item_changed)
 
-        def on_referto_sub_changed(checked):
-            """When any individual referto subtype is checked, uncheck 'Tutti referti'."""
-            if radio_tutti.isChecked():
-                return
-            if checked:
-                referto_tutti_cb.setChecked(False)
-
-        radio_tutti.toggled.connect(on_radio_tutti)
-        referto_tutti_cb.toggled.connect(on_referto_tutti_changed)
-        for cb in referto_sub_cbs:
-            cb.toggled.connect(on_referto_sub_changed)
-
-        # Initial state: radio "Tutti" is checked, so disable all
-        referto_tutti_cb.setEnabled(False)
-        for cb in all_cbs:
-            cb.setEnabled(False)
-
-        return radio_tutti, radio_seleziona, referto_tutti_cb, doc_cbs
+        return radio_tutti, radio_seleziona, referto_list, doc_cbs
 
     def _copy_cf_from_millewin(self) -> None:
         """Read CF from Millewin window title and paste it into the patient CF field."""
