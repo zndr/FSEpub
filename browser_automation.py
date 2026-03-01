@@ -632,7 +632,7 @@ class FSEBrowser:
         """Connect to a browser via CDP and set up context/page."""
         try:
             self._browser = self._playwright.chromium.connect_over_cdp(
-                endpoint, timeout=15000
+                endpoint, timeout=5000
             )
         except Exception as e:
             raise ConnectionError(

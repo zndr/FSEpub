@@ -19,6 +19,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class RedactionDetail:
+    """A single redaction event for comparison/audit purposes."""
+
+    line_number: int        # 1-based line number in the original text
+    original_text: str      # The original line or fragment
+    reason: str             # "exclude_pattern", "inline_name", "sidebar_strip", "empty"
+    pattern: str = ""       # The regex pattern that triggered the redaction
+
+
+@dataclass
 class AnonymizedReport:
     """Result of the anonymization pipeline."""
 
@@ -27,6 +37,8 @@ class AnonymizedReport:
     profile_used: str       # Name of the profile that was applied
     success: bool
     error_message: str = ""
+    original_text: str = "" # Raw input text (for redaction comparison)
+    redactions: list[RedactionDetail] | None = None  # Tracked redaction events
 
 
 class TextAnonymizer:
@@ -84,27 +96,43 @@ class TextAnonymizer:
                         r"\b" + escaped[1] + r"\s+" + escaped[0] + r"\b"
                     )
 
-        # 4. Filter lines
+        # 4. Filter lines (with redaction tracking)
         lines = raw_text.splitlines()
         kept_lines: list[str] = []
-        for line in lines:
+        redactions: list[RedactionDetail] = []
+        for line_idx, line in enumerate(lines, start=1):
             stripped = line.strip()
             if not stripped:
                 continue
             # 4a. Strip sidebar prefixes (multi-column PDF layout artifacts)
+            before_sidebar = stripped
             stripped = _strip_sidebar_prefix(stripped, profile.sidebar_strip_patterns)
             if not stripped:
+                redactions.append(RedactionDetail(
+                    line_number=line_idx,
+                    original_text=before_sidebar,
+                    reason="sidebar_strip",
+                ))
                 continue
-            if not _should_exclude_line(
+            matched_pattern = _find_exclude_pattern(
                 stripped, dynamic_excludes, profile.keep_patterns
-            ):
+            )
+            if matched_pattern is not None:
+                redactions.append(RedactionDetail(
+                    line_number=line_idx,
+                    original_text=stripped,
+                    reason="exclude_pattern",
+                    pattern=matched_pattern,
+                ))
+            else:
                 kept_lines.append(stripped)
 
         # 5. Join into single text
         body = " ".join(kept_lines)
 
         # 5b. Remove patient name inline (persists in keep-pattern lines)
-        body = _strip_inline_name(body, patient_name)
+        body, inline_redactions = _strip_inline_name_tracked(body, patient_name)
+        redactions.extend(inline_redactions)
 
         # 6. Insert newlines before structural patterns
         for pattern in profile.newline_before_patterns:
@@ -121,6 +149,8 @@ class TextAnonymizer:
             anonymized_text=body,
             profile_used=profile.name,
             success=True,
+            original_text=raw_text,
+            redactions=redactions,
         )
 
 
@@ -233,6 +263,57 @@ def _strip_inline_name(text: str, patient_name: str) -> str:
     return text
 
 
+def _strip_inline_name_tracked(
+    text: str, patient_name: str,
+) -> tuple[str, list[RedactionDetail]]:
+    """Remove patient name occurrences and return redaction details.
+
+    Same logic as _strip_inline_name but tracks each substitution.
+    """
+    redactions: list[RedactionDetail] = []
+
+    if not patient_name or patient_name == "PAZIENTE_SCONOSCIUTO":
+        return text, redactions
+
+    name_parts = patient_name.upper().split()
+    if len(name_parts) < 2:
+        return text, redactions
+
+    escaped = [re.escape(p) for p in name_parts]
+
+    # Build orderings: [COGNOME NOME] and [NOME COGNOME]
+    orderings = [escaped]
+    if len(escaped) == 2:
+        orderings.append(list(reversed(escaped)))
+
+    for ordering in orderings:
+        name_regex = r"\s+".join(ordering)
+
+        # "la Sig.ra COGNOME NOME," or "il Sig. COGNOME NOME"
+        sig_pattern = r"(?:il |la )?Sig\.(?:ra)?\s+" + name_regex + r",?\s*"
+        text, n = re.subn(sig_pattern, "", text, flags=re.IGNORECASE)
+        if n:
+            redactions.append(RedactionDetail(
+                line_number=0,
+                original_text=patient_name,
+                reason="inline_name",
+                pattern=sig_pattern,
+            ))
+
+        # Standalone full name
+        standalone_pattern = r"\b" + name_regex + r"\b,?\s*"
+        text, n = re.subn(standalone_pattern, "", text, flags=re.IGNORECASE)
+        if n:
+            redactions.append(RedactionDetail(
+                line_number=0,
+                original_text=patient_name,
+                reason="inline_name",
+                pattern=standalone_pattern,
+            ))
+
+    return text, redactions
+
+
 def _should_exclude_line(
     line: str,
     exclude_patterns: list[str],
@@ -243,11 +324,24 @@ def _should_exclude_line(
     Keep patterns have HIGHER PRIORITY than exclude patterns:
     if a line matches a keep pattern, it is never excluded.
     """
+    return _find_exclude_pattern(line, exclude_patterns, keep_patterns) is not None
+
+
+def _find_exclude_pattern(
+    line: str,
+    exclude_patterns: list[str],
+    keep_patterns: list[str],
+) -> str | None:
+    """Return the exclude pattern that matched, or None if the line is kept.
+
+    Keep patterns have HIGHER PRIORITY than exclude patterns:
+    if a line matches a keep pattern, it is never excluded.
+    """
     # Check keep patterns first (higher priority)
     for pattern in keep_patterns:
         try:
             if re.search(pattern, line, re.IGNORECASE):
-                return False
+                return None
         except re.error:
             continue
 
@@ -255,11 +349,11 @@ def _should_exclude_line(
     for pattern in exclude_patterns:
         try:
             if re.search(pattern, line, re.IGNORECASE):
-                return True
+                return pattern
         except re.error:
             continue
 
-    return False
+    return None
 
 
 def _normalize_whitespace(text: str) -> str:
