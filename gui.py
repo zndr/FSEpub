@@ -4381,7 +4381,13 @@ class FSEApp(QMainWindow):
                     self._patient_console, "Nessuna struttura trovata"
                 )
 
-            # Save the browser for reuse by download worker
+            # Save the browser for reuse by download worker.
+            # Stop any previous browser first to release the CDP connection.
+            if self._patient_browser is not None and self._patient_browser is not browser:
+                try:
+                    self._patient_browser.stop()
+                except Exception:
+                    pass
             self._patient_browser = browser
         except Exception as e:
             self._bridge.append_text.emit(self._patient_console, f"Errore scansione strutture: {e}")
@@ -4448,6 +4454,14 @@ class FSEApp(QMainWindow):
                         logger.info("Riutilizzo browser esistente")
                 except Exception:
                     pass
+                if not reused:
+                    # Stop stale browser to release CDP connection before
+                    # creating a new one (Chrome allows only one debugger).
+                    try:
+                        self._patient_browser.stop()
+                    except Exception:
+                        pass
+                    self._patient_browser = None
             if not reused:
                 browser = FSEBrowser(config, logger)
                 self._start_browser_safe(browser)
@@ -4581,6 +4595,14 @@ class FSEApp(QMainWindow):
                         logger.info("Riutilizzo browser esistente")
                 except Exception:
                     pass
+                if not reused:
+                    # Stop stale browser to release CDP connection before
+                    # creating a new one (Chrome allows only one debugger).
+                    try:
+                        self._patient_browser.stop()
+                    except Exception:
+                        pass
+                    self._patient_browser = None
             if not reused:
                 browser = FSEBrowser(config, logger)
                 self._start_browser_safe(browser)

@@ -461,57 +461,112 @@ class FSEBrowser:
         )
         self._logger.debug(f"[CDP] browser_running={browser_running}")
 
-        # 3. Browser IS running → try to connect via CDP with retries
-        #    The HTTP port-check can be unreliable (timeouts under load),
-        #    so we always attempt the real connect_over_cdp regardless.
+        # 3. Browser IS running — quick port check to pick optimal strategy.
+        #    Avoids 45s of blind retries when only background processes exist.
         if browser_running:
-            last_error = None
-            max_attempts = 3
-            for attempt in range(1, max_attempts + 1):
-                self._logger.info(
-                    f"Tentativo connessione CDP {attempt}/{max_attempts} "
-                    f"su porta {port}..."
-                )
-                try:
-                    self._connect_cdp(endpoint, port)
-                    return  # success
-                except ConnectionError as e:
-                    last_error = e
-                    self._logger.warning(
-                        f"Tentativo {attempt}/{max_attempts} fallito: {e}"
-                    )
-                    if attempt < max_attempts:
-                        wait = attempt * 2  # 2s, 4s backoff
-                        self._logger.info(f"Attesa {wait}s prima del prossimo tentativo...")
-                        time.sleep(wait)
+            cdp_port_active = _is_cdp_port_available(port)
+            self._logger.debug(f"[CDP] cdp_port_active={cdp_port_active}")
 
-            # All retries exhausted. Check WHY CDP isn't working.
-            has_flag = _browser_has_cdp_flag(process_name, port, logger=self._logger)
-            if has_flag is False:
-                # Browser running WITHOUT --remote-debugging-port flag.
-                # It needs to be restarted. Raise specific exception so the
-                # GUI can ask the user for consent before killing.
-                self._logger.warning(
-                    f"Il browser e' in esecuzione SENZA il flag "
-                    f"--remote-debugging-port={port}. Necessario riavvio."
-                )
+            if cdp_port_active:
+                # CDP port responding — try connecting with retries
+                last_error = None
+                for attempt in range(1, 4):
+                    self._logger.info(
+                        f"Tentativo connessione CDP {attempt}/3 su porta {port}..."
+                    )
+                    try:
+                        self._connect_cdp(endpoint, port)
+                        return  # success
+                    except ConnectionError as e:
+                        last_error = e
+                        self._logger.warning(
+                            f"Tentativo {attempt}/3 fallito: {e}"
+                        )
+                        if attempt < 3:
+                            time.sleep(attempt * 2)  # 2s, 4s backoff
+
+                # All retries exhausted — stale debugger session
                 if exe_path and Path(exe_path).exists():
+                    self._logger.warning(
+                        f"Porta CDP {port} attiva ma connessione Playwright fallisce "
+                        f"(probabile sessione debugger stale). Necessario riavvio."
+                    )
                     raise BrowserCDPNotActive(
-                        f"Il browser e' in esecuzione ma non ha CDP attivo sulla porta {port}.\n"
-                        f"Per connettersi, il browser deve essere riavviato con CDP.\n"
+                        f"Il browser ha CDP attivo sulla porta {port} ma non risponde.\n"
+                        f"Probabilmente una sessione precedente non si e' chiusa correttamente.\n"
                         f"Vuoi riavviare il browser? Le tab aperte verranno chiuse.",
                         process_name=process_name,
                         exe_path=exe_path,
                         port=port,
                     )
+                raise ConnectionError(
+                    f"CDP porta {port} attiva ma connessione fallita dopo 3 tentativi.\n"
+                    f"Ultimo errore: {last_error}\n"
+                    f"Prova a chiudere e riaprire manualmente il browser."
+                )
 
-            # CDP flag IS present (or check inconclusive) but connection still fails
+            # CDP port NOT responding — check if browser was launched with CDP flag
+            has_flag = _browser_has_cdp_flag(process_name, port, logger=self._logger)
+            self._logger.debug(f"[CDP] has_flag={has_flag} (porta non attiva)")
+
+            if has_flag:
+                # CDP flag present but port dead — browser frozen
+                if exe_path and Path(exe_path).exists():
+                    self._logger.warning(
+                        f"Browser con flag CDP ma porta {port} non risponde. "
+                        f"Necessario riavvio."
+                    )
+                    raise BrowserCDPNotActive(
+                        f"Il browser ha il flag CDP sulla porta {port} ma non risponde.\n"
+                        f"Vuoi riavviare il browser? Le tab aperte verranno chiuse.",
+                        process_name=process_name,
+                        exe_path=exe_path,
+                        port=port,
+                    )
+                raise ConnectionError(
+                    f"Browser con flag CDP non risponde sulla porta {port}.\n"
+                    f"Chiudi e riapri manualmente il browser."
+                )
+
+            # has_flag is False or None — no CDP flag (or check failed).
+            # Likely just background processes (crashpad, utility, GPU).
+            # Try launching a new browser window with CDP enabled.
+            if exe_path and Path(exe_path).exists():
+                self._logger.info(
+                    f"Nessun flag CDP nei processi {process_name}, "
+                    f"lancio browser con CDP sulla porta {port}..."
+                )
+                _launch_browser_with_cdp(exe_path, port, logger=self._logger)
+
+                elapsed = 0.0
+                while elapsed < CDP_CONNECT_TIMEOUT:
+                    try:
+                        self._connect_cdp(endpoint, port)
+                        self._logger.info(
+                            f"Connesso al browser lanciato dopo {elapsed:.1f}s"
+                        )
+                        return
+                    except ConnectionError:
+                        time.sleep(CDP_CONNECT_POLL)
+                        elapsed += CDP_CONNECT_POLL
+
+                # Launch absorbed by existing processes — need full restart
+                self._logger.warning(
+                    f"Lancio browser non ha attivato CDP sulla porta {port}"
+                )
+                raise BrowserCDPNotActive(
+                    f"Non e' stato possibile attivare CDP sulla porta {port}.\n"
+                    f"I processi {process_name} in background impediscono l'avvio con CDP.\n"
+                    f"Vuoi riavviare il browser? Le tab aperte verranno chiuse.",
+                    process_name=process_name,
+                    exe_path=exe_path,
+                    port=port,
+                )
+
             raise ConnectionError(
-                f"Impossibile connettersi al browser via CDP porta {port} "
-                f"dopo {max_attempts} tentativi.\n"
-                f"Ultimo errore: {last_error}\n"
-                f"Il flag --remote-debugging-port sembra presente ma la connessione fallisce.\n"
-                f"Prova a chiudere e riaprire manualmente il browser."
+                f"Processi {process_name} rilevati ma CDP non attivo "
+                f"e nessun eseguibile trovato.\n"
+                f"Avvia manualmente il browser con --remote-debugging-port={port}"
             )
 
         # 4. Browser NOT running → launch it with CDP
@@ -577,7 +632,7 @@ class FSEBrowser:
         """Connect to a browser via CDP and set up context/page."""
         try:
             self._browser = self._playwright.chromium.connect_over_cdp(
-                endpoint, timeout=60000
+                endpoint, timeout=15000
             )
         except Exception as e:
             raise ConnectionError(
@@ -1681,6 +1736,167 @@ class FSEBrowser:
             except Exception:
                 pass
 
+    def _download_via_expect_response(self, clickable, save_path: Path, tipologia: str) -> bytes | None:
+        """Download PDF using expect_response + fallback chain.
+
+        Used in standard (non-CDP) mode where Playwright has full control
+        of the browser and can intercept HTTP responses directly.
+        """
+        def _is_pdf_response(resp):
+            ct = resp.headers.get("content-type", "")
+            return "pdf" in ct or "octet-stream" in ct
+
+        captured_downloads: list = []
+
+        def _on_download(dl):
+            captured_downloads.append(dl)
+
+        self._page.on("download", _on_download)
+
+        pdf_bytes = None
+        self._logger.start_progress(f"Scaricamento PDF per {tipologia}")
+        try:
+            with self._page.expect_response(
+                _is_pdf_response,
+                timeout=self._config.download_timeout,
+            ) as resp_info:
+                clickable.click()
+                try:
+                    accetta = self._page.get_by_role(
+                        "button", name="Accetta",
+                    )
+                    accetta.click(timeout=3000)
+                except Exception:
+                    pass  # no consent dialog — continue
+
+            self._logger.stop_progress()
+            response = resp_info.value
+            self._logger.info(
+                f"Risposta PDF: status {response.status}"
+            )
+
+            self._close_pdf_popup_tabs()
+
+            try:
+                pdf_bytes = response.body()
+                if pdf_bytes and len(pdf_bytes) > 0:
+                    self._logger.info(f"PDF letto via response: {len(pdf_bytes):,} bytes")
+                else:
+                    pdf_bytes = None
+                    self._logger.debug("response.body() vuoto, provo fallback download")
+            except Exception as body_err:
+                self._logger.debug(
+                    f"response.body() fallito ({body_err}), provo fallback download"
+                )
+
+        except Exception as resp_err:
+            self._logger.stop_progress()
+            self._logger.debug(f"expect_response fallito: {resp_err}")
+
+        finally:
+            self._page.remove_listener("download", _on_download)
+
+        # ── Fallback 1: use browser download event ──
+        if not pdf_bytes and captured_downloads:
+            dl = captured_downloads[0]
+            self._logger.info(
+                f"Uso download browser (file: {dl.suggested_filename})"
+            )
+            dl.save_as(str(save_path))
+            pdf_bytes = save_path.read_bytes()
+            self._logger.info(f"PDF letto via download: {len(pdf_bytes):,} bytes")
+            self._close_pdf_popup_tabs()
+
+        # ── Fallback 2: read PDF from popup tab (inline viewer) ──
+        if not pdf_bytes and self._context:
+            for pg in self._context.pages:
+                if pg == self._page:
+                    continue
+                try:
+                    pg_url = pg.url.lower()
+                    if "blob:" in pg_url or pg_url.endswith(".pdf"):
+                        self._logger.info(f"Lettura PDF da tab popup: {pg_url[:100]}")
+                        tab_resp = pg.goto(pg.url)
+                        if tab_resp:
+                            try:
+                                pdf_bytes = tab_resp.body()
+                                if pdf_bytes and len(pdf_bytes) > 0:
+                                    self._logger.info(
+                                        f"PDF letto da tab popup: {len(pdf_bytes):,} bytes"
+                                    )
+                            except Exception:
+                                pass
+                        break
+                except Exception:
+                    continue
+            self._close_pdf_popup_tabs()
+
+        return pdf_bytes
+
+    def _download_via_expect_download(self, clickable, save_path: Path, tipologia: str) -> bytes | None:
+        """Download PDF using expect_download (CDP mode).
+
+        In CDP mode, Browser.setDownloadBehavior intercepts the HTTP response
+        at the browser level, making it invisible to Playwright's network
+        layer.  expect_response would block for the full timeout.  Instead,
+        we use expect_download which hooks into the browser's download manager
+        directly and resolves as soon as the file is saved.
+        """
+        pdf_bytes = None
+        self._logger.start_progress(f"Scaricamento PDF per {tipologia}")
+        try:
+            with self._page.expect_download(
+                timeout=self._config.download_timeout,
+            ) as dl_info:
+                clickable.click()
+                try:
+                    accetta = self._page.get_by_role(
+                        "button", name="Accetta",
+                    )
+                    accetta.click(timeout=3000)
+                except Exception:
+                    pass  # no consent dialog — continue
+
+            self._logger.stop_progress()
+            dl = dl_info.value
+            self._logger.info(
+                f"Download CDP completato (file: {dl.suggested_filename})"
+            )
+            dl.save_as(str(save_path))
+            pdf_bytes = save_path.read_bytes()
+            self._logger.info(f"PDF letto via download CDP: {len(pdf_bytes):,} bytes")
+            self._close_pdf_popup_tabs()
+
+        except Exception as dl_err:
+            self._logger.stop_progress()
+            self._logger.debug(f"expect_download fallito: {dl_err}")
+
+            # ── Fallback: PDF opened in popup tab instead of downloading ──
+            if self._context:
+                for pg in self._context.pages:
+                    if pg == self._page:
+                        continue
+                    try:
+                        pg_url = pg.url.lower()
+                        if "blob:" in pg_url or pg_url.endswith(".pdf"):
+                            self._logger.info(f"Lettura PDF da tab popup (CDP): {pg_url[:100]}")
+                            tab_resp = pg.goto(pg.url)
+                            if tab_resp:
+                                try:
+                                    pdf_bytes = tab_resp.body()
+                                    if pdf_bytes and len(pdf_bytes) > 0:
+                                        self._logger.info(
+                                            f"PDF letto da tab popup: {len(pdf_bytes):,} bytes"
+                                        )
+                                except Exception:
+                                    pass
+                            break
+                    except Exception:
+                        continue
+                self._close_pdf_popup_tabs()
+
+        return pdf_bytes
+
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,
                            visualizza_col: int | None, data_rows=None) -> DocumentResult:
         for attempt in range(2):  # max 1 retry
@@ -1709,109 +1925,14 @@ class FSEBrowser:
                 )
                 save_path = self._config.download_dir / unique_name
 
-                # ── Hybrid download: try response body first, fall back to
-                #    browser download event if body is unavailable.
-                #    In CDP mode, Browser.setDownloadBehavior may consume the
-                #    response body, making Network.getResponseBody fail. ──
-
-                def _is_pdf_response(resp):
-                    ct = resp.headers.get("content-type", "")
-                    return "pdf" in ct or "octet-stream" in ct
-
-                # Register a download listener BEFORE clicking, so we can
-                # catch downloads triggered by the browser's download manager
-                captured_downloads: list = []
-
-                def _on_download(dl):
-                    captured_downloads.append(dl)
-
-                self._page.on("download", _on_download)
-
-                pdf_bytes = None
-                self._logger.start_progress(
-                    f"Scaricamento PDF per {tipologia}"
-                )
-                try:
-                    with self._page.expect_response(
-                        _is_pdf_response,
-                        timeout=self._config.download_timeout,
-                    ) as resp_info:
-                        clickable.click()
-                        # "Accetta" consent button may appear before the PDF
-                        # is served.  Use a short timeout — if the dialog is
-                        # going to show, it appears within ~2 s.
-                        try:
-                            accetta = self._page.get_by_role(
-                                "button", name="Accetta",
-                            )
-                            accetta.click(timeout=3000)
-                        except Exception:
-                            pass  # no consent dialog — continue
-
-                    self._logger.stop_progress()
-                    response = resp_info.value
-                    self._logger.info(
-                        f"Risposta PDF: status {response.status}"
-                    )
-
-                    # Close popup PDF viewer tabs immediately to stop
-                    # Chrome rendering (and the resulting libpng errors).
-                    self._close_pdf_popup_tabs()
-
-                    try:
-                        pdf_bytes = response.body()
-                        if pdf_bytes and len(pdf_bytes) > 0:
-                            self._logger.info(f"PDF letto via response: {len(pdf_bytes):,} bytes")
-                        else:
-                            pdf_bytes = None
-                            self._logger.debug("response.body() vuoto, provo fallback download")
-                    except Exception as body_err:
-                        self._logger.debug(
-                            f"response.body() fallito ({body_err}), provo fallback download"
-                        )
-
-                except Exception as resp_err:
-                    self._logger.stop_progress()
-                    self._logger.debug(f"expect_response fallito: {resp_err}")
-
-                finally:
-                    self._page.remove_listener("download", _on_download)
-
-                # ── Fallback 1: use browser download event ──
-                if not pdf_bytes and captured_downloads:
-                    dl = captured_downloads[0]
-                    self._logger.info(
-                        f"Uso download browser (file: {dl.suggested_filename})"
-                    )
-                    dl.save_as(str(save_path))
-                    pdf_bytes = save_path.read_bytes()
-                    self._logger.info(f"PDF letto via download: {len(pdf_bytes):,} bytes")
-                    self._close_pdf_popup_tabs()
-
-                # ── Fallback 2: read PDF from popup tab (inline viewer) ──
-                if not pdf_bytes and self._context:
-                    for pg in self._context.pages:
-                        if pg == self._page:
-                            continue
-                        try:
-                            pg_url = pg.url.lower()
-                            if "blob:" in pg_url or pg_url.endswith(".pdf"):
-                                self._logger.info(f"Lettura PDF da tab popup: {pg_url[:100]}")
-                                tab_resp = pg.goto(pg.url)
-                                if tab_resp:
-                                    try:
-                                        pdf_bytes = tab_resp.body()
-                                        if pdf_bytes and len(pdf_bytes) > 0:
-                                            self._logger.info(
-                                                f"PDF letto da tab popup: {len(pdf_bytes):,} bytes"
-                                            )
-                                    except Exception:
-                                        pass
-                                break
-                        except Exception:
-                            continue
-                    # Close popup tabs used by fallback
-                    self._close_pdf_popup_tabs()
+                # ── Download PDF: strategia dipende dalla modalità runtime ──
+                if self._attached:
+                    # CDP: expect_download è affidabile (Browser.setDownloadBehavior
+                    # intercetta la risposta, rendendo expect_response inutilizzabile)
+                    pdf_bytes = self._download_via_expect_download(clickable, save_path, tipologia)
+                else:
+                    # Standard: expect_response + catena di fallback
+                    pdf_bytes = self._download_via_expect_response(clickable, save_path, tipologia)
 
                 if not pdf_bytes:
                     raise RuntimeError(
