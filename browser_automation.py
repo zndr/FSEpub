@@ -686,14 +686,6 @@ class FSEBrowser:
                 self._inject_siss_session(siss_storage)
 
         self._page.set_default_timeout(self._config.page_timeout)
-
-        # Immediately restore default download behavior.  Playwright's
-        # connect_over_cdp() sets Browser.setDownloadBehavior to intercept
-        # all downloads; resetting here ensures user's manual downloads
-        # work from the start.  Automated downloads will temporarily
-        # re-enable interception only when needed.
-        self._reset_download_behavior()
-
         self._logger.info(
             f"Connesso a browser esistente (CDP porta {port}, "
             f"{len(self._context.pages)} tab totali)"
@@ -916,30 +908,6 @@ class FSEBrowser:
             cdp.send("Browser.setDownloadBehavior", {"behavior": "default"})
             cdp.detach()
             self._logger.debug("Download behavior del browser ripristinato (manuale abilitato)")
-        except Exception:
-            pass
-
-    def _enable_download_interception(self) -> None:
-        """Temporarily enable Playwright download interception via CDP.
-
-        Sets Browser.setDownloadBehavior to 'allowAndName' so that
-        expect_download() can capture downloads.  Must be followed by
-        _reset_download_behavior() once the automated download is done.
-        """
-        if not self._page or not self._context or not self._attached:
-            return
-        try:
-            import tempfile
-            dl_path = os.path.join(tempfile.gettempdir(), "fse_playwright_dl")
-            os.makedirs(dl_path, exist_ok=True)
-            cdp = self._context.new_cdp_session(self._page)
-            cdp.send("Browser.setDownloadBehavior", {
-                "behavior": "allowAndName",
-                "downloadPath": dl_path,
-                "eventsEnabled": True,
-            })
-            cdp.detach()
-            self._logger.debug("Download interception CDP attivata")
         except Exception:
             pass
 
@@ -1506,9 +1474,6 @@ class FSEBrowser:
             self._logger.error(f"Errore lettura tabella per {patient_name}: {e}")
             self._take_debug_screenshot(patient_name)
             return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
-        finally:
-            # Restore manual downloads after automated processing
-            self._reset_download_behavior()
 
         return results
 
@@ -1810,9 +1775,6 @@ class FSEBrowser:
             self._logger.error(f"Errore lettura tabella per {codice_fiscale}: {e}")
             self._take_debug_screenshot(codice_fiscale)
             return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
-        finally:
-            # Restore manual downloads after automated processing
-            self._reset_download_behavior()
 
         return results
 
@@ -1940,12 +1902,7 @@ class FSEBrowser:
         layer.  expect_response would block for the full timeout.  Instead,
         we use expect_download which hooks into the browser's download manager
         directly and resolves as soon as the file is saved.
-
-        Download interception is enabled only for the duration of this call
-        and restored to 'default' afterwards, so that manual downloads by
-        the user always work outside automated operations.
         """
-        self._enable_download_interception()
         pdf_bytes = None
         self._logger.start_progress(f"Scaricamento PDF per {tipologia}")
         try:
@@ -1999,8 +1956,6 @@ class FSEBrowser:
                         continue
                 self._close_pdf_popup_tabs()
 
-        # Restore default download behavior so manual downloads work
-        self._reset_download_behavior()
         return pdf_bytes
 
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,
