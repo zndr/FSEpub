@@ -1906,6 +1906,10 @@ class FSEApp(QMainWindow):
         act_interpret.triggered.connect(self._open_interpreter)
         tools_menu.addAction(act_interpret)
 
+        act_compare = QAction("Visiona testi", self)
+        act_compare.triggered.connect(self._open_text_comparison)
+        tools_menu.addAction(act_compare)
+
         # Help menu
         help_menu = menu_bar.addMenu("Aiuto")
 
@@ -3266,6 +3270,14 @@ class FSEApp(QMainWindow):
         from report_interpreter import ReportInterpreterDialog
 
         dlg = ReportInterpreterDialog(self, llm_config=self._build_llm_config_from_widgets())
+        dlg.exec()
+
+    def _open_text_comparison(self) -> None:
+        """Open the text comparison dialog for original vs anonymized view."""
+        from text_comparison import TextComparisonDialog
+
+        download_dir = self._download_dir_entry.text() or str(paths.default_download_dir)
+        dlg = TextComparisonDialog(self, download_dir=download_dir)
         dlg.exec()
 
     def _start_analysis(self) -> None:
