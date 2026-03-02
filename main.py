@@ -73,7 +73,11 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
 
     # Initialize text processor
     text_processor = None
-    if config.process_text and config.text_dir:
+    text_dir = config.text_dir
+    if config.process_text:
+        if not text_dir:
+            text_dir = config.download_dir / "testi"
+            logger.info(f"TEXT_DIR non configurata, uso default: {text_dir}")
         mode_str = config.processing_mode
         if mode_str == "ai" and config.llm_provider:
             mode = ProcessingMode.AI_ASSISTED
@@ -158,7 +162,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
                             tp_result = text_processor.process(renamed)
                             if tp_result.success:
                                 saved = TextProcessor.save_result(
-                                    tp_result, config.text_dir, renamed.stem,
+                                    tp_result, text_dir, renamed.stem,
                                 )
                                 if saved:
                                     logger.info(f"Testo salvato: {saved.name}")

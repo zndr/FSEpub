@@ -1199,6 +1199,13 @@ class SetupWizard(QDialog):
             is_ai = self._wiz_mode_ai.isChecked()
             self._wiz_ai_group.setVisible(is_ai)
             dir_group.setEnabled(not is_none)
+            # Auto-populate text dir when enabling processing
+            if not is_none and not self._wiz_text_dir.text().strip():
+                dl = self._wiz_download_dir.text().strip()
+                if dl:
+                    self._wiz_text_dir.setText(str(Path(dl) / "testi"))
+                else:
+                    self._wiz_text_dir.setText(str(paths.default_download_dir / "testi"))
 
         self._wiz_mode_none.toggled.connect(lambda: _update())
         self._wiz_mode_local.toggled.connect(lambda: _update())
@@ -3818,6 +3825,15 @@ class FSEApp(QMainWindow):
         if self._btn_analyze is not None:
             self._btn_analyze.setVisible(not is_none)
 
+        # Auto-populate TEXT_DIR when enabling text processing
+        if not is_none and hasattr(self, '_text_dir_entry') and not self._text_dir_entry.text().strip():
+            dl_dir = self._download_dir_entry.text().strip()
+            if dl_dir:
+                default_text_dir = str(Path(dl_dir) / "testi")
+            else:
+                default_text_dir = str(paths.default_download_dir / "testi")
+            self._text_dir_entry.setText(default_text_dir)
+
     def _on_llm_provider_changed(self, label: str) -> None:
         """Update UI when the LLM provider selection changes."""
         provider = self._llm_label_to_provider.get(label, "")
@@ -4678,7 +4694,11 @@ class FSEApp(QMainWindow):
 
                 # Initialize text processor
                 text_processor = None
-                if config.process_text and config.text_dir:
+                text_dir = config.text_dir
+                if config.process_text:
+                    if not text_dir:
+                        text_dir = config.download_dir / "testi"
+                        logger.info(f"TEXT_DIR non configurata, uso default: {text_dir}")
                     from text_processing import TextProcessor, ProcessingMode, LLMConfig
                     if config.processing_mode == "ai" and config.llm_provider:
                         mode = ProcessingMode.AI_ASSISTED
@@ -4691,7 +4711,9 @@ class FSEApp(QMainWindow):
                         )
                         text_processor = TextProcessor(mode, llm_config=llm_cfg)
                     else:
-                        text_processor = TextProcessor(ProcessingMode.LOCAL_ONLY)
+                        mode = ProcessingMode.LOCAL_ONLY
+                        text_processor = TextProcessor(mode)
+                    logger.info(f"Processazione testo attiva (modalita': {mode.value})")
 
                 downloaded = 0
                 skipped = 0
@@ -4718,7 +4740,7 @@ class FSEApp(QMainWindow):
                             tp_result = text_processor.process(renamed)
                             if tp_result.success:
                                 saved = TextProcessor.save_result(
-                                    tp_result, config.text_dir, renamed.stem,
+                                    tp_result, text_dir, renamed.stem,
                                 )
                                 if saved:
                                     logger.info(f"Testo salvato: {saved.name}")
