@@ -686,6 +686,14 @@ class FSEBrowser:
                 self._inject_siss_session(siss_storage)
 
         self._page.set_default_timeout(self._config.page_timeout)
+
+        # Immediately restore default download behavior.  Playwright's
+        # connect_over_cdp() sets Browser.setDownloadBehavior to intercept
+        # all downloads; resetting here ensures user's manual downloads
+        # work from the start.  Automated downloads will temporarily
+        # re-enable interception only when needed.
+        self._reset_download_behavior()
+
         self._logger.info(
             f"Connesso a browser esistente (CDP porta {port}, "
             f"{len(self._context.pages)} tab totali)"
@@ -890,11 +898,16 @@ class FSEBrowser:
             return False
 
     def _reset_download_behavior(self) -> None:
-        """Reset browser download behavior to defaults before disconnecting CDP.
+        """Restore the browser's native download handling.
 
-        Playwright intercepts downloads via Browser.setDownloadBehavior (CDP).
-        If not reset before disconnect, the browser's download manager stays in
-        a broken state: manual downloads remain incomplete and Ctrl+J stops working.
+        Playwright intercepts ALL downloads via Browser.setDownloadBehavior
+        (CDP) when connected.  This means manual downloads by the user get
+        stuck in temporary files because nobody calls download.save_as().
+
+        Call this after every automated operation to ensure the user can
+        always download files manually.  Before an automated download,
+        call _enable_download_interception() to temporarily re-enable
+        Playwright's download manager.
         """
         if not self._page or not self._context:
             return
@@ -902,7 +915,31 @@ class FSEBrowser:
             cdp = self._context.new_cdp_session(self._page)
             cdp.send("Browser.setDownloadBehavior", {"behavior": "default"})
             cdp.detach()
-            self._logger.info("Download behavior del browser ripristinato")
+            self._logger.debug("Download behavior del browser ripristinato (manuale abilitato)")
+        except Exception:
+            pass
+
+    def _enable_download_interception(self) -> None:
+        """Temporarily enable Playwright download interception via CDP.
+
+        Sets Browser.setDownloadBehavior to 'allowAndName' so that
+        expect_download() can capture downloads.  Must be followed by
+        _reset_download_behavior() once the automated download is done.
+        """
+        if not self._page or not self._context or not self._attached:
+            return
+        try:
+            import tempfile
+            dl_path = os.path.join(tempfile.gettempdir(), "fse_playwright_dl")
+            os.makedirs(dl_path, exist_ok=True)
+            cdp = self._context.new_cdp_session(self._page)
+            cdp.send("Browser.setDownloadBehavior", {
+                "behavior": "allowAndName",
+                "downloadPath": dl_path,
+                "eventsEnabled": True,
+            })
+            cdp.detach()
+            self._logger.debug("Download interception CDP attivata")
         except Exception:
             pass
 
@@ -1098,6 +1135,29 @@ class FSEBrowser:
             cerca = self._page.get_by_role("button", name="Cerca")
             if cerca.is_visible(timeout=3000):
                 cerca.click()
+
+                # Session validity check: the overlay "Identificazione del
+                # cittadino in corso" (ngx-spinner) should appear after
+                # clicking Cerca.  If it doesn't, the page session expired.
+                spinner = self._page.locator("ngx-spinner .overlay")
+                try:
+                    spinner.wait_for(state="visible", timeout=3000)
+                except Exception:
+                    self._logger.warning(
+                        "Pagina di ricerca scaduta: overlay 'Identificazione "
+                        "del cittadino in corso' non comparso. Refresh automatico..."
+                    )
+                    self._page.reload(wait_until="networkidle")
+                    self._wait_for_spinner()
+                    # Retry: fill CF and click Cerca once more
+                    cf_input = self._page.locator("#inputcf")
+                    if cf_input.is_visible(timeout=5000):
+                        cf_input.fill(codice_fiscale)
+                        self._wait_for_spinner()
+                        cerca = self._page.get_by_role("button", name="Cerca")
+                        if cerca.is_visible(timeout=3000):
+                            cerca.click()
+
                 self._page.wait_for_load_state("networkidle")
                 self._wait_for_spinner()
         else:
@@ -1125,8 +1185,13 @@ class FSEBrowser:
         self._logger.info(f"Pagina referti caricata: {self._get_real_url()}")
 
     def navigate_for_millewin(self, codice_fiscale: str,
-                              stop_event: threading.Event | None = None) -> None:
+                              stop_event: threading.Event | None = None,
+                              on_page_expired: object | None = None) -> None:
         """Navigate to the FSE documents page for a patient from Millewin.
+
+        Args:
+            on_page_expired: Optional callable invoked when the search page
+                session is detected as expired (before auto-refresh).
 
         Handles these scenarios:
         1. Page already showing documents for same patient → do nothing
@@ -1212,22 +1277,46 @@ class FSEBrowser:
 
             cerca.click()
 
-            # Check for session expiry: wait for any sign of progression
+            # Session validity check: clicking "Cerca" on a valid page
+            # triggers the overlay "Identificazione del cittadino in corso"
+            # (ngx-spinner).  If the overlay does NOT appear, the page
+            # session has expired and a refresh is needed.
+            spinner = self._page.locator("ngx-spinner .overlay")
             try:
-                self._page.locator("button.btn-xlarge, :text-is('Referti')").first.wait_for(
-                    state="visible", timeout=8000,
-                )
+                spinner.wait_for(state="visible", timeout=3000)
             except Exception:
-                # Nothing happened → session likely expired
+                # Overlay not shown → page session expired
+                if on_page_expired is not None:
+                    on_page_expired()
                 if attempt < max_retries - 1:
-                    self._logger.warning("Sessione FSE scaduta, refresh pagina...")
+                    self._logger.warning(
+                        "Pagina di ricerca scaduta: overlay 'Identificazione "
+                        "del cittadino in corso' non comparso dopo click su "
+                        "'Cerca'. Aggiornamento automatico della pagina..."
+                    )
                     self._page.reload(wait_until="networkidle")
                     self._wait_for_spinner()
                     continue
                 else:
                     raise RuntimeError(
-                        "Sessione FSE scaduta. Chiudi e riapri il browser, poi riprova."
+                        "Pagina di ricerca scaduta. Dopo aver cliccato 'Cerca' "
+                        "l'overlay 'Identificazione del cittadino in corso' non "
+                        "compare, segno che la sessione della pagina e' scaduta. "
+                        "Aggiornare manualmente la pagina e riprovare."
                     )
+
+            # Spinner appeared → search started, wait for completion
+            self._wait_for_spinner()
+
+            # Wait for next UI element (Accedi button or Referti tab)
+            try:
+                self._page.locator("button.btn-xlarge, :text-is('Referti')").first.wait_for(
+                    state="visible", timeout=15000,
+                )
+            except Exception:
+                raise RuntimeError(
+                    "Timeout in attesa dei risultati ricerca paziente."
+                )
 
             self._page.wait_for_load_state("networkidle")
             self._wait_for_spinner()
@@ -1257,6 +1346,10 @@ class FSEBrowser:
         self._wait_for_spinner()
 
         self._logger.info("Pagina documenti pronta")
+
+        # Restore default download behavior so the user can download
+        # files manually from the browser while inspecting the page.
+        self._reset_download_behavior()
 
     def process_patient(self, fse_link: str, patient_name: str, codice_fiscale: str,
                         stop_event: threading.Event | None = None,
@@ -1413,6 +1506,9 @@ class FSEBrowser:
             self._logger.error(f"Errore lettura tabella per {patient_name}: {e}")
             self._take_debug_screenshot(patient_name)
             return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
+        finally:
+            # Restore manual downloads after automated processing
+            self._reset_download_behavior()
 
         return results
 
@@ -1714,6 +1810,9 @@ class FSEBrowser:
             self._logger.error(f"Errore lettura tabella per {codice_fiscale}: {e}")
             self._take_debug_screenshot(codice_fiscale)
             return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
+        finally:
+            # Restore manual downloads after automated processing
+            self._reset_download_behavior()
 
         return results
 
@@ -1841,7 +1940,12 @@ class FSEBrowser:
         layer.  expect_response would block for the full timeout.  Instead,
         we use expect_download which hooks into the browser's download manager
         directly and resolves as soon as the file is saved.
+
+        Download interception is enabled only for the duration of this call
+        and restored to 'default' afterwards, so that manual downloads by
+        the user always work outside automated operations.
         """
+        self._enable_download_interception()
         pdf_bytes = None
         self._logger.start_progress(f"Scaricamento PDF per {tipologia}")
         try:
@@ -1895,6 +1999,8 @@ class FSEBrowser:
                         continue
                 self._close_pdf_popup_tabs()
 
+        # Restore default download behavior so manual downloads work
+        self._reset_download_behavior()
         return pdf_bytes
 
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,

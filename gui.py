@@ -2471,7 +2471,18 @@ class FSEApp(QMainWindow):
                 self._mw_browser = browser
 
             # Step 3: Navigate to FSE documents page
-            self._mw_browser.navigate_for_millewin(cf, self._mw_stop_event)
+            def _on_page_expired():
+                self._bridge.show_warning.emit(
+                    "Pagina di ricerca scaduta",
+                    "La pagina di ricerca del SISS e' scaduta.\n"
+                    "L'overlay 'Identificazione del cittadino in corso' non "
+                    "e' comparso dopo aver cliccato 'Cerca'.\n\n"
+                    "Aggiornamento automatico in corso...",
+                )
+
+            self._mw_browser.navigate_for_millewin(
+                cf, self._mw_stop_event, on_page_expired=_on_page_expired,
+            )
 
             self._mw_log("Navigazione completata, pagina documenti pronta")
         except InterruptedError:
