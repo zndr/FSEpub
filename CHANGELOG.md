@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.0] - 2026-03-02
+
+### Aggiunto
+
+- Nuovo dialog "Visiona testi" nel menu Strumenti: confronto side-by-side tra testo originale estratto dal PDF e testo anonimizzato
+- Evidenziazione visiva delle righe redatte (sfondo rosa, testo rosso) con tooltip che mostra il motivo della redazione
+- Ri-estrazione on-demand dal PDF senza modifiche al pipeline esistente
+- Doppio-click su un referto per confronto rapido
+
 ## [2.3.15] - 2026-02-26
 
 ### Aggiunto

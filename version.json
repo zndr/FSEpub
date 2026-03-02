@@ -1,8 +1,8 @@
 {
-    "Version": "2.3.15",
-    "ReleaseNotes": "Guida utente: documentazione completa per estrazione testo e analisi referti con A.I.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.3.15/FSE_Processor_Setup_2.3.15_QT6.exe",
-    "ReleaseDate": "2026-02-26",
-    "Sha256Hash": "bef6214729709fb225860b86950d9ca15af3a991394076cbdff74235e2fb7b11",
-    "FileSize": 73286413
+    "Version": "2.4.0",
+    "ReleaseNotes": "Nuovo dialog Visiona Testi: confronto side-by-side testo originale vs anonimizzato con evidenziazione redazioni.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.0/FSE_Processor_Setup_2.4.0_QT6.exe",
+    "ReleaseDate": "2026-03-02",
+    "Sha256Hash": "",
+    "FileSize": 0
 }
