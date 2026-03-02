@@ -1128,6 +1128,30 @@ class FSEBrowser:
 
                 self._page.wait_for_load_state("networkidle")
                 self._wait_for_spinner()
+
+                # Post-search session check: the spinner may have briefly
+                # flashed (Angular started processing) but the expired
+                # session caused an instant redirect back to the search
+                # form.  Detect this by checking if #inputcf reappeared.
+                cf_input_post = self._page.locator("#inputcf")
+                if cf_input_post.is_visible(timeout=1500):
+                    self._logger.warning(
+                        "Pagina di ricerca scaduta: la pagina e' tornata "
+                        "al form di ricerca dopo il click su 'Cerca' "
+                        "(sessione Angular scaduta). Refresh automatico..."
+                    )
+                    self._page.reload(wait_until="networkidle")
+                    self._wait_for_spinner()
+                    # Retry: fill CF and click Cerca once more
+                    cf_input_post = self._page.locator("#inputcf")
+                    if cf_input_post.is_visible(timeout=5000):
+                        cf_input_post.fill(codice_fiscale)
+                        self._wait_for_spinner()
+                        cerca = self._page.get_by_role("button", name="Cerca")
+                        if cerca.is_visible(timeout=3000):
+                            cerca.click()
+                            self._page.wait_for_load_state("networkidle")
+                            self._wait_for_spinner()
         else:
             self._logger.info("Form ricerca non presente, pagina gia' nel fascicolo")
 
@@ -1275,6 +1299,32 @@ class FSEBrowser:
 
             # Spinner appeared → search started, wait for completion
             self._wait_for_spinner()
+
+            # Post-search session check: the spinner may have briefly
+            # flashed (Angular started processing) but the expired
+            # session caused an instant redirect back to the search
+            # form.  Detect this by checking if #inputcf reappeared.
+            cf_input_post = self._page.locator("#inputcf")
+            if cf_input_post.is_visible(timeout=1500):
+                if on_page_expired is not None:
+                    on_page_expired()
+                if attempt < max_retries - 1:
+                    self._logger.warning(
+                        "Pagina di ricerca scaduta: la pagina e' tornata "
+                        "al form di ricerca dopo il click su 'Cerca' "
+                        "(sessione Angular scaduta). Aggiornamento "
+                        "automatico della pagina..."
+                    )
+                    self._page.reload(wait_until="networkidle")
+                    self._wait_for_spinner()
+                    continue
+                else:
+                    raise RuntimeError(
+                        "Pagina di ricerca scaduta. La pagina torna al "
+                        "form di ricerca dopo aver cliccato 'Cerca', "
+                        "segno che la sessione Angular e' scaduta. "
+                        "Aggiornare manualmente la pagina e riprovare."
+                    )
 
             # Wait for next UI element (Accedi button or Referti tab)
             try:
