@@ -61,7 +61,7 @@ class Config:
         if not email_user or not email_pass:
             raise ValueError("EMAIL_USER e EMAIL_PASS sono obbligatori in settings.env")
 
-        imap_port = int(os.getenv("IMAP_PORT", "993"))
+        imap_port = int(os.getenv("IMAP_PORT", "993") or "993")
         imap_use_ssl = os.getenv("IMAP_USE_SSL", "true").lower() == "true"
         imap_folders_raw = os.getenv("IMAP_FOLDER", "INBOX")
         imap_folders = [f.strip() for f in imap_folders_raw.split(",") if f.strip()]
@@ -71,15 +71,15 @@ class Config:
         browser_data_dir = Path(os.getenv("BROWSER_DATA_DIR", str(paths.browser_data_dir)))
 
         headless = os.getenv("HEADLESS", "false").lower() == "true"
-        download_timeout = int(os.getenv("DOWNLOAD_TIMEOUT", "120")) * 1000
-        page_timeout = int(os.getenv("PAGE_TIMEOUT", "60")) * 1000
+        download_timeout = int(os.getenv("DOWNLOAD_TIMEOUT", "120") or "120") * 1000
+        page_timeout = int(os.getenv("PAGE_TIMEOUT", "60") or "60") * 1000
         pdf_reader = os.getenv("PDF_READER", "default")
         browser_channel = os.getenv("BROWSER_CHANNEL", "msedge")
         delete_after_processing = os.getenv("DELETE_AFTER_PROCESSING", "false").lower() == "true"
         mark_as_read = os.getenv("MARK_AS_READ", "true").lower() == "true"
         use_existing_browser = os.getenv("USE_EXISTING_BROWSER", "true").lower() == "true"
-        cdp_port = int(os.getenv("CDP_PORT", "9222"))
-        max_emails = int(os.getenv("MAX_EMAILS", "0"))
+        cdp_port = int(os.getenv("CDP_PORT", "9222") or "9222")
+        max_emails = int(os.getenv("MAX_EMAILS", "0") or "0")
         debug_logging = os.getenv("DEBUG_LOGGING", "false").lower() == "true"
         move_dir_str = os.getenv("MOVE_DIR", "")
         move_dir = Path(move_dir_str) if move_dir_str else None
@@ -91,7 +91,7 @@ class Config:
         llm_provider = os.getenv("LLM_PROVIDER", "")
         llm_api_key = decrypt_password(os.getenv("LLM_API_KEY", ""))
         llm_model = os.getenv("LLM_MODEL", "")
-        llm_timeout = int(os.getenv("LLM_TIMEOUT", "120"))
+        llm_timeout = int(os.getenv("LLM_TIMEOUT", "120") or "120")
         llm_base_url = os.getenv("LLM_BASE_URL", "")
 
         config = cls(
