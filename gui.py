@@ -1963,9 +1963,9 @@ class FSEApp(QMainWindow):
         siss_tab = QWidget()
         self._notebook.addTab(siss_tab, "Scarica referti non letti")
 
-        # Tab 2: Referti singolo paziente
+        # Tab 2: Paziente
         patient_tab = QWidget()
-        self._notebook.addTab(patient_tab, "Referti singolo paziente")
+        self._notebook.addTab(patient_tab, "Paziente")
 
         # Tab 3: Impostazioni (built first so fields exist for SISS tab)
         settings_tab = QWidget()
@@ -2142,19 +2142,18 @@ class FSEApp(QMainWindow):
             if cb.isChecked():
                 result.add(key)
         # Referto subtypes from the list widget
-        if self._patient_referti_cb.isChecked():
-            lst = self._patient_referto_list
-            for i in range(lst.count()):
-                item = lst.item(i)
-                if item.checkState() == Qt.Checked:
-                    filter_key = item.data(Qt.UserRole)
-                    result.add(filter_key)
-                    if filter_key == "REFERTO":
-                        break  # wildcard — matches all referto subtypes
+        lst = self._patient_referto_list
+        for i in range(lst.count()):
+            item = lst.item(i)
+            if item.checkState() == Qt.Checked:
+                filter_key = item.data(Qt.UserRole)
+                result.add(filter_key)
+                if filter_key == "REFERTO":
+                    break  # wildcard — matches all referto subtypes
         return result if result else set()
 
     def _build_patient_tab(self, parent: QWidget) -> None:
-        """Build the Referti singolo paziente tab with two-column top layout."""
+        """Build the Paziente tab with two-column top layout."""
         layout = QVBoxLayout(parent)
         layout.setContentsMargins(8, 8, 8, 8)
 
@@ -2322,16 +2321,13 @@ class FSEApp(QMainWindow):
             sel_layout.addWidget(cb)
             doc_cbs[type_key] = cb
 
-        # Referti specialistici row (checkbox + list)
+        # Referti groupbox with list
         sel_layout.addStretch(1)
-        referto_row = QHBoxLayout()
-        self._patient_referti_cb = QCheckBox("Referti specialistici")
-        self._patient_referti_cb.setChecked(True)
-        referto_row.addWidget(self._patient_referti_cb)
+        referti_group = QGroupBox("Referti")
+        referti_layout = QVBoxLayout(referti_group)
 
         referto_list = QListWidget()
         referto_list.setMaximumHeight(110)
-        referto_list.setMaximumWidth(220)
         for display_label, filter_key in REFERTO_SUBTYPE_ITEMS:
             item = QListWidgetItem(display_label)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -2339,27 +2335,19 @@ class FSEApp(QMainWindow):
             item.setData(Qt.UserRole, filter_key)
             referto_list.addItem(item)
 
-        referto_row.addWidget(referto_list)
-        referto_row.addStretch()
-        sel_layout.addLayout(referto_row)
+        referti_layout.addWidget(referto_list)
+        sel_layout.addWidget(referti_group)
         sel_layout.addStretch(1)
 
         group_layout.addWidget(selection_container)
 
         # ── Initial state: radio "Tutti" checked → disable selection area ──
         selection_container.setEnabled(False)
-        referto_list.setEnabled(False)
 
         # ── Interactions ──
 
         def on_radio_toggled(tutti_checked):
             selection_container.setEnabled(not tutti_checked)
-            if not tutti_checked:
-                # Re-apply referti checkbox state after container enable
-                referto_list.setEnabled(self._patient_referti_cb.isChecked())
-
-        def on_referti_toggled(checked):
-            referto_list.setEnabled(checked)
 
         def on_list_item_changed(item):
             """Mutual exclusion: 'Tutti' vs individual items."""
@@ -2386,7 +2374,6 @@ class FSEApp(QMainWindow):
             referto_list.blockSignals(False)
 
         radio_tutti.toggled.connect(on_radio_toggled)
-        self._patient_referti_cb.toggled.connect(on_referti_toggled)
         referto_list.itemChanged.connect(on_list_item_changed)
 
         return radio_tutti, radio_seleziona, referto_list, doc_cbs
