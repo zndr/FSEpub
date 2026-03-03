@@ -15,6 +15,7 @@ import traceback
 import urllib.request
 import webbrowser
 import winreg
+import winsound
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -4490,6 +4491,7 @@ class FSEApp(QMainWindow):
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
         self._log("--- Processamento terminato ---")
+        _play_completion_sound()
 
         summary = self._processing_summary
         if summary is not None:
@@ -4929,6 +4931,7 @@ class FSEApp(QMainWindow):
         self._btn_load_enti.setEnabled(True)
         self._btn_list_docs.setEnabled(True)
         self._patient_log("--- Download terminato ---")
+        _play_completion_sound()
 
         summary = self._patient_summary
         if summary is not None:
@@ -4957,6 +4960,18 @@ class FSEApp(QMainWindow):
                 pass
             self._mw_browser = None
         super().closeEvent(event)
+
+
+def _play_completion_sound() -> None:
+    """Play a short ascending chime to signal process completion."""
+    try:
+        threading.Thread(target=lambda: (
+            winsound.Beep(784, 120),   # G5
+            winsound.Beep(988, 120),   # B5
+            winsound.Beep(1319, 180),  # E6
+        ), daemon=True).start()
+    except Exception:
+        pass
 
 
 def _force_light_palette(app: QApplication) -> None:
