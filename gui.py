@@ -20,7 +20,12 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
 from PySide6.QtGui import QAction, QColor, QFont, QPalette, QTextCursor
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except ImportError:
+    from types import SimpleNamespace
+    from PySide6.QtGui import QIcon
+    qta = SimpleNamespace(icon=lambda *a, **kw: QIcon())
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,

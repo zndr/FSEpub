@@ -45,6 +45,7 @@ a = Analysis(
         "cryptography.hazmat.primitives.hashes",
         "cryptography.hazmat.primitives.kdf.pbkdf2",
         "cryptography.hazmat.backends",
+        "qtawesome",
     ],
     hookspath=[],
     hooksconfig={},
