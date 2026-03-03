@@ -129,8 +129,8 @@ REFERTO_SUBTYPE_ITEMS = [
     ("Anatomia patologica", "REFERTO ANATOMIA PATOLOGICA"),
 ]
 
-DATE_PRESETS = ["Tutte", "Ultima settimana", "Ultimo mese", "Ultimo anno", "Personalizzato"]
-DATE_PRESET_DAYS = {"Ultima settimana": 7, "Ultimo mese": 30, "Ultimo anno": 365}
+DATE_PRESETS = ["Oggi", "Ieri e oggi", "Ultima settimana", "Ultimo mese", "Ultimo anno", "Personalizzato", "Tutte"]
+DATE_PRESET_DAYS = {"Oggi": 0, "Ieri e oggi": 1, "Ultima settimana": 7, "Ultimo mese": 30, "Ultimo anno": 365}
 
 APP_STYLE = """
 /* ---------- QGroupBox ---------- */
@@ -2285,7 +2285,7 @@ class FSEApp(QMainWindow):
         filter_layout.addWidget(QLabel("Periodo:"), 1, 0)
         self._date_preset_combo = QComboBox()
         self._date_preset_combo.addItems(DATE_PRESETS)
-        self._date_preset_combo.setCurrentText("Tutte")
+        self._date_preset_combo.setCurrentText("Ieri e oggi")
         self._date_preset_combo.currentTextChanged.connect(self._on_date_preset_changed)
         filter_layout.addWidget(self._date_preset_combo, 1, 1, 1, 3)
 
