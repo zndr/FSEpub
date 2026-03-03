@@ -20,6 +20,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
 from PySide6.QtGui import QAction, QColor, QFont, QPalette, QTextCursor
+import qtawesome as qta
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -779,16 +780,20 @@ class SetupWizard(QDialog):
         # Navigation bar
         nav = QHBoxLayout()
         self._btn_back = QPushButton("Indietro")
+        self._btn_back.setIcon(qta.icon("fa5s.arrow-left", color="white"))
         self._btn_back.clicked.connect(self._go_back)
         nav.addWidget(self._btn_back)
 
         nav.addStretch()
 
         self._btn_next = QPushButton("Avanti")
+        self._btn_next.setIcon(qta.icon("fa5s.arrow-right", color="white"))
+        self._btn_next.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._btn_next.clicked.connect(self._go_next)
         nav.addWidget(self._btn_next)
 
         self._btn_cancel = QPushButton("Annulla")
+        self._btn_cancel.setIcon(qta.icon("fa5s.times", color="#333"))
         self._btn_cancel.setStyleSheet(
             "background-color: #e0e0e0; color: #333; border-color: #c0c0c0;"
         )
@@ -874,6 +879,7 @@ class SetupWizard(QDialog):
         )
         folder_row.addWidget(self._wiz_imap_folder)
         self._wiz_btn_browse = QPushButton("Sfoglia...")
+        self._wiz_btn_browse.setIcon(qta.icon("fa5s.folder-open", color="white"))
         self._wiz_btn_browse.clicked.connect(self._wiz_browse_imap_folders)
         folder_row.addWidget(self._wiz_btn_browse)
         grid.addLayout(folder_row, 2, 1)
@@ -881,6 +887,7 @@ class SetupWizard(QDialog):
         # Test connection button
         btn_row = QHBoxLayout()
         self._wiz_btn_test = QPushButton("Test connessione")
+        self._wiz_btn_test.setIcon(qta.icon("fa5s.plug", color="white"))
         self._wiz_btn_test.clicked.connect(self._wiz_test_imap)
         btn_row.addWidget(self._wiz_btn_test)
         btn_row.addStretch()
@@ -1127,7 +1134,8 @@ class SetupWizard(QDialog):
         self._wiz_llm_api_key.setPlaceholderText("Inserisci la tua API key")
         api_key_row.addWidget(self._wiz_llm_api_key, 1)
         wiz_show_key = QPushButton("Mostra")
-        wiz_show_key.setFixedWidth(60)
+        wiz_show_key.setIcon(qta.icon("fa5s.eye", color="white"))
+        wiz_show_key.setFixedWidth(80)
         wiz_show_key.setCheckable(True)
         wiz_show_key.toggled.connect(
             lambda checked: self._wiz_llm_api_key.setEchoMode(
@@ -1157,6 +1165,7 @@ class SetupWizard(QDialog):
 
         ar += 1
         self._wiz_test_btn = QPushButton("Testa connessione")
+        self._wiz_test_btn.setIcon(qta.icon("fa5s.plug", color="white"))
         self._wiz_test_btn.clicked.connect(self._wiz_test_llm)
         ai_layout.addWidget(self._wiz_test_btn, ar, 0, 1, 2)
 
@@ -1774,9 +1783,11 @@ class DocumentListDialog(QDialog):
         # Select all / Deselect all buttons
         btn_row = QHBoxLayout()
         btn_select_all = QPushButton("Seleziona tutti")
+        btn_select_all.setIcon(qta.icon("fa5s.check-square", color="white"))
         btn_select_all.clicked.connect(self._select_all)
         btn_row.addWidget(btn_select_all)
         btn_deselect_all = QPushButton("Deseleziona tutti")
+        btn_deselect_all.setIcon(qta.icon("fa5s.minus-square", color="white"))
         btn_deselect_all.clicked.connect(self._deselect_all)
         btn_row.addWidget(btn_deselect_all)
         btn_row.addStretch()
@@ -1968,14 +1979,17 @@ class FSEApp(QMainWindow):
         # Bottom bar: Reset console (left) — Analizza referti — Apri cartella download (right)
         bottom_row = QHBoxLayout()
         self._btn_reset_console = QPushButton("Reset console")
+        self._btn_reset_console.setIcon(qta.icon("fa5s.redo", color="white"))
         self._btn_reset_console.clicked.connect(self._reset_active_console)
         bottom_row.addWidget(self._btn_reset_console)
         bottom_row.addStretch()
         self._btn_analyze = QPushButton("Analizza referti")
+        self._btn_analyze.setIcon(qta.icon("fa5s.microscope", color="white"))
         self._btn_analyze.clicked.connect(self._start_analysis)
         self._btn_analyze.setVisible(False)  # hidden until settings loaded
         bottom_row.addWidget(self._btn_analyze)
         btn_open_dl = QPushButton("Apri cartella download")
+        btn_open_dl.setIcon(qta.icon("fa5s.folder-open", color="white"))
         btn_open_dl.clicked.connect(self._open_download_dir)
         bottom_row.addWidget(btn_open_dl)
         main_layout.addLayout(bottom_row)
@@ -2014,15 +2028,18 @@ class FSEApp(QMainWindow):
 
         btn_row = QHBoxLayout()
         self._btn_check = QPushButton("Controlla Email")
+        self._btn_check.setIcon(qta.icon("fa5s.envelope", color="white"))
         self._btn_check.clicked.connect(self._check_email)
         self._btn_check.setToolTip("Conta le email non lette con referti da scaricare, senza avviare il download")
         btn_row.addWidget(self._btn_check)
 
         self._btn_start = QPushButton("Avvia download")
+        self._btn_start.setIcon(qta.icon("fa5s.download", color="white"))
         self._btn_start.clicked.connect(self._start_processing)
         btn_row.addWidget(self._btn_start)
 
         self._btn_stop = QPushButton("Interrompi")
+        self._btn_stop.setIcon(qta.icon("fa5s.stop-circle", color="white"))
         self._btn_stop.clicked.connect(self._stop_processing)
         self._btn_stop.setEnabled(False)
         btn_row.addWidget(self._btn_stop)
@@ -2168,10 +2185,12 @@ class FSEApp(QMainWindow):
         if mw_installed:
             mw_row = QHBoxLayout()
             self._btn_mw_start = QPushButton("FSE del paziente")
+            self._btn_mw_start.setIcon(qta.icon("fa5s.file-medical", color="white"))
             self._btn_mw_start.setToolTip("Apri la scheda di un paziente in Millewin, poi premi il pulsante")
             self._btn_mw_start.clicked.connect(lambda: self._start_mw_workflow())
             mw_row.addWidget(self._btn_mw_start)
             self._btn_mw_stop = QPushButton("Stop")
+            self._btn_mw_stop.setIcon(qta.icon("fa5s.stop-circle", color="white"))
             self._btn_mw_stop.clicked.connect(self._stop_mw_workflow)
             self._btn_mw_stop.setEnabled(False)
             mw_row.addWidget(self._btn_mw_stop)
@@ -2234,20 +2253,24 @@ class FSEApp(QMainWindow):
         ctrl_layout = QHBoxLayout()
         ctrl_layout.addStretch()
         self._btn_load_enti = QPushButton("Elenca strutture")
+        self._btn_load_enti.setIcon(qta.icon("fa5s.hospital", color="white"))
         self._btn_load_enti.setToolTip("Apre il browser e carica le strutture disponibili per il paziente")
         self._btn_load_enti.clicked.connect(self._start_ente_scan)
         ctrl_layout.addWidget(self._btn_load_enti)
 
         self._btn_list_docs = QPushButton("Elenca Referti Selezionati")
+        self._btn_list_docs.setIcon(qta.icon("fa5s.list-alt", color="white"))
         self._btn_list_docs.setToolTip("Apre il browser e mostra la lista dei referti per selezionarli manualmente")
         self._btn_list_docs.clicked.connect(self._start_list_documents)
         ctrl_layout.addWidget(self._btn_list_docs)
 
         self._btn_patient_start = QPushButton("Avvia download")
+        self._btn_patient_start.setIcon(qta.icon("fa5s.download", color="white"))
         self._btn_patient_start.clicked.connect(self._start_patient_download)
         ctrl_layout.addWidget(self._btn_patient_start)
 
         self._btn_patient_stop = QPushButton("Interrompi")
+        self._btn_patient_stop.setIcon(qta.icon("fa5s.stop-circle", color="white"))
         self._btn_patient_stop.clicked.connect(self._stop_patient_download)
         self._btn_patient_stop.setEnabled(False)
         ctrl_layout.addWidget(self._btn_patient_stop)
@@ -2658,6 +2681,7 @@ class FSEApp(QMainWindow):
 
         # Shared save button
         save_btn = QPushButton("Salva Impostazioni")
+        save_btn.setIcon(qta.icon("fa5s.save", color="white"))
         save_btn.clicked.connect(self._save_settings)
         layout.addWidget(save_btn)
 
@@ -2691,6 +2715,7 @@ class FSEApp(QMainWindow):
                 pass_row = QHBoxLayout()
                 pass_row.addWidget(entry)
                 btn_change_pass = QPushButton("Cambia...")
+                btn_change_pass.setIcon(qta.icon("fa5s.key", color="white"))
                 btn_change_pass.setToolTip("Cambia la password email")
                 btn_change_pass.clicked.connect(self._show_change_password_dialog)
                 pass_row.addWidget(btn_change_pass)
@@ -2700,6 +2725,7 @@ class FSEApp(QMainWindow):
                 folder_row = QHBoxLayout()
                 folder_row.addWidget(entry)
                 self._btn_browse_folders = QPushButton("Sfoglia...")
+                self._btn_browse_folders.setIcon(qta.icon("fa5s.folder-open", color="white"))
                 self._btn_browse_folders.setToolTip("Seleziona cartelle IMAP dal server")
                 self._btn_browse_folders.clicked.connect(self._browse_imap_folders)
                 folder_row.addWidget(self._btn_browse_folders)
@@ -2712,10 +2738,12 @@ class FSEApp(QMainWindow):
 
         mail_btn_row = QHBoxLayout()
         self._btn_test_imap = QPushButton("Test connessione")
+        self._btn_test_imap.setIcon(qta.icon("fa5s.plug", color="white"))
         self._btn_test_imap.clicked.connect(self._test_imap_connection)
         self._btn_test_imap.setToolTip("Verifica connessione e login al server di posta")
         mail_btn_row.addWidget(self._btn_test_imap)
         btn_reset_imap = QPushButton("Ripristina default")
+        btn_reset_imap.setIcon(qta.icon("fa5s.undo", color="white"))
         btn_reset_imap.setToolTip("Ripristina host e porta IMAP ai valori predefiniti")
         btn_reset_imap.clicked.connect(self._reset_imap_defaults)
         mail_btn_row.addWidget(btn_reset_imap)
@@ -2953,7 +2981,8 @@ class FSEApp(QMainWindow):
         self._llm_api_key_entry.setPlaceholderText("Inserisci la tua API key")
         api_key_row.addWidget(self._llm_api_key_entry, 1)
         self._llm_show_key_btn = QPushButton("Mostra")
-        self._llm_show_key_btn.setFixedWidth(60)
+        self._llm_show_key_btn.setIcon(qta.icon("fa5s.eye", color="white"))
+        self._llm_show_key_btn.setFixedWidth(80)
         self._llm_show_key_btn.setCheckable(True)
         self._llm_show_key_btn.toggled.connect(
             lambda checked: self._llm_api_key_entry.setEchoMode(
@@ -2993,6 +3022,7 @@ class FSEApp(QMainWindow):
         timeout_row.addWidget(self._llm_timeout_entry)
         self._fields["LLM_TIMEOUT"] = spec.get("LLM_TIMEOUT", ("", "120"))[1]
         self._llm_test_btn = QPushButton("Testa connessione")
+        self._llm_test_btn.setIcon(qta.icon("fa5s.plug", color="white"))
         self._llm_test_btn.clicked.connect(self._test_llm_connection)
         timeout_row.addWidget(self._llm_test_btn)
         timeout_row.addStretch()
@@ -3236,16 +3266,19 @@ class FSEApp(QMainWindow):
 
         btn_layout = QHBoxLayout()
         browse_btn = QPushButton("Sfoglia...")
+        browse_btn.setIcon(qta.icon("fa5s.folder-open", color="white"))
         browse_btn.clicked.connect(on_browse)
         btn_layout.addWidget(browse_btn)
         btn_layout.addStretch()
 
         ok_btn = QPushButton("OK")
+        ok_btn.setIcon(qta.icon("fa5s.check", color="white"))
         ok_btn.setFixedWidth(80)
         ok_btn.clicked.connect(on_ok)
         btn_layout.addWidget(ok_btn)
 
         cancel_btn = QPushButton("Annulla")
+        cancel_btn.setIcon(qta.icon("fa5s.times", color="#333"))
         cancel_btn.clicked.connect(dlg.reject)
         btn_layout.addWidget(cancel_btn)
 
@@ -3565,6 +3598,7 @@ class FSEApp(QMainWindow):
 
         attach_btn_row = QHBoxLayout()
         btn_add_file = QPushButton("Aggiungi immagine...")
+        btn_add_file.setIcon(qta.icon("fa5s.image", color="white"))
         btn_add_file.setToolTip("Allega uno screenshot o un'immagine al messaggio")
 
         def _add_attachments():
@@ -3583,6 +3617,7 @@ class FSEApp(QMainWindow):
         attach_btn_row.addWidget(btn_add_file)
 
         btn_paste_clip = QPushButton("Incolla da clipboard")
+        btn_paste_clip.setIcon(qta.icon("fa5s.paste", color="white"))
         btn_paste_clip.setToolTip("Incolla un'immagine copiata negli appunti (es. da Cattura schermo)")
 
         def _paste_clipboard_image():
@@ -3603,6 +3638,7 @@ class FSEApp(QMainWindow):
         attach_btn_row.addWidget(btn_paste_clip)
 
         btn_remove = QPushButton("Rimuovi")
+        btn_remove.setIcon(qta.icon("fa5s.trash", color="white"))
         btn_remove.setToolTip("Rimuovi l'allegato selezionato")
 
         def _remove_attachment():
@@ -3635,21 +3671,25 @@ class FSEApp(QMainWindow):
 
         btn_layout = QHBoxLayout()
         copy_btn = QPushButton("Copia")
+        copy_btn.setIcon(qta.icon("fa5s.copy", color="white"))
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(_get_full_report()))
         btn_layout.addWidget(copy_btn)
 
         preview_btn = QPushButton("Anteprima")
+        preview_btn.setIcon(qta.icon("fa5s.eye", color="white"))
         preview_btn.setToolTip("Visualizza il messaggio che verra' inviato al supporto (con CF oscurati)")
         preview_btn.clicked.connect(lambda: self._show_send_preview(self._sanitize_cf(_get_full_report())))
         btn_layout.addWidget(preview_btn)
 
         send_btn = QPushButton("Invia")
+        send_btn.setIcon(qta.icon("fa5s.paper-plane", color="white"))
         send_btn.setToolTip("Invia le informazioni di debug via email a supporto@dottorgiorgio.it")
         send_btn.clicked.connect(lambda: self._send_debug_email(_get_full_report(), dlg, attached_files))
         btn_layout.addWidget(send_btn)
 
         btn_layout.addStretch()
         close_btn = QPushButton("Chiudi")
+        close_btn.setIcon(qta.icon("fa5s.times-circle", color="white"))
         close_btn.clicked.connect(dlg.accept)
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
@@ -3671,6 +3711,7 @@ class FSEApp(QMainWindow):
         layout.addWidget(text)
 
         close_btn = QPushButton("Chiudi")
+        close_btn.setIcon(qta.icon("fa5s.times-circle", color="white"))
         close_btn.clicked.connect(dlg.accept)
         layout.addWidget(close_btn)
 
@@ -4653,6 +4694,10 @@ class FSEApp(QMainWindow):
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
+            logger.debug(f"[DIAG] process_text={config.process_text}, "
+                         f"text_dir={config.text_dir}, "
+                         f"processing_mode={config.processing_mode}")
+
             file_manager = FileManager(config, logger)
 
             # Reuse browser from ente scan or list docs if still alive
@@ -4714,6 +4759,11 @@ class FSEApp(QMainWindow):
                         mode = ProcessingMode.LOCAL_ONLY
                         text_processor = TextProcessor(mode)
                     logger.info(f"Processazione testo attiva (modalita': {mode.value})")
+                else:
+                    logger.debug("[DIAG] process_text=False, text_processor non creato")
+
+                logger.debug(f"[DIAG] text_processor={'creato' if text_processor else 'None'}, "
+                             f"text_dir={text_dir}")
 
                 downloaded = 0
                 skipped = 0
@@ -4733,6 +4783,9 @@ class FSEApp(QMainWindow):
                         disciplina=result.disciplina,
                         fse_link=f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}",
                     )
+
+                    logger.debug(f"[DIAG] renamed={'None' if renamed is None else renamed.name}, "
+                                 f"text_processor={'si' if text_processor else 'None'}")
 
                     # Text processing
                     if renamed and text_processor is not None:
