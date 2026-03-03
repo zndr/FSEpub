@@ -4700,20 +4700,31 @@ class FSEApp(QMainWindow):
 
             file_manager = FileManager(config, logger)
 
+            # --- Verbose diagnostic logging for text processing pipeline ---
+            logger.info(f"[DIAG] config.process_text = {config.process_text!r}")
+            logger.info(f"[DIAG] config.text_dir = {config.text_dir!r}")
+            logger.info(f"[DIAG] config.processing_mode = {config.processing_mode!r}")
+            logger.info(f"[DIAG] config.download_dir = {config.download_dir!r}")
+            logger.info(f"[DIAG] config.llm_provider = {getattr(config, 'llm_provider', 'N/A')!r}")
+
             # Reuse browser from ente scan or list docs if still alive
             reused = False
+            logger.info(f"[DIAG] _patient_browser is not None = {self._patient_browser is not None}")
             if self._patient_browser is not None:
                 try:
-                    if self._patient_browser._is_alive():
+                    alive = self._patient_browser._is_alive()
+                    logger.info(f"[DIAG] _is_alive() = {alive}")
+                    if alive:
                         browser = self._patient_browser
                         self._patient_browser = None
                         reused = True
                         logger.info("Riutilizzo browser esistente")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[DIAG] _is_alive() eccezione: {e}")
                 if not reused:
                     # Stop stale browser to release CDP connection before
                     # creating a new one (Chrome allows only one debugger).
+                    logger.info("[DIAG] Browser non riutilizzabile, stop e ricreazione")
                     try:
                         self._patient_browser.stop()
                     except Exception:
@@ -4760,10 +4771,11 @@ class FSEApp(QMainWindow):
                         text_processor = TextProcessor(mode)
                     logger.info(f"Processazione testo attiva (modalita': {mode.value})")
                 else:
-                    logger.debug("[DIAG] process_text=False, text_processor non creato")
+                    logger.info("[DIAG] config.process_text e' False/None — text_processor NON creato")
 
-                logger.debug(f"[DIAG] text_processor={'creato' if text_processor else 'None'}, "
-                             f"text_dir={text_dir}")
+                logger.info(f"[DIAG] text_processor creato = {text_processor is not None}")
+                if text_processor is not None:
+                    logger.info(f"[DIAG] text_dir finale = {text_dir!r}")
 
                 downloaded = 0
                 skipped = 0
@@ -4784,11 +4796,14 @@ class FSEApp(QMainWindow):
                         fse_link=f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}",
                     )
 
-                    logger.debug(f"[DIAG] renamed={'None' if renamed is None else renamed.name}, "
-                                 f"text_processor={'si' if text_processor else 'None'}")
+                    logger.info(f"[DIAG] download_path = {result.download_path!r}")
+                    logger.info(f"[DIAG] renamed = {renamed!r}")
+                    logger.info(f"[DIAG] text_processor = {text_processor is not None}, "
+                                f"renamed truthy = {bool(renamed)}")
 
                     # Text processing
                     if renamed and text_processor is not None:
+                        logger.info(f"[DIAG] >>> Avvio processazione testo per: {renamed.name}")
                         try:
                             tp_result = text_processor.process(renamed)
                             if tp_result.success:
