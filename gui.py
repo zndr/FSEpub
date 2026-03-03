@@ -1032,22 +1032,40 @@ class SetupWizard(QDialog):
         cdp_reg_checked = True
         parent_app = self.parent()
         if hasattr(parent_app, "_default_browser_info") and parent_app._default_browser_info:
-            progid = parent_app._default_browser_info["progid"]
-            port = int(self._env.get("CDP_PORT", "9222") or "9222")
-            cdp_reg_checked = get_cdp_registry_status(progid, port)
-            is_firefox = parent_app._default_browser_info.get("channel") == "firefox"
-            self._wiz_cdp_registry_cb.setEnabled(not is_firefox)
+            browser_info = parent_app._default_browser_info
+            cdp_compatible = browser_info.get("cdp_compatible", True)
+            is_firefox = browser_info.get("channel") == "firefox"
+            if not cdp_compatible:
+                # Legacy Edge — disable CDP registry, it's not applicable
+                self._wiz_cdp_registry_cb.setEnabled(False)
+                cdp_reg_checked = False
+                self._wiz_cdp_registry_cb.setToolTip(
+                    "Il browser predefinito (Edge Legacy) non supporta CDP.\n"
+                    "L'app cerchera' automaticamente Edge Chromium o Chrome installati."
+                )
+            else:
+                progid = browser_info["progid"]
+                port = int(self._env.get("CDP_PORT", "9222") or "9222")
+                cdp_reg_checked = get_cdp_registry_status(progid, port)
+                self._wiz_cdp_registry_cb.setEnabled(not is_firefox)
+                self._wiz_cdp_registry_cb.setToolTip(
+                    "Modifica il registro di Windows affinche' il browser predefinito\n"
+                    "si avvii automaticamente con il supporto CDP attivo.\n"
+                    "Necessario per la modalita' \"Usa browser CDP\".\n"
+                    "Senza questa opzione dovrai avviare il browser manualmente\n"
+                    "con il flag --remote-debugging-port."
+                )
         else:
             self._wiz_cdp_registry_cb.setEnabled(False)
             cdp_reg_checked = False
+            self._wiz_cdp_registry_cb.setToolTip(
+                "Modifica il registro di Windows affinche' il browser predefinito\n"
+                "si avvii automaticamente con il supporto CDP attivo.\n"
+                "Necessario per la modalita' \"Usa browser CDP\".\n"
+                "Senza questa opzione dovrai avviare il browser manualmente\n"
+                "con il flag --remote-debugging-port."
+            )
         self._wiz_cdp_registry_cb.setChecked(cdp_reg_checked)
-        self._wiz_cdp_registry_cb.setToolTip(
-            "Modifica il registro di Windows affinche' il browser predefinito\n"
-            "si avvii automaticamente con il supporto CDP attivo.\n"
-            "Necessario per la modalita' \"Usa browser CDP\".\n"
-            "Senza questa opzione dovrai avviare il browser manualmente\n"
-            "con il flag --remote-debugging-port."
-        )
         grid.addWidget(self._wiz_cdp_registry_cb, r, 0, 1, 2)
 
         r += 1
@@ -1560,6 +1578,9 @@ class SetupWizard(QDialog):
         """Apply the CDP registry checkbox state to the Windows registry."""
         parent_app = self.parent()
         if not hasattr(parent_app, "_default_browser_info") or not parent_app._default_browser_info:
+            return
+        # Skip registry modification for non-CDP browsers (e.g. Legacy Edge)
+        if not parent_app._default_browser_info.get("cdp_compatible", True):
             return
         progid = parent_app._default_browser_info["progid"]
         port = int(self._env.get("CDP_PORT", "9222") or "9222")
@@ -2849,8 +2870,22 @@ class FSEApp(QMainWindow):
             self._default_browser_info
             and self._default_browser_info.get("channel") == "firefox"
         )
-        self._cdp_registry_cb.setEnabled(not is_firefox and bool(self._default_browser_info))
-        self._cdp_registry_cb.setToolTip("Modifica il registro di Windows per avviare il browser predefinito con il supporto CDP attivo")
+        is_not_cdp_compatible = (
+            self._default_browser_info
+            and not self._default_browser_info.get("cdp_compatible", True)
+        )
+        self._cdp_registry_cb.setEnabled(
+            not is_firefox and not is_not_cdp_compatible and bool(self._default_browser_info)
+        )
+        if is_not_cdp_compatible:
+            self._cdp_registry_cb.setToolTip(
+                "Il browser predefinito (Edge Legacy) non supporta CDP.\n"
+                "L'app cerchera' automaticamente Edge Chromium o Chrome installati."
+            )
+        else:
+            self._cdp_registry_cb.setToolTip(
+                "Modifica il registro di Windows per avviare il browser predefinito con il supporto CDP attivo"
+            )
         self._cdp_registry_cb.toggled.connect(self._on_cdp_registry_toggled)
         br_layout.addWidget(self._cdp_registry_cb, r, 0, 1, 2)
         self._sync_cdp_registry_checkbox()
@@ -3179,10 +3214,15 @@ class FSEApp(QMainWindow):
         default_name = "Non rilevato"
         if self._default_browser_info:
             progid = self._default_browser_info["progid"]
-            default_name = next(
-                (v for k, v in friendly_names.items() if progid.startswith(k)),
-                progid,
-            )
+            cdp_compatible = self._default_browser_info.get("cdp_compatible", True)
+
+            if not cdp_compatible:
+                default_name = "Edge Legacy (non compatibile CDP)"
+            else:
+                default_name = next(
+                    (v for k, v in friendly_names.items() if progid.startswith(k)),
+                    progid,
+                )
 
         text = f"Browser predefinito: {default_name}"
 
@@ -3200,6 +3240,19 @@ class FSEApp(QMainWindow):
         if not self._default_browser_info:
             self._cdp_registry_cb.setChecked(False)
             return
+
+        cdp_compatible = self._default_browser_info.get("cdp_compatible", True)
+        if not cdp_compatible:
+            self._cdp_registry_cb.blockSignals(True)
+            self._cdp_registry_cb.setChecked(False)
+            self._cdp_registry_cb.setEnabled(False)
+            self._cdp_registry_cb.setToolTip(
+                "Il browser predefinito (Edge Legacy) non supporta CDP.\n"
+                "L'app cerchera' automaticamente Edge Chromium o Chrome installati."
+            )
+            self._cdp_registry_cb.blockSignals(False)
+            return
+
         progid = self._default_browser_info["progid"]
         port = int(self._fields.get("CDP_PORT", "9222") or "9222")
         enabled = get_cdp_registry_status(progid, port)

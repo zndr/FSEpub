@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import socket
 import subprocess
@@ -60,8 +61,10 @@ def _parse_table_date(date_text: str) -> date | None:
 def detect_default_browser() -> dict | None:
     """Detect the system default browser from Windows registry.
 
-    Returns a dict with keys: progid, channel, process_name, exe_path
+    Returns a dict with keys: progid, channel, process_name, exe_path, cdp_compatible
     or None if detection fails.
+
+    cdp_compatible is False for Legacy Edge (EdgeHTML) whose ProgId starts with 'AppX'.
     """
     try:
         with winreg.OpenKey(
@@ -75,7 +78,7 @@ def detect_default_browser() -> dict | None:
     if not progid:
         return None
 
-    # Try known ProgId mapping first
+    # Try known ProgId mapping first — all known browsers are CDP-compatible
     for known_progid, (channel, process_name) in PROGID_TO_BROWSER.items():
         if progid.startswith(known_progid.split("-")[0]) or progid == known_progid:
             exe_path = _resolve_progid_exe_path(progid)
@@ -84,9 +87,20 @@ def detect_default_browser() -> dict | None:
                 "channel": channel,
                 "process_name": process_name,
                 "exe_path": exe_path,
+                "cdp_compatible": True,
             }
 
-    # Unknown ProgId — try to resolve the exe anyway
+    # ProgId starting with 'AppX' → Legacy Edge (EdgeHTML), not CDP-compatible
+    if progid.startswith("AppX"):
+        return {
+            "progid": progid,
+            "channel": None,
+            "process_name": "MicrosoftEdge.exe",
+            "exe_path": None,
+            "cdp_compatible": False,
+        }
+
+    # Unknown ProgId — try to resolve the exe anyway (assume Chromium-based)
     exe_path = _resolve_progid_exe_path(progid)
     if exe_path:
         process_name = Path(exe_path).name.lower()
@@ -95,6 +109,7 @@ def detect_default_browser() -> dict | None:
             "channel": None,
             "process_name": process_name,
             "exe_path": exe_path,
+            "cdp_compatible": True,
         }
 
     return None
@@ -117,6 +132,64 @@ def _resolve_progid_exe_path(progid: str) -> str | None:
                         return str(Path(exe))
         except OSError:
             pass
+    return None
+
+
+def _find_any_chromium_browser() -> dict | None:
+    """Find any installed Chromium-based browser as a CDP fallback.
+
+    Checks App Paths registry and common filesystem locations for msedge.exe
+    and chrome.exe (in that order, preferring Edge since it's pre-installed on
+    most Windows 10/11 systems).
+
+    Returns a dict with keys: channel, process_name, exe_path — or None.
+    """
+    candidates = [
+        ("msedge", "msedge.exe"),
+        ("chrome", "chrome.exe"),
+    ]
+
+    # 1. Check App Paths registry (most reliable)
+    for channel, exe_name in candidates:
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(
+                    hive,
+                    rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}",
+                ) as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    if val and Path(val).exists():
+                        return {
+                            "channel": channel,
+                            "process_name": exe_name,
+                            "exe_path": str(Path(val)),
+                        }
+            except OSError:
+                pass
+
+    # 2. Check common installation paths
+    common_paths = [
+        (Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+         / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+         "msedge", "msedge.exe"),
+        (Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+         / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+         "msedge", "msedge.exe"),
+        (Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+         / "Google" / "Chrome" / "Application" / "chrome.exe",
+         "chrome", "chrome.exe"),
+        (Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+         / "Google" / "Chrome" / "Application" / "chrome.exe",
+         "chrome", "chrome.exe"),
+    ]
+    for path, channel, exe_name in common_paths:
+        if path.exists():
+            return {
+                "channel": channel,
+                "process_name": exe_name,
+                "exe_path": str(path),
+            }
+
     return None
 
 
@@ -271,23 +344,50 @@ def _browser_has_cdp_flag(process_name: str, port: int, logger=None) -> bool | N
     """Check if the running browser process was launched with --remote-debugging-port.
 
     Returns True/False, or None if the check failed.
+    Tries WMIC first (fast), falls back to PowerShell Get-CimInstance if WMIC
+    is unavailable (deprecated on Win10 21H1+, removed on some Win11 builds).
     """
+    flag = f"--remote-debugging-port={port}"
+
+    # Try WMIC first (fast when available)
     try:
         result = subprocess.run(
             ["wmic", "process", "where", f"name='{process_name}'",
              "get", "CommandLine", "/FORMAT:LIST"],
             capture_output=True, text=True, timeout=5,
         )
-        flag = f"--remote-debugging-port={port}"
         found = flag in result.stdout
         if logger:
             logger.debug(
-                f"_browser_has_cdp_flag({process_name}, {port}): {found}"
+                f"_browser_has_cdp_flag({process_name}, {port}) [wmic]: {found}"
+            )
+        return found
+    except FileNotFoundError:
+        if logger:
+            logger.debug("_browser_has_cdp_flag: wmic non disponibile, provo PowerShell")
+    except Exception as e:
+        if logger:
+            logger.debug(f"_browser_has_cdp_flag: errore wmic ({e}), provo PowerShell")
+
+    # Fallback to PowerShell Get-CimInstance
+    try:
+        ps_cmd = (
+            f"Get-CimInstance Win32_Process -Filter \"name='{process_name}'\" "
+            f"| Select-Object -ExpandProperty CommandLine"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=10,
+        )
+        found = flag in result.stdout
+        if logger:
+            logger.debug(
+                f"_browser_has_cdp_flag({process_name}, {port}) [powershell]: {found}"
             )
         return found
     except Exception as e:
         if logger:
-            logger.debug(f"_browser_has_cdp_flag: errore {e}")
+            logger.debug(f"_browser_has_cdp_flag: errore PowerShell ({e})")
         return None
 
 
@@ -426,30 +526,108 @@ class FSEBrowser:
         self._page.set_default_timeout(self._config.page_timeout)
         self._logger.info(f"Browser avviato (channel={channel}, headless={self._config.headless})")
 
+    def _log_system_info(self, browser_info: dict | None, port: int) -> None:
+        """Log diagnostic system info at the start of CDP connection."""
+        win_ver = platform.version()
+        self._logger.debug(f"[CDP] Windows version: {win_ver}")
+
+        # Log HTTPS ProgId from registry
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+            ) as key:
+                progid, _ = winreg.QueryValueEx(key, "ProgId")
+                self._logger.debug(f"[CDP] HTTPS ProgId dal registro: {progid}")
+        except OSError:
+            self._logger.debug("[CDP] HTTPS ProgId: non trovato nel registro")
+
+        if browser_info:
+            cdp_compat = browser_info.get("cdp_compatible", True)
+            self._logger.debug(
+                f"[CDP] Browser predefinito: progid={browser_info['progid']}, "
+                f"cdp_compatible={cdp_compat}, exe={browser_info.get('exe_path')}"
+            )
+        else:
+            self._logger.debug("[CDP] Browser predefinito: non rilevato")
+
     def _start_cdp(self) -> None:
         """Connect to an existing browser via CDP, or launch one if not running.
 
         IMPORTANT: This method NEVER kills the user's browser.
         If the browser is running (with or without CDP), it will try to connect
         with retries. Only if no browser process is found will it launch one.
+
+        On Windows 10 with Legacy Edge (EdgeHTML) as default browser, this method
+        will automatically find an installed Chromium browser (Edge or Chrome)
+        as a fallback, since Legacy Edge does not support CDP.
         """
         port = self._config.cdp_port
         endpoint = f"http://127.0.0.1:{port}"
         channel = self._config.browser_channel
 
-        # 1. Detect browser info
+        # 0. Quick CDP port scan — if port is already active, try connecting
+        #    directly before any browser detection. Covers the case where a
+        #    Chromium browser is already running with CDP but Legacy Edge is
+        #    the default browser.
+        if _is_cdp_port_available(port):
+            self._logger.info(
+                f"Porta CDP {port} gia' attiva, tentativo connessione diretta..."
+            )
+            try:
+                self._connect_cdp(endpoint, port)
+                self._logger.info(f"Connesso direttamente via CDP (porta {port})")
+                return
+            except ConnectionError as e:
+                self._logger.debug(
+                    f"[CDP] Connessione diretta fallita, procedo con rilevamento: {e}"
+                )
+
+        # 1. Detect browser info + log diagnostics
         browser_info = detect_default_browser()
+        self._log_system_info(browser_info, port)
         process_name = None
         exe_path = None
-        self._logger.debug(f"[CDP] detect_default_browser() -> {browser_info}")
 
         if browser_info:
+            cdp_compatible = browser_info.get("cdp_compatible", True)
             process_name = browser_info["process_name"]
             exe_path = browser_info["exe_path"]
 
+            # Legacy Edge or other non-CDP browser detected
+            if not cdp_compatible:
+                self._logger.warning(
+                    f"Browser predefinito ({browser_info['progid']}) non supporta CDP. "
+                    f"Ricerca browser Chromium alternativo..."
+                )
+                alt = _find_any_chromium_browser()
+                if alt:
+                    self._logger.info(
+                        f"Browser Chromium alternativo trovato: {alt['exe_path']}"
+                    )
+                    process_name = alt["process_name"]
+                    exe_path = alt["exe_path"]
+                    channel = alt["channel"] or channel
+                else:
+                    raise ConnectionError(
+                        f"Il browser predefinito ({browser_info['progid']}) non supporta CDP "
+                        f"e non e' stato trovato nessun browser Chromium (Edge o Chrome) installato.\n"
+                        f"Installa Microsoft Edge (Chromium) o Google Chrome per usare la modalita' CDP."
+                    )
+
         if not exe_path:
-            exe_path = self._resolve_exe_from_channel(channel)
-            self._logger.debug(f"[CDP] exe_path da channel '{channel}': {exe_path}")
+            # detect_default_browser() returned None — try finding any Chromium browser
+            alt = _find_any_chromium_browser()
+            if alt:
+                self._logger.info(
+                    f"Browser predefinito non rilevato, trovato: {alt['exe_path']}"
+                )
+                process_name = alt["process_name"]
+                exe_path = alt["exe_path"]
+                channel = alt["channel"] or channel
+            else:
+                exe_path = self._resolve_exe_from_channel(channel)
+                self._logger.debug(f"[CDP] exe_path da channel '{channel}': {exe_path}")
         if not process_name and channel in ("msedge", "chrome"):
             process_name = "msedge.exe" if channel == "msedge" else "chrome.exe"
 
@@ -598,7 +776,8 @@ class FSEBrowser:
         self._logger.debug("[CDP] Nessun browser rilevato")
         raise ConnectionError(
             f"Impossibile connettersi via CDP alla porta {port}.\n"
-            f"Nessun browser rilevato. Avvia manualmente il browser con:\n"
+            f"Nessun browser Chromium rilevato. Installa Microsoft Edge (Chromium) "
+            f"o Google Chrome, oppure avvia manualmente il browser con:\n"
             f"  --remote-debugging-port={port}"
         )
 
