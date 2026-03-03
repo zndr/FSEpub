@@ -21,16 +21,18 @@ from logger_module import ProcessingLogger
 from email_client import EmailClient
 from browser_automation import FSEBrowser, BrowserCDPNotActive
 from file_manager import FileManager
+from processing_summary import FailedDownload, ProcessingSummary
 from text_processing import TextProcessor, ProcessingMode, LLMConfig
 
 
 def run_processing(config: Config, logger: ProcessingLogger, stop_event: threading.Event | None = None,
                     allowed_types: set[str] | None = None,
-                    on_cdp_restart_needed: callable = None) -> None:
+                    on_cdp_restart_needed: callable = None) -> ProcessingSummary | None:
     """Core processing logic, reusable from CLI and GUI.
 
     on_cdp_restart_needed: optional callback(BrowserCDPNotActive) -> bool.
         Called when browser needs restart for CDP. Return True to restart.
+    Returns ProcessingSummary with results, or None on early exit.
     """
 
     def stopped() -> bool:
@@ -115,6 +117,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
 
     # Process each email
     session_pdfs: list[str] = []
+    failures: list[FailedDownload] = []
     try:
         for email_data in emails:
             if stopped():
@@ -141,6 +144,20 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
 
                 if result.error or not result.download_path:
                     all_ok = False
+                    failures.append(FailedDownload(
+                        patient_name=email_data.patient_name,
+                        codice_fiscale=email_data.codice_fiscale,
+                        disciplina=result.disciplina,
+                        date_text=result.date_text,
+                        error=result.error or "Download fallito",
+                    ))
+                    file_manager.add_failure(
+                        patient_name=email_data.patient_name,
+                        codice_fiscale=email_data.codice_fiscale,
+                        disciplina=result.disciplina,
+                        date_text=result.date_text,
+                        fse_link=email_data.fse_link,
+                    )
                     continue
 
                 # Rename downloaded file
@@ -151,6 +168,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
                     codice_fiscale=email_data.codice_fiscale,
                     disciplina=result.disciplina,
                     fse_link=email_data.fse_link,
+                    date_text=result.date_text,
                 )
                 if renamed:
                     logger.documents_renamed += 1
@@ -199,7 +217,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
 
     # Save mapping, report, and summary
     file_manager.save_mappings()
-    file_manager.save_referti_report()
+    report_path = file_manager.save_referti_report()
     logger.save_summary()
 
     # Open only session PDFs in PDF reader
@@ -213,6 +231,16 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
             subprocess.Popen([config.pdf_reader] + session_pdfs)
 
     logger.info("=== Processamento completato ===")
+
+    return ProcessingSummary(
+        downloaded=logger.documents_downloaded,
+        skipped=logger.documents_skipped,
+        errors=len(failures),
+        emails_found=logger.emails_found,
+        emails_processed=logger.emails_processed,
+        failures=failures,
+        report_path=report_path,
+    )
 
 
 def main() -> None:

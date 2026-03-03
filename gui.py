@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 
 from app_paths import paths
 from credential_manager import encrypt_password, decrypt_password, is_encrypted, verify_password
+from processing_summary import FailedDownload, ProcessingSummary
 from version import __version__
 from browser_automation import (
     FSEBrowser,
@@ -1767,6 +1768,69 @@ def _is_millewin_installed() -> bool:
     return exe_exists and service_exists
 
 
+class SummaryDialog(QDialog):
+    """Modal dialog showing the final processing summary."""
+
+    def __init__(self, summary: ProcessingSummary, title: str = "Resoconto Finale",
+                 parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(550)
+        self.setMinimumHeight(350)
+
+        layout = QVBoxLayout(self)
+
+        # Build summary text
+        lines = []
+        lines.append(f"Documenti scaricati: {summary.downloaded}")
+        lines.append(f"Documenti saltati (filtro): {summary.skipped}")
+        lines.append(f"Errori download: {summary.errors}")
+        if summary.emails_found > 0:
+            lines.append("")
+            lines.append(f"Email trovate: {summary.emails_found}")
+            lines.append(f"Email processate: {summary.emails_processed}")
+
+        if summary.failures:
+            lines.append("")
+            lines.append(f"--- DOWNLOAD FALLITI ({len(summary.failures)}) ---")
+            for f in summary.failures:
+                detail = f"{f.patient_name}  ({f.codice_fiscale})"
+                if f.date_text:
+                    detail += f"  -  {f.date_text}"
+                detail += f"  -  {f.disciplina}"
+                if f.error:
+                    detail += f"  [{f.error}]"
+                lines.append(detail)
+
+        if summary.report_path:
+            lines.append("")
+            lines.append(f"Report salvato in: {summary.report_path}")
+
+        self._text = "\n".join(lines)
+
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(self._text)
+        layout.addWidget(text_edit)
+
+        # Buttons: Copy + OK
+        btn_layout = QHBoxLayout()
+        btn_copy = QPushButton("Copia")
+        btn_copy.setIcon(qta.icon("fa5s.copy", color="white"))
+        btn_copy.clicked.connect(self._copy_to_clipboard)
+        btn_layout.addWidget(btn_copy)
+        btn_layout.addStretch()
+        btn_ok = QPushButton("OK")
+        btn_ok.setIcon(qta.icon("fa5s.check", color="white"))
+        btn_ok.clicked.connect(self.accept)
+        btn_ok.setDefault(True)
+        btn_layout.addWidget(btn_ok)
+        layout.addLayout(btn_layout)
+
+    def _copy_to_clipboard(self) -> None:
+        QApplication.clipboard().setText(self._text)
+
+
 class DocumentListDialog(QDialog):
     """Modal dialog showing a list of patient documents with checkboxes."""
 
@@ -1841,8 +1905,10 @@ class FSEApp(QMainWindow):
 
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
+        self._processing_summary: ProcessingSummary | None = None
         self._patient_stop_event = threading.Event()
         self._patient_worker: threading.Thread | None = None
+        self._patient_summary: ProcessingSummary | None = None
         self._patient_browser: FSEBrowser | None = None
         self._ente_scan_worker: threading.Thread | None = None
         self._mw_stop_event = threading.Event()
@@ -1961,7 +2027,7 @@ class FSEApp(QMainWindow):
 
         # Tab 1: Scarica referti non letti
         siss_tab = QWidget()
-        self._notebook.addTab(siss_tab, "Scarica referti non letti")
+        self._notebook.addTab(siss_tab, "Email SISS")
 
         # Tab 2: Paziente
         patient_tab = QWidget()
@@ -2023,7 +2089,7 @@ class FSEApp(QMainWindow):
         self._update_browser_info_label()
 
         # Controls
-        ctrl_group = QGroupBox("Controlli")
+        ctrl_group = QGroupBox("Verifica referti non letti")
         ctrl_layout = QVBoxLayout(ctrl_group)
 
         btn_row = QHBoxLayout()
@@ -4403,13 +4469,14 @@ class FSEApp(QMainWindow):
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
             logger._logger.addHandler(handler)
 
-            run_processing(
+            self._processing_summary = run_processing(
                 config, logger, self._stop_event,
                 allowed_types=allowed_types,
                 on_cdp_restart_needed=self._ask_restart_browser,
             )
         except Exception as e:
             self._bridge.append_text.emit(self._console, f"Errore fatale: {e}")
+            self._processing_summary = None
 
     def _poll_worker(self) -> None:
         if self._worker and self._worker.is_alive():
@@ -4418,6 +4485,11 @@ class FSEApp(QMainWindow):
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
         self._log("--- Processamento terminato ---")
+
+        summary = self._processing_summary
+        if summary is not None:
+            self._processing_summary = None
+            SummaryDialog(summary, title="Resoconto Processamento Email", parent=self).exec()
 
     def _stop_processing(self) -> None:
         self._stop_event.set()
@@ -4767,12 +4839,27 @@ class FSEApp(QMainWindow):
                 downloaded = 0
                 skipped = 0
                 errors = 0
+                failures: list[FailedDownload] = []
                 for result in doc_results:
                     if result.skipped:
                         skipped += 1
                         continue
                     if result.error or not result.download_path:
                         errors += 1
+                        failures.append(FailedDownload(
+                            patient_name=codice_fiscale,
+                            codice_fiscale=codice_fiscale,
+                            disciplina=result.disciplina,
+                            date_text=result.date_text,
+                            error=result.error or "Download fallito",
+                        ))
+                        file_manager.add_failure(
+                            patient_name=codice_fiscale,
+                            codice_fiscale=codice_fiscale,
+                            disciplina=result.disciplina,
+                            date_text=result.date_text,
+                            fse_link=f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}",
+                        )
                         continue
                     downloaded += 1
                     renamed = file_manager.rename_download(
@@ -4781,6 +4868,7 @@ class FSEApp(QMainWindow):
                         codice_fiscale=codice_fiscale,
                         disciplina=result.disciplina,
                         fse_link=f"{FSE_BASE_URL}#/?codiceFiscale={codice_fiscale}",
+                        date_text=result.date_text,
                     )
 
                     logger.info(f"[DIAG] download_path = {result.download_path!r}")
@@ -4812,10 +4900,20 @@ class FSEApp(QMainWindow):
                 logger.info(f"Saltati (filtro): {skipped}")
                 logger.info(f"Errori: {errors}")
                 file_manager.save_mappings()
+                report_path = file_manager.save_referti_report()
+
+                self._patient_summary = ProcessingSummary(
+                    downloaded=downloaded,
+                    skipped=skipped,
+                    errors=len(failures),
+                    failures=failures,
+                    report_path=report_path,
+                )
             finally:
                 browser.stop()
         except Exception as e:
             self._bridge.append_text.emit(self._patient_console, f"Errore fatale: {e}")
+            self._patient_summary = None
 
     def _poll_patient_worker(self) -> None:
         if self._patient_worker and self._patient_worker.is_alive():
@@ -4826,6 +4924,11 @@ class FSEApp(QMainWindow):
         self._btn_load_enti.setEnabled(True)
         self._btn_list_docs.setEnabled(True)
         self._patient_log("--- Download terminato ---")
+
+        summary = self._patient_summary
+        if summary is not None:
+            self._patient_summary = None
+            SummaryDialog(summary, title="Resoconto Download Paziente", parent=self).exec()
 
     def _stop_patient_download(self) -> None:
         self._patient_stop_event.set()

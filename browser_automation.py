@@ -349,6 +349,7 @@ class DocumentResult:
     skipped: bool
     download_path: Path | None
     error: str | None
+    date_text: str = ""
 
 
 @dataclass
@@ -1512,12 +1513,14 @@ class FSEBrowser:
                 if not _is_tipologia_valida(tipo_text, allowed_types):
                     self._logger.info(f"Riga {row_idx + 1}: tipologia '{tipo_text}' non di interesse, saltata")
                     results.append(DocumentResult(
-                        disciplina=tipo_text, skipped=True, download_path=None, error=None
+                        disciplina=tipo_text, skipped=True, download_path=None, error=None,
+                        date_text=date_text,
                     ))
                     continue
 
                 # Download document
-                result = self._download_document(row_idx, tipo_text, patient_name, visualizza_col, data_rows)
+                result = self._download_document(row_idx, tipo_text, patient_name, visualizza_col, data_rows,
+                                                 date_text=date_text)
                 results.append(result)
 
         except Exception as e:
@@ -1780,17 +1783,20 @@ class FSEBrowser:
             for i, date_text, tipo_text, ente_text in row_info:
                 if selected_row_indices is not None and i not in selected_row_indices:
                     results.append(DocumentResult(
-                        disciplina=tipo_text, skipped=True, download_path=None, error=None
+                        disciplina=tipo_text, skipped=True, download_path=None, error=None,
+                        date_text=date_text,
                     ))
                     continue
                 if not _is_tipologia_valida(tipo_text, allowed_types):
                     results.append(DocumentResult(
-                        disciplina=tipo_text, skipped=True, download_path=None, error=None
+                        disciplina=tipo_text, skipped=True, download_path=None, error=None,
+                        date_text=date_text,
                     ))
                     continue
                 if ente_filter_upper and ente_filter_upper not in ente_text.upper():
                     results.append(DocumentResult(
-                        disciplina=tipo_text, skipped=True, download_path=None, error=None
+                        disciplina=tipo_text, skipped=True, download_path=None, error=None,
+                        date_text=date_text,
                     ))
                     continue
                 if date_from or date_to:
@@ -1798,12 +1804,14 @@ class FSEBrowser:
                     if parsed:
                         if date_from and parsed < date_from:
                             results.append(DocumentResult(
-                                disciplina=tipo_text, skipped=True, download_path=None, error=None
+                                disciplina=tipo_text, skipped=True, download_path=None, error=None,
+                                date_text=date_text,
                             ))
                             continue
                         if date_to and parsed > date_to:
                             results.append(DocumentResult(
-                                disciplina=tipo_text, skipped=True, download_path=None, error=None
+                                disciplina=tipo_text, skipped=True, download_path=None, error=None,
+                                date_text=date_text,
                             ))
                             continue
                 rows_to_download.append((i, date_text, tipo_text, ente_text))
@@ -1818,7 +1826,8 @@ class FSEBrowser:
                     break
 
                 self._logger.info(f"Download {dl_idx}/{total_match}: {tipo_text}")
-                result = self._download_document(i, tipo_text, patient_name, visualizza_col, data_rows)
+                result = self._download_document(i, tipo_text, patient_name, visualizza_col, data_rows,
+                                                 date_text=date_text)
                 results.append(result)
 
         except Exception as e:
@@ -2009,7 +2018,8 @@ class FSEBrowser:
         return pdf_bytes
 
     def _download_document(self, row_index: int, tipologia: str, patient_name: str,
-                           visualizza_col: int | None, data_rows=None) -> DocumentResult:
+                           visualizza_col: int | None, data_rows=None,
+                           date_text: str = "") -> DocumentResult:
         for attempt in range(2):  # max 1 retry
             try:
                 if data_rows is not None:
@@ -2072,6 +2082,7 @@ class FSEBrowser:
                 return DocumentResult(
                     disciplina=tipologia, skipped=False,
                     download_path=save_path, error=None,
+                    date_text=date_text,
                 )
 
             except Exception as e:
@@ -2101,6 +2112,7 @@ class FSEBrowser:
         return DocumentResult(
             disciplina=tipologia, skipped=False, download_path=None,
             error="Download fallito dopo retry",
+            date_text=date_text,
         )
 
     def _take_debug_screenshot(self, label: str) -> None:

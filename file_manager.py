@@ -49,6 +49,7 @@ class FileManager:
         codice_fiscale: str,
         disciplina: str,
         fse_link: str,
+        date_text: str = "",
     ) -> Path | None:
         new_name = self.build_filename(patient_name, codice_fiscale, disciplina)
         dest = self._config.download_dir / new_name
@@ -65,6 +66,7 @@ class FileManager:
                 disciplina=disciplina,
                 fse_link=fse_link,
                 renamed_ok=True,
+                date_text=date_text,
             )
             return dest
         except OSError as e:
@@ -77,6 +79,7 @@ class FileManager:
                 disciplina=disciplina,
                 fse_link=fse_link,
                 renamed_ok=False,
+                date_text=date_text,
             )
             return None
 
@@ -104,16 +107,13 @@ class FileManager:
 
         # Failed downloads first
         if failed:
-            fail_groups: dict[tuple[str, str], int] = {}
+            lines.append(f"--- DOWNLOAD FALLITI ({len(failed)}) ---")
             for m in failed:
-                key = (m["codice_fiscale"], m["patient_name"])
-                fail_groups[key] = fail_groups.get(key, 0) + 1
-            fail_total = sum(fail_groups.values())
-            lines.append(f"--- DOWNLOAD FALLITI ({fail_total}) ---")
-            for (cf, name), count in fail_groups.items():
-                entry = f"{cf}  {name}"
-                if count > 1:
-                    entry += f" ({count})"
+                entry = f"{m['codice_fiscale']}  {m['patient_name']}"
+                if m.get("date_text"):
+                    entry += f"  -  {m['date_text']}"
+                if m.get("disciplina"):
+                    entry += f"  -  {m['disciplina']}"
                 lines.append(entry)
             lines.append("")
 
@@ -177,6 +177,7 @@ class FileManager:
         disciplina: str,
         fse_link: str,
         renamed_ok: bool,
+        date_text: str = "",
     ) -> None:
         self._mappings.append({
             "original_filename": original,
@@ -187,4 +188,25 @@ class FileManager:
             "fse_link": fse_link,
             "download_timestamp": datetime.now().isoformat(),
             "renamed": renamed_ok,
+            "date_text": date_text,
         })
+
+    def add_failure(
+        self,
+        patient_name: str,
+        codice_fiscale: str,
+        disciplina: str,
+        date_text: str = "",
+        fse_link: str = "",
+    ) -> None:
+        """Register a download failure in the mappings for the referti report."""
+        self._add_mapping(
+            original="",
+            renamed="",
+            patient_name=patient_name,
+            codice_fiscale=codice_fiscale,
+            disciplina=disciplina,
+            fse_link=fse_link,
+            renamed_ok=False,
+            date_text=date_text,
+        )
