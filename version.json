@@ -1,8 +1,8 @@
 {
-    "Version": "2.4.0",
-    "ReleaseNotes": "Nuovo dialog Visiona Testi: confronto side-by-side testo originale vs anonimizzato con evidenziazione redazioni.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.0/FSE_Processor_Setup_2.4.0_QT6.exe",
-    "ReleaseDate": "2026-03-02",
-    "Sha256Hash": "c6012513e6255b19c31b155cf3c8e5aa2030b60a018d8127e9008cb46f1c5c90",
-    "FileSize": 74664974
+    "Version": "2.4.1",
+    "ReleaseNotes": "Icone UI con qtawesome, resoconto finale download, suono di completamento, preset date aggiornati, fix crash config vuota.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.1/FSE_Processor_Setup_2.4.1_QT6.exe",
+    "ReleaseDate": "2026-03-03",
+    "Sha256Hash": "1305a07876b10bcb7310f29af11e47efc3bab51608085e8c73cece498267b3f4",
+    "FileSize": 78300161
 }
