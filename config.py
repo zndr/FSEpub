@@ -38,6 +38,7 @@ class Config:
     move_dir: Path | None
     process_text: bool
     text_dir: Path | None
+    deferred_processing: bool
 
     # LLM / AI text processing
     processing_mode: str        # "none", "ai", "local"
@@ -86,6 +87,7 @@ class Config:
         process_text = os.getenv("PROCESS_TEXT", "false").lower() == "true"
         text_dir_str = os.getenv("TEXT_DIR", "")
         text_dir = Path(text_dir_str) if text_dir_str else None
+        deferred_processing = os.getenv("DEFERRED_PROCESSING", "false").lower() == "true"
 
         processing_mode = os.getenv("PROCESSING_MODE", "local")
         llm_provider = os.getenv("LLM_PROVIDER", "")
@@ -118,6 +120,7 @@ class Config:
             move_dir=move_dir,
             process_text=process_text,
             text_dir=text_dir,
+            deferred_processing=deferred_processing,
             processing_mode=processing_mode,
             llm_provider=llm_provider,
             llm_api_key=llm_api_key,

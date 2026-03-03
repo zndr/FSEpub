@@ -102,6 +102,7 @@ SETTINGS_SPEC = [
     ("MOVE_DIR", "Sposta referti in", "", "dir"),
     ("PROCESS_TEXT", "Processa il testo del referto", "false", "bool"),
     ("TEXT_DIR", "Salva i testi in", "", "dir"),
+    ("DEFERRED_PROCESSING", "Elaborazione differita", "false", "bool"),
     ("PROCESSING_MODE", "Modalita' processazione", "local", "text"),
     ("LLM_PROVIDER", "Provider AI", "", "text"),
     ("LLM_API_KEY", "API Key AI", "", "password"),
@@ -1829,6 +1830,14 @@ class SummaryDialog(QDialog):
                     detail += f"  [{f.error}]"
                 lines.append(detail)
 
+        if summary.text_processed > 0 or summary.text_errors > 0:
+            lines.append("")
+            label = "ELABORAZIONE TESTI (differita)" if summary.deferred_mode else "ELABORAZIONE TESTI"
+            lines.append(f"--- {label} ---")
+            lines.append(f"Testi elaborati: {summary.text_processed}")
+            if summary.text_errors > 0:
+                lines.append(f"Errori elaborazione testo: {summary.text_errors}")
+
         if summary.report_path:
             lines.append("")
             lines.append(f"Report salvato in: {summary.report_path}")
@@ -3046,6 +3055,30 @@ class FSEApp(QMainWindow):
         scope_row.addStretch()
         pg.addWidget(scope_widget)
 
+        # Timing radio buttons (in own QWidget for auto-exclusive grouping)
+        timing_widget = QWidget()
+        timing_row = QHBoxLayout(timing_widget)
+        timing_row.setContentsMargins(0, 0, 0, 0)
+        timing_label = QLabel("Ordine elaborazione:")
+        self._timing_radio_immediate = QRadioButton("Immediata")
+        self._timing_radio_immediate.setToolTip(
+            "Elabora ogni referto subito dopo il download"
+        )
+        self._timing_radio_deferred = QRadioButton("Differita")
+        self._timing_radio_deferred.setToolTip(
+            "Scarica tutti i referti, poi elabora tutti insieme"
+        )
+        current_deferred = spec.get("DEFERRED_PROCESSING", ("", "false"))[1]
+        if current_deferred == "true":
+            self._timing_radio_deferred.setChecked(True)
+        else:
+            self._timing_radio_immediate.setChecked(True)
+        timing_row.addWidget(timing_label)
+        timing_row.addWidget(self._timing_radio_immediate)
+        timing_row.addWidget(self._timing_radio_deferred)
+        timing_row.addStretch()
+        pg.addWidget(timing_widget)
+
         # ── Impostazioni A.I. sub-group ──
         self._ai_group = QGroupBox("Impostazioni A.I.")
         ai_layout = QGridLayout(self._ai_group)
@@ -3971,6 +4004,10 @@ class FSEApp(QMainWindow):
         self._scope_radio_all.setEnabled(not is_none)
         self._scope_radio_choose.setEnabled(not is_none)
 
+        # Timing radios: disabled when "Nessuna"
+        self._timing_radio_immediate.setEnabled(not is_none)
+        self._timing_radio_deferred.setEnabled(not is_none)
+
         # AI group: visible only in AI mode
         self._ai_group.setVisible(is_ai)
 
@@ -4215,6 +4252,9 @@ class FSEApp(QMainWindow):
             self._fields["PROCESS_TEXT"] = "true"
             self._fields["PROCESSING_MODE"] = "local"
         self._fields["TEXT_DIR"] = self._text_dir_entry.text()
+        self._fields["DEFERRED_PROCESSING"] = (
+            "true" if self._timing_radio_deferred.isChecked() else "false"
+        )
         provider_label = self._llm_provider_combo.currentText()
         self._fields["LLM_PROVIDER"] = self._llm_label_to_provider.get(provider_label, "")
         self._fields["LLM_API_KEY"] = self._llm_api_key_entry.text()
@@ -4309,6 +4349,11 @@ class FSEApp(QMainWindow):
                     self._mode_radio_none.setChecked(True)
                 else:
                     self._mode_radio_local.setChecked(True)
+            elif key == "DEFERRED_PROCESSING":
+                if val.lower() == "true":
+                    self._timing_radio_deferred.setChecked(True)
+                else:
+                    self._timing_radio_immediate.setChecked(True)
             elif key == "LLM_PROVIDER":
                 if val in self._llm_provider_labels:
                     self._llm_provider_combo.setCurrentText(self._llm_provider_labels[val])
@@ -4896,6 +4941,9 @@ class FSEApp(QMainWindow):
                 if text_processor is not None:
                     logger.info(f"[DIAG] text_dir finale = {text_dir!r}")
 
+                deferred = config.deferred_processing and text_processor is not None
+                pending_text_files: list = []
+
                 downloaded = 0
                 skipped = 0
                 errors = 0
@@ -4936,24 +4984,38 @@ class FSEApp(QMainWindow):
                     logger.info(f"[DIAG] text_processor = {text_processor is not None}, "
                                 f"renamed truthy = {bool(renamed)}")
 
-                    # Text processing
+                    # Text processing (immediate or deferred)
                     if renamed and text_processor is not None:
-                        logger.info(f"[DIAG] >>> Avvio processazione testo per: {renamed.name}")
-                        try:
-                            tp_result = text_processor.process(renamed)
-                            if tp_result.success:
-                                saved = TextProcessor.save_result(
-                                    tp_result, text_dir, renamed.stem,
-                                )
-                                if saved:
-                                    logger.info(f"Testo salvato: {saved.name}")
-                            else:
-                                logger.warning(
-                                    f"Estrazione testo fallita per {renamed.name}: "
-                                    f"{tp_result.error_message}"
-                                )
-                        except Exception as e:
-                            logger.warning(f"Errore processazione testo {renamed.name}: {e}")
+                        if deferred:
+                            pending_text_files.append(renamed)
+                        else:
+                            logger.info(f"[DIAG] >>> Avvio processazione testo per: {renamed.name}")
+                            try:
+                                tp_result = text_processor.process(renamed)
+                                if tp_result.success:
+                                    saved = TextProcessor.save_result(
+                                        tp_result, text_dir, renamed.stem,
+                                    )
+                                    if saved:
+                                        logger.info(f"Testo salvato: {saved.name}")
+                                else:
+                                    logger.warning(
+                                        f"Estrazione testo fallita per {renamed.name}: "
+                                        f"{tp_result.error_message}"
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Errore processazione testo {renamed.name}: {e}")
+
+                # Deferred text processing phase
+                text_processed = text_errors = 0
+                if deferred and pending_text_files and not self._patient_stop_event.is_set():
+                    from text_processing import TextProcessor as TP
+                    logger.info(f"=== Avvio elaborazione testi ({len(pending_text_files)} referti) ===")
+                    text_processed, text_errors = TP.process_batch(
+                        text_processor, pending_text_files, text_dir, logger.info,
+                        stop_check=self._patient_stop_event.is_set,
+                    )
+                    logger.info(f"=== Elaborazione testi completata: {text_processed} OK, {text_errors} errori ===")
 
                 logger.info("--- Riepilogo ---")
                 logger.info(f"Scaricati: {downloaded}")
@@ -4968,6 +5030,9 @@ class FSEApp(QMainWindow):
                     errors=len(failures),
                     failures=failures,
                     report_path=report_path,
+                    text_processed=text_processed,
+                    text_errors=text_errors,
+                    deferred_mode=deferred,
                 )
             finally:
                 browser.stop()

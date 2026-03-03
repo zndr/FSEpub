@@ -23,3 +23,6 @@ class ProcessingSummary:
     emails_processed: int = 0
     failures: list[FailedDownload] = field(default_factory=list)
     report_path: Path | None = None
+    text_processed: int = 0
+    text_errors: int = 0
+    deferred_mode: bool = False

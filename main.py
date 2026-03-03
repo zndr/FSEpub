@@ -115,6 +115,10 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
         email_client.disconnect()
         return
 
+    # Deferred processing: collect PDFs first, process text later
+    deferred = config.deferred_processing and text_processor is not None
+    pending_text_files: list = []
+
     # Process each email
     session_pdfs: list[str] = []
     failures: list[FailedDownload] = []
@@ -174,23 +178,26 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
                     logger.documents_renamed += 1
                     session_pdfs.append(str(renamed))
 
-                    # Text processing
+                    # Text processing (immediate or deferred)
                     if text_processor is not None:
-                        try:
-                            tp_result = text_processor.process(renamed)
-                            if tp_result.success:
-                                saved = TextProcessor.save_result(
-                                    tp_result, text_dir, renamed.stem,
-                                )
-                                if saved:
-                                    logger.info(f"Testo salvato: {saved.name}")
-                            else:
-                                logger.warning(
-                                    f"Estrazione testo fallita per {renamed.name}: "
-                                    f"{tp_result.error_message}"
-                                )
-                        except Exception as e:
-                            logger.warning(f"Errore processazione testo {renamed.name}: {e}")
+                        if deferred:
+                            pending_text_files.append(renamed)
+                        else:
+                            try:
+                                tp_result = text_processor.process(renamed)
+                                if tp_result.success:
+                                    saved = TextProcessor.save_result(
+                                        tp_result, text_dir, renamed.stem,
+                                    )
+                                    if saved:
+                                        logger.info(f"Testo salvato: {saved.name}")
+                                else:
+                                    logger.warning(
+                                        f"Estrazione testo fallita per {renamed.name}: "
+                                        f"{tp_result.error_message}"
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Errore processazione testo {renamed.name}: {e}")
 
             # Post-download actions (only if all documents processed successfully)
             if all_ok:
@@ -214,6 +221,16 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
     finally:
         browser.stop()
         email_client.disconnect()
+
+    # Deferred text processing phase
+    text_processed = text_errors = 0
+    if deferred and pending_text_files and not stopped():
+        logger.info(f"=== Avvio elaborazione testi ({len(pending_text_files)} referti) ===")
+        text_processed, text_errors = TextProcessor.process_batch(
+            text_processor, pending_text_files, text_dir, logger.info,
+            stop_check=stopped,
+        )
+        logger.info(f"=== Elaborazione testi completata: {text_processed} OK, {text_errors} errori ===")
 
     # Save mapping, report, and summary
     file_manager.save_mappings()
@@ -240,6 +257,9 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
         emails_processed=logger.emails_processed,
         failures=failures,
         report_path=report_path,
+        text_processed=text_processed,
+        text_errors=text_errors,
+        deferred_mode=deferred,
     )
 
 

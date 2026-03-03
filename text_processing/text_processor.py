@@ -205,3 +205,48 @@ class TextProcessor:
         except Exception as e:
             logger.error("Errore salvataggio testo %s: %s", filename_base, e)
             return None
+
+    @staticmethod
+    def process_batch(
+        processor: TextProcessor,
+        pdf_paths: list[Path],
+        text_dir: Path,
+        log_fn,
+        stop_check=None,
+    ) -> tuple[int, int]:
+        """Process a batch of PDFs sequentially.
+
+        Args:
+            processor: Configured TextProcessor instance.
+            pdf_paths: List of PDF paths to process.
+            text_dir: Directory to save extracted text files.
+            log_fn: Callable(msg: str) for progress logging.
+            stop_check: Optional callable returning True to abort.
+
+        Returns:
+            Tuple of (succeeded_count, error_count).
+        """
+        succeeded = errors = 0
+        total = len(pdf_paths)
+        for i, pdf_path in enumerate(pdf_paths):
+            if stop_check and stop_check():
+                log_fn("Elaborazione testi interrotta dall'utente")
+                break
+            log_fn(f"Elaborazione testo {i + 1}/{total}: {pdf_path.name}")
+            try:
+                result = processor.process(pdf_path)
+                if result.success:
+                    saved = TextProcessor.save_result(result, text_dir, pdf_path.stem)
+                    if saved:
+                        log_fn(f"Testo salvato: {saved.name}")
+                        succeeded += 1
+                else:
+                    log_fn(
+                        f"Estrazione testo fallita per {pdf_path.name}: "
+                        f"{result.error_message}"
+                    )
+                    errors += 1
+            except Exception as e:
+                log_fn(f"Errore processazione testo {pdf_path.name}: {e}")
+                errors += 1
+        return succeeded, errors
