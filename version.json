@@ -1,8 +1,8 @@
 {
-    "Version": "2.4.3",
+    "Version": "2.4.4",
     "ReleaseNotes": "Fix deadlock connessione CDP con Edge (estensioni e pagine edge:// bloccavano Playwright). Timeout CDP aumentato.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.3/FSE_Processor_Setup_2.4.3_QT6.exe",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.4/FSE_Processor_Setup_2.4.4_QT6.exe",
     "ReleaseDate": "2026-03-04",
-    "Sha256Hash": "803d11a663617a29978160521be44928527fdcbb253d62db61bbc7268f191be0",
-    "FileSize": 78324064
+    "Sha256Hash": "f451e0e352eb90c33a4d0fa4adc02ea7cb05251886bf9b5ceb208fe897c968b5",
+    "FileSize": 78323618
 }
