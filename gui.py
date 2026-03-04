@@ -1722,6 +1722,7 @@ class _SignalBridge(QObject):
     show_info = Signal(str, str)
     show_error = Signal(str, str)
     show_warning = Signal(str, str)
+    show_timed_warning = Signal(str, str, int)  # title, msg, duration_ms
     call_on_main = Signal(object)  # generic callable
 
     def __init__(self) -> None:
@@ -1731,7 +1732,9 @@ class _SignalBridge(QObject):
         self.show_info.connect(self._on_show_info)
         self.show_error.connect(self._on_show_error)
         self.show_warning.connect(self._on_show_warning)
+        self.show_timed_warning.connect(self._on_show_timed_warning)
         self.call_on_main.connect(self._on_call)
+        self._timed_msgbox: QMessageBox | None = None
 
     @staticmethod
     def _on_append_text(widget: QTextEdit, msg: str) -> None:
@@ -1762,6 +1765,22 @@ class _SignalBridge(QObject):
     @staticmethod
     def _on_show_warning(title: str, msg: str) -> None:
         QMessageBox.warning(None, title, msg)
+
+    def _on_show_timed_warning(self, title: str, msg: str, duration_ms: int) -> None:
+        """Show a non-modal warning that auto-closes after *duration_ms* ms."""
+        # Close any previous timed msgbox still open
+        if self._timed_msgbox is not None:
+            self._timed_msgbox.close()
+            self._timed_msgbox = None
+        mb = QMessageBox(QMessageBox.Icon.Warning, title, msg, QMessageBox.StandardButton.Ok)
+        mb.setWindowFlags(mb.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        mb.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        mb.setModal(False)
+        mb.show()
+        mb.raise_()
+        mb.activateWindow()
+        self._timed_msgbox = mb
+        QTimer.singleShot(duration_ms, lambda: mb.close() if mb.isVisible() else None)
 
     @staticmethod
     def _on_call(fn: object) -> None:
@@ -2891,12 +2910,13 @@ class FSEApp(QMainWindow):
 
             # Step 3: Navigate to FSE documents page
             def _on_page_expired():
-                self._bridge.show_warning.emit(
+                self._bridge.show_timed_warning.emit(
                     "Pagina di ricerca scaduta",
                     "La pagina di ricerca del SISS e' scaduta.\n"
                     "L'overlay 'Identificazione del cittadino in corso' non "
                     "e' comparso dopo aver cliccato 'Cerca'.\n\n"
                     "Aggiornamento automatico in corso...",
+                    3000,
                 )
 
             self._mw_browser.navigate_for_millewin(
