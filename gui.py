@@ -2,6 +2,7 @@
 
 import ctypes
 import ctypes.wintypes as wintypes
+import imaplib
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import urllib.request
 import webbrowser
@@ -47,6 +49,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QTabWidget,
     QTextEdit,
@@ -84,6 +87,7 @@ SETTINGS_SPEC = [
     ("EMAIL_PASS", "Email password", "", "password"),
     ("IMAP_HOST", "IMAP Host", "mail.fastweb360.it", "text"),
     ("IMAP_PORT", "IMAP Port", "993", "int"),
+    ("EMAIL_CHECK_INTERVAL", "Controlla ogni (min)", "5", "int"),
     ("IMAP_FOLDER", "Cartelle IMAP", "INBOX", "text"),
     ("DOWNLOAD_DIR", "Directory download", str(paths.default_download_dir), "dir"),
     ("BROWSER_CHANNEL", "Browser", "msedge", "browser_selector"),
@@ -1930,6 +1934,142 @@ class DocumentListDialog(QDialog):
         return result
 
 
+# ---------------------------------------------------------------------------
+#  Status-bar helper utilities
+# ---------------------------------------------------------------------------
+
+def _count_unread_imap(
+    host: str, port: int, user: str, password: str, use_ssl: bool, folders: list[str],
+) -> int | None:
+    """Count unread IMAP messages without fetching them. Returns None on error."""
+    if not host or not user or not password:
+        return None
+    try:
+        if use_ssl:
+            ctx = ssl.create_default_context()
+            try:
+                conn = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
+            except ssl.SSLCertVerificationError:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                conn = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
+        else:
+            conn = imaplib.IMAP4(host, port)
+        conn.login(user, password)
+        total = 0
+        for folder in folders:
+            try:
+                conn.select(folder, readonly=True)
+                status, data = conn.uid("SEARCH", None, "UNSEEN")
+                if status == "OK" and data[0]:
+                    total += len(data[0].split())
+            except Exception:
+                continue
+        try:
+            conn.logout()
+        except Exception:
+            pass
+        return total
+    except Exception:
+        return None
+
+
+_SISS_UNREACHABLE = "unreachable"  # sentinel for portal unreachable
+
+
+def _check_siss_via_cdp(port: int) -> bool | str | None:
+    """Check SISS session by opening a probe tab via CDP.
+
+    Opens a temporary browser tab to the SISS portal, waits for the server
+    to respond (redirect to SSO login = no session, stay on portal = active),
+    checks the final URL and title, and closes the tab.
+
+    Returns:
+        True   – session is active
+        False  – no active session (redirected to SSO login)
+        _SISS_UNREACHABLE – SISS portal is unreachable (network error page)
+        None   – CDP not available
+    """
+    base = f"http://127.0.0.1:{port}"
+    fse_url = "https://operatorisiss.servizirl.it/opefseie/"
+
+    # Quick check: is CDP available at all?
+    try:
+        req = urllib.request.Request(f"{base}/json/version")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status != 200:
+                return None
+    except Exception:
+        return None
+
+    # Remember the currently active tab to re-activate it later
+    active_tab_id = None
+    try:
+        req = urllib.request.Request(f"{base}/json/list")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            tabs_before = json.loads(resp.read())
+        if tabs_before:
+            active_tab_id = tabs_before[0].get("id")
+    except Exception:
+        pass
+
+    # Open a temporary probe tab navigating to the SISS portal
+    try:
+        req = urllib.request.Request(f"{base}/json/new?{fse_url}")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            probe_tab = json.loads(resp.read())
+        probe_id = probe_tab.get("id")
+        if not probe_id:
+            return None
+    except Exception:
+        return None
+
+    try:
+        # Re-activate the original tab so the probe stays in background
+        if active_tab_id:
+            try:
+                req = urllib.request.Request(f"{base}/json/activate/{active_tab_id}")
+                urllib.request.urlopen(req, timeout=2)
+            except Exception:
+                pass
+
+        # Wait for the probe tab to navigate / redirect
+        time.sleep(4)
+
+        # Check the probe tab's final URL and title
+        req = urllib.request.Request(f"{base}/json/list")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            tabs_after = json.loads(resp.read())
+
+        final_url = ""
+        final_title = ""
+        for tab in tabs_after:
+            if tab.get("id") == probe_id:
+                final_url = tab.get("url", "").lower()
+                final_title = tab.get("title", "")
+                break
+
+        # Check for browser error page (network unreachable)
+        if "impossibile raggiungere" in final_title.lower():
+            return _SISS_UNREACHABLE
+
+        # Redirected to SSO login → no active session
+        if "idpcrlmain" in final_url or "ssoauth" in final_url:
+            return False
+        # Stayed on SISS portal → session is active
+        if "operatorisiss" in final_url or "servizirl" in final_url:
+            return True
+        return False
+    finally:
+        # Always close the probe tab
+        try:
+            req = urllib.request.Request(f"{base}/json/close/{probe_id}")
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass
+
+
 class FSEApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -1972,6 +2112,20 @@ class FSEApp(QMainWindow):
 
         # Auto-check for updates after the window is shown
         QTimer.singleShot(2000, self._check_updates_startup)
+
+        # ---- Status bar periodic checks ----
+        self._email_check_timer = QTimer(self)
+        self._email_check_timer.timeout.connect(self._check_email_status)
+        self._restart_email_timer()
+
+        self._siss_check_timer = QTimer(self)
+        self._siss_check_timer.timeout.connect(self._check_siss_status)
+        self._siss_check_timer.start(180_000)  # 3 min
+
+        # Initial status bar refresh (staggered so window shows first)
+        QTimer.singleShot(500, self._update_headless_status)
+        QTimer.singleShot(1500, self._check_siss_status)
+        QTimer.singleShot(3000, self._check_email_status)
 
     # ---- helpers for field values ----
 
@@ -2095,6 +2249,152 @@ class FSEApp(QMainWindow):
         btn_open_dl.clicked.connect(self._open_download_dir)
         bottom_row.addWidget(btn_open_dl)
         main_layout.addLayout(bottom_row)
+
+        self._build_status_bar()
+
+    # ---- Status bar ----
+
+    def _build_status_bar(self) -> None:
+        """Create a 3-section status bar: unread emails, SISS session, headless mode."""
+        sb = self.statusBar()
+        sb.setSizeGripEnabled(False)
+
+        self._sb_email = QLabel("\u2709 verifica...")
+        self._sb_email.setStyleSheet("color: #888888;")
+        self._sb_email.setToolTip("Numero di email FSE non lette")
+        sb.addPermanentWidget(self._sb_email)
+
+        sep1 = QLabel("|")
+        sep1.setStyleSheet("color: #888888;")
+        sb.addPermanentWidget(sep1)
+
+        self._sb_siss = QLabel("SISS: verifica...")
+        self._sb_siss.setStyleSheet("color: #888888;")
+        self._sb_siss.setToolTip("Stato della sessione SISS nel browser")
+        sb.addPermanentWidget(self._sb_siss)
+
+        sep2 = QLabel("|")
+        sep2.setStyleSheet("color: #888888;")
+        sb.addPermanentWidget(sep2)
+
+        self._sb_headless = QLabel("Headless: --")
+        self._sb_headless.setToolTip("Modalita' browser headless (invisibile)")
+        sb.addPermanentWidget(self._sb_headless)
+
+    def _update_email_status(self, count: int | None) -> None:
+        """Update the email section of the status bar."""
+        if count is None:
+            self._sb_email.setText("\u2709 N/A")
+            self._sb_email.setStyleSheet("color: #888888;")
+        elif count < 0:
+            # Negative sentinel = connection error
+            self._sb_email.setText("\u2709 Errore")
+            self._sb_email.setStyleSheet("color: #F44336; font-weight: bold;")
+        elif count == 0:
+            self._sb_email.setText("\u2709 0 non letti")
+            self._sb_email.setStyleSheet("")
+        else:
+            self._sb_email.setText(f"\u2709 {count} non letti")
+            self._sb_email.setStyleSheet("color: #4CAF50; font-weight: bold;")
+
+    def _update_siss_status(self, active: bool | str | None) -> None:
+        """Update the SISS section of the status bar."""
+        if active == _SISS_UNREACHABLE:
+            self._sb_siss.setText("SISS: portale non raggiungibile \u25cf")
+            self._sb_siss.setStyleSheet("color: #F44336; font-weight: bold;")
+            QMessageBox.warning(
+                self,
+                "Portale SISS non raggiungibile",
+                "Impossibile raggiungere il portale SISS.\n\n"
+                "Verifica la connessione di rete e che il sito\n"
+                "https://operatorisiss.servizirl.it sia accessibile.",
+            )
+        elif active is None:
+            self._sb_siss.setText("SISS: nessun browser CDP")
+            self._sb_siss.setStyleSheet("color: #888888;")
+        elif active:
+            self._sb_siss.setText("SISS: sessione attiva \u25cf")
+            self._sb_siss.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        else:
+            self._sb_siss.setText("SISS: nessuna sessione attiva \u25cf")
+            self._sb_siss.setStyleSheet("color: #F44336; font-weight: bold;")
+
+    def _update_headless_status(self) -> None:
+        """Update the headless section of the status bar from current settings."""
+        val = self._fields.get("HEADLESS", "false")
+        if isinstance(val, bool):
+            is_on = val
+        else:
+            is_on = str(val).lower() == "true"
+        if is_on:
+            self._sb_headless.setText("Headless: ON \u25cf")
+            self._sb_headless.setStyleSheet("color: #FF9800; font-weight: bold;")
+        else:
+            self._sb_headless.setText("Headless: OFF")
+            self._sb_headless.setStyleSheet("")
+
+    def _restart_email_timer(self) -> None:
+        """(Re)start the email check timer using the configured interval."""
+        try:
+            minutes = int(self._fields.get("EMAIL_CHECK_INTERVAL", "5"))
+        except (ValueError, TypeError):
+            minutes = 5
+        minutes = max(1, min(60, minutes))
+        self._email_check_timer.start(minutes * 60_000)
+
+    def _check_email_status(self) -> None:
+        """Launch a background thread to count unread IMAP emails."""
+        user = str(self._fields.get("EMAIL_USER", ""))
+        pwd = str(self._fields.get("EMAIL_PASS", ""))
+        host = str(self._fields.get("IMAP_HOST", ""))
+        port_str = str(self._fields.get("IMAP_PORT", "993"))
+        use_ssl = str(self._fields.get("IMAP_USE_SSL", "true")).lower() == "true"
+        folders_raw = str(self._fields.get("IMAP_FOLDERS", "INBOX"))
+
+        if not user or not host:
+            self._update_email_status(None)
+            return
+
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = 993
+
+        pwd = decrypt_password(pwd) if pwd else ""
+        folders = [f.strip() for f in folders_raw.split(",") if f.strip()] or ["INBOX"]
+
+        def worker():
+            result = _count_unread_imap(host, port, user, pwd, use_ssl, folders)
+            self._bridge.call_on_main.emit(
+                lambda r=result: self._update_email_status(r)
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _check_siss_status(self) -> None:
+        """Launch a background thread to check SISS session via CDP."""
+        cdp_enabled = str(self._fields.get("USE_EXISTING_BROWSER", "true")).lower() == "true"
+        if not cdp_enabled:
+            self._update_siss_status(None)
+            return
+
+        port_str = str(self._fields.get("CDP_PORT", "9222"))
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = 9222
+
+        # Show "verifica..." while the probe runs (~4s)
+        self._sb_siss.setText("SISS: verifica...")
+        self._sb_siss.setStyleSheet("color: #888888;")
+
+        def worker():
+            result = _check_siss_via_cdp(port)
+            self._bridge.call_on_main.emit(
+                lambda r=result: self._update_siss_status(r)
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _reset_active_console(self) -> None:
         """Clear the console of the currently active tab."""
@@ -2851,6 +3151,21 @@ class FSEApp(QMainWindow):
                 btn_change_pass.clicked.connect(self._show_change_password_dialog)
                 pass_row.addWidget(btn_change_pass)
                 mail_layout.addLayout(pass_row, r, 1)
+            elif key == "IMAP_PORT":
+                entry.setToolTip(mail_tooltips.get(key, ""))
+                port_row = QHBoxLayout()
+                port_row.addWidget(entry)
+                port_row.addSpacing(12)
+                port_row.addWidget(QLabel("Controlla ogni"))
+                self._email_interval_spin = QSpinBox()
+                self._email_interval_spin.setRange(1, 60)
+                self._email_interval_spin.setValue(5)
+                self._email_interval_spin.setSuffix(" min")
+                self._email_interval_spin.setToolTip(
+                    "Intervallo in minuti tra i controlli automatici delle email non lette"
+                )
+                port_row.addWidget(self._email_interval_spin)
+                mail_layout.addLayout(port_row, r, 1)
             elif key == "IMAP_FOLDER":
                 entry.setToolTip(mail_tooltips.get(key, ""))
                 folder_row = QHBoxLayout()
@@ -4308,6 +4623,7 @@ class FSEApp(QMainWindow):
         self._fields["MAX_EMAILS"] = self._max_email_entry.text()
         self._fields["MARK_AS_READ"] = "true" if self._siss_mark_cb.isChecked() else "false"
         self._fields["DELETE_AFTER_PROCESSING"] = "true" if self._siss_delete_cb.isChecked() else "false"
+        self._fields["EMAIL_CHECK_INTERVAL"] = str(self._email_interval_spin.value())
 
     def _get_field_values(self) -> dict[str, str]:
         """Collect current field values as strings for env file."""
@@ -4372,6 +4688,11 @@ class FSEApp(QMainWindow):
                     self._browser_combo.setCurrentText(label)
             elif key == "PDF_READER":
                 self._set_pdf_combo_from_value(val)
+            elif key == "EMAIL_CHECK_INTERVAL":
+                try:
+                    self._email_interval_spin.setValue(int(val))
+                except (ValueError, AttributeError):
+                    pass
             elif key == "MAX_EMAILS":
                 self._max_email_entry.setText(val)
             elif key == "MARK_AS_READ":
@@ -4418,6 +4739,10 @@ class FSEApp(QMainWindow):
         # Auto-migrate plain-text password to encrypted form
         if need_migration:
             self._save_settings_quietly()
+
+        # Refresh status bar indicators after loading settings
+        if hasattr(self, "_sb_headless"):
+            self._update_headless_status()
 
     def _show_change_password_dialog(self) -> None:
         """Show a modal dialog to change the email password."""
@@ -4496,6 +4821,13 @@ class FSEApp(QMainWindow):
         values = self._get_field_values()
         try:
             _save_env_values(values)
+            self._load_settings()  # Refresh _fields from saved values
+            # Refresh status bar (headless is instant; email/SISS need re-check)
+            self._update_headless_status()
+            self._check_siss_status()
+            self._check_email_status()
+            # Restart email timer with updated interval
+            self._restart_email_timer()
             QMessageBox.information(self, "Impostazioni", "Impostazioni salvate correttamente.")
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Impossibile salvare: {e}")
@@ -4564,6 +4896,10 @@ class FSEApp(QMainWindow):
                 msg = f"{count} email con referti non letti da scaricare"
             self._bridge.append_text.emit(self._console, msg)
             self._bridge.show_info.emit("Conteggio Email", msg)
+            # Update status bar with the count we already have
+            self._bridge.call_on_main.emit(
+                lambda c=count: self._update_email_status(c)
+            )
         except Exception as e:
             err_msg = str(e) if str(e) and str(e) != "None" else (
                 f"{type(e).__name__}: {e.args}" if e.args else type(e).__name__
@@ -4571,6 +4907,8 @@ class FSEApp(QMainWindow):
             tb = traceback.format_exc()
             self._bridge.append_text.emit(self._console, f"Errore: {err_msg}\n{tb}")
             self._bridge.show_error.emit("Errore", err_msg)
+            # Signal error in status bar
+            self._bridge.call_on_main.emit(lambda: self._update_email_status(-1))
         finally:
             self._bridge.call_on_main.emit(lambda: self._btn_check.setEnabled(True))
 
@@ -4633,6 +4971,8 @@ class FSEApp(QMainWindow):
         self._btn_stop.setEnabled(False)
         self._log("--- Processamento terminato ---")
         _play_completion_sound()
+        # Refresh email count (emails may have been marked as read)
+        self._check_email_status()
 
         summary = self._processing_summary
         if summary is not None:
