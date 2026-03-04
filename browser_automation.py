@@ -308,6 +308,110 @@ def _delete_registry_tree(hive: int, subkey: str) -> None:
         pass
 
 
+def _cleanup_cdp_targets(port: int, logger=None) -> int:
+    """Close CDP targets that cause Playwright connect_over_cdp to hang.
+
+    Edge's "other" type targets (edge://newtab, Copilot sidebar) and blank pages
+    cause Playwright's Target.detachFromTarget commands to go unanswered, producing
+    an infinite deadlock.  Pre-closing these targets fixes the issue.
+
+    Returns the number of targets closed.
+    """
+    import base64 as _b64
+    import select as _sel
+
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/json")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            targets = json.loads(resp.read())
+    except Exception:
+        return 0
+
+    # Identify targets to close:
+    #   - type "other" (Edge internal pages: newtab, Copilot sidebar, etc.)
+    #   - type "page" with empty URL (prerendered/blank placeholder tabs)
+    ids_to_close = []
+    for t in targets:
+        ttype = t.get("type", "")
+        url = t.get("url", "")
+        if ttype == "other":
+            ids_to_close.append((t["id"], url or t.get("title", "?")))
+        elif ttype == "page" and not url:
+            ids_to_close.append((t["id"], "(blank page)"))
+
+    if not ids_to_close:
+        return 0
+
+    # Get browser-level WebSocket URL
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/json/version")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            info = json.loads(resp.read())
+        ws_path = info["webSocketDebuggerUrl"].replace(f"ws://127.0.0.1:{port}", "")
+    except Exception:
+        return 0
+
+    # Raw WebSocket connection to send Target.closeTarget commands
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        ws_key = _b64.b64encode(os.urandom(16)).decode()
+        handshake = (
+            f"GET {ws_path} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{port}\r\n"
+            f"Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {ws_key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        sock.sendall(handshake.encode())
+        resp_buf = b""
+        while b"\r\n\r\n" not in resp_buf:
+            resp_buf += sock.recv(4096)
+        if b"101" not in resp_buf:
+            sock.close()
+            return 0
+
+        closed = 0
+        for i, (tid, desc) in enumerate(ids_to_close):
+            payload = json.dumps({
+                "id": 9000 + i,
+                "method": "Target.closeTarget",
+                "params": {"targetId": tid},
+            }).encode()
+            mask_key = os.urandom(4)
+            frame = bytearray([0x81])
+            plen = len(payload)
+            frame.append(0x80 | (plen if plen < 126 else 126))
+            if plen >= 126:
+                frame.extend(plen.to_bytes(2, "big"))
+            frame.extend(mask_key)
+            frame.extend(bytearray(b ^ mask_key[j % 4] for j, b in enumerate(payload)))
+            sock.sendall(frame)
+
+            # Read response (best effort)
+            ready = _sel.select([sock], [], [], 2)
+            if ready[0]:
+                sock.recv(4096)
+                closed += 1
+                if logger:
+                    logger.debug(f"[CDP cleanup] Chiuso target: {desc}")
+
+        # WebSocket close frame
+        sock.sendall(bytearray([0x88, 0x80]) + os.urandom(4))
+        sock.close()
+
+        if closed and logger:
+            logger.info(
+                f"Pre-connessione: chiusi {closed} target CDP problematici "
+                f"(edge:// e pagine vuote)"
+            )
+        return closed
+
+    except Exception as e:
+        if logger:
+            logger.debug(f"[CDP cleanup] Errore: {e}")
+        return 0
+
+
 def _is_cdp_port_available(port: int) -> bool:
     """Check if a CDP endpoint is responding on 127.0.0.1:port via HTTP /json/version."""
     try:
@@ -810,9 +914,12 @@ class FSEBrowser:
 
     def _connect_cdp(self, endpoint: str, port: int) -> None:
         """Connect to a browser via CDP and set up context/page."""
+        # Pre-cleanup: close targets that cause Playwright to hang
+        _cleanup_cdp_targets(port, logger=self._logger)
+
         try:
             self._browser = self._playwright.chromium.connect_over_cdp(
-                endpoint, timeout=5000
+                endpoint, timeout=15000
             )
         except Exception as e:
             raise ConnectionError(
