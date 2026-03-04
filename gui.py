@@ -1834,6 +1834,8 @@ class SummaryDialog(QDialog):
         # Build summary text
         lines = []
         lines.append(f"Documenti scaricati: {summary.downloaded}")
+        if summary.duplicates > 0:
+            lines.append(f"Documenti duplicati (saltati): {summary.duplicates}")
         lines.append(f"Documenti saltati (filtro): {summary.skipped}")
         lines.append(f"Errori download: {summary.errors}")
         if summary.emails_found > 0:
@@ -5430,6 +5432,7 @@ class FSEApp(QMainWindow):
                 self._patient_summary = ProcessingSummary(
                     downloaded=downloaded,
                     skipped=skipped,
+                    duplicates=file_manager.duplicates_count,
                     errors=len(failures),
                     failures=failures,
                     report_path=report_path,

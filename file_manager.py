@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from datetime import datetime
@@ -22,6 +23,12 @@ class FileManager:
         self._config = config
         self._logger = logger
         self._mappings: list[dict] = []
+        self._hash_registry: dict[tuple, dict[str, str]] = {}
+        self._duplicates_count: int = 0
+
+    @property
+    def duplicates_count(self) -> int:
+        return self._duplicates_count
 
     @staticmethod
     def _tipologia_tag(tipologia: str) -> str:
@@ -51,6 +58,30 @@ class FileManager:
         fse_link: str,
         date_text: str = "",
     ) -> Path | None:
+        # ── Duplicate check via SHA-256 ──
+        try:
+            file_bytes = download_path.read_bytes()
+        except OSError:
+            file_bytes = None
+
+        file_hash = None
+        scope_key = None
+        if file_bytes is not None:
+            file_hash = hashlib.sha256(file_bytes).hexdigest()
+            tag = self._tipologia_tag(disciplina)
+            scope_key = (codice_fiscale.upper(), date_text.strip(), tag)
+            scope_hashes = self._hash_registry.setdefault(scope_key, {})
+
+            if file_hash in scope_hashes:
+                existing_name = scope_hashes[file_hash]
+                self._logger.info(
+                    f"Duplicato rilevato: {download_path.name} "
+                    f"(stesso contenuto di {existing_name}), saltato"
+                )
+                download_path.unlink(missing_ok=True)
+                self._duplicates_count += 1
+                return None
+
         new_name = self.build_filename(patient_name, codice_fiscale, disciplina)
         dest = self._config.download_dir / new_name
         dest = self._resolve_collision(dest)
@@ -58,6 +89,10 @@ class FileManager:
         try:
             download_path.rename(dest)
             self._logger.info(f"Rinominato: {download_path.name} -> {dest.name}")
+
+            # Register hash for future duplicate detection
+            if file_hash is not None and scope_key is not None:
+                self._hash_registry[scope_key][file_hash] = dest.name
             self._add_mapping(
                 original=download_path.name,
                 renamed=dest.name,
@@ -141,6 +176,9 @@ class FileManager:
                 lines.append(entry)
             lines.append("")
 
+        if self._duplicates_count > 0:
+            lines.append(f"--- DUPLICATI SALTATI: {self._duplicates_count} ---")
+            lines.append("")
         lines.append(f"--- TOTALE: {total} referti scaricati ---")
 
         report_name = f"referti {now.strftime('%Y%m%d')} {now.strftime('%H%M%S')}.txt"

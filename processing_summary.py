@@ -18,6 +18,7 @@ class ProcessingSummary:
     """Summary of a processing session."""
     downloaded: int = 0
     skipped: int = 0
+    duplicates: int = 0
     errors: int = 0
     emails_found: int = 0
     emails_processed: int = 0

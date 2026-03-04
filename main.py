@@ -269,6 +269,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
     return ProcessingSummary(
         downloaded=logger.documents_downloaded,
         skipped=logger.documents_skipped,
+        duplicates=file_manager.duplicates_count,
         errors=len(failures),
         emails_found=logger.emails_found,
         emails_processed=logger.emails_processed,
