@@ -900,6 +900,44 @@ class FSEBrowser:
                 continue
         return None
 
+    def check_headless_auth(self) -> bool:
+        """Check if a headless browser has an active SISS session.
+
+        Returns True if headless is OFF or a valid session exists.
+        Returns False if headless is ON and no session was found
+        (meaning the user cannot login because the window is invisible).
+        """
+        if not self._config.headless:
+            return True
+
+        # First check existing tabs for a valid session
+        if self._find_authenticated_siss_page():
+            self._logger.info(
+                "Headless: sessione SISS attiva trovata su tab esistente"
+            )
+            return True
+
+        # Navigate to FSE portal and check if cookies/session carry over
+        try:
+            page = self._page or (
+                self._context.pages[0] if self._context.pages else None
+            )
+            if page is None:
+                page = self._context.new_page()
+            page.goto(FSE_BASE_URL, wait_until="networkidle", timeout=15000)
+            if self._is_siss_authenticated(page):
+                self._logger.info(
+                    "Headless: sessione SISS attiva dopo navigazione FSE"
+                )
+                return True
+        except Exception as e:
+            self._logger.debug(f"Headless auth check fallito: {e}")
+
+        self._logger.warning(
+            "Headless attivo ma nessuna sessione SISS valida rilevata"
+        )
+        return False
+
     def _find_reusable_page(self) -> Page | None:
         """Find an existing blank/new-tab page to reuse instead of creating a new one.
 

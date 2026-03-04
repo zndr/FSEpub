@@ -2614,6 +2614,7 @@ class FSEApp(QMainWindow):
 
         If the browser is running without CDP, asks the user for consent
         to restart it. Raises the original exception if user declines.
+        After starting, checks headless+auth and blocks if no SISS session.
         """
         try:
             browser.start()
@@ -2624,6 +2625,46 @@ class FSEApp(QMainWindow):
                 )
             else:
                 raise InterruptedError("Connessione annullata dall'utente")
+
+        # Block headless mode if no active SISS session exists
+        if not browser.check_headless_auth():
+            self._show_headless_auth_warning()
+            browser.stop()
+            raise InterruptedError(
+                "Headless attivo senza sessione SISS: operazione annullata"
+            )
+
+    def _show_headless_auth_warning(self) -> None:
+        """Show a blocking warning about headless mode requiring SISS login.
+
+        Thread-safe: dispatches the dialog to the main thread and waits.
+        """
+        event = threading.Event()
+
+        def _show():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Accesso al SISS necessario",
+                "La modalita' headless (browser invisibile) e' attiva, "
+                "ma non risulti collegato al portale SISS.\n\n"
+                "Poiche' il browser e' nascosto, non e' possibile "
+                "visualizzare la pagina di accesso per effettuare il login.\n\n"
+                "Come procedere:\n"
+                "1. Vai nelle Impostazioni e disattiva l'opzione "
+                "'Headless browser'\n"
+                "2. Avvia il download: si aprira' il browser e potrai "
+                "effettuare l'accesso al SISS\n"
+                "3. Dopo aver effettuato l'accesso, puoi riattivare "
+                "'Headless browser': funzionera' finche' la sessione"
+                " SISS resta attiva (cioe' finche' non chiudi il browser "
+                "o la sessione non scade)\n\n"
+                "L'operazione verra' annullata.",
+            )
+            event.set()
+
+        self._bridge.call_on_main.emit(_show)
+        event.wait()
 
     def _ask_restart_browser(self, exc: BrowserCDPNotActive) -> bool:
         """Ask the user (on main thread) whether to restart the browser with CDP.
@@ -2638,11 +2679,12 @@ class FSEApp(QMainWindow):
             reply = QMessageBox.question(
                 self,
                 "Riavvio browser necessario",
-                "Il browser e' in esecuzione ma senza CDP attivo.\n"
-                "Per connettersi al FSE, il browser deve essere riavviato "
-                "con il supporto CDP.\n\n"
-                "ATTENZIONE: le tab aperte nel browser verranno chiuse.\n\n"
-                "Vuoi riavviare il browser ora?",
+                "Il browser e' aperto ma non e' pronto per collegarsi al FSE.\n"
+                "Per procedere, l'app deve chiudere e riaprire il browser "
+                "con le impostazioni corrette.\n\n"
+                "ATTENZIONE: le schede (tab) aperte nel browser "
+                "verranno chiuse.\n\n"
+                "Vuoi chiudere e riaprire il browser ora?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -4577,6 +4619,7 @@ class FSEApp(QMainWindow):
                 config, logger, self._stop_event,
                 allowed_types=allowed_types,
                 on_cdp_restart_needed=self._ask_restart_browser,
+                on_headless_no_auth=self._show_headless_auth_warning,
             )
         except Exception as e:
             self._bridge.append_text.emit(self._console, f"Errore fatale: {e}")
