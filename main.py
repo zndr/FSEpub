@@ -27,11 +27,15 @@ from text_processing import TextProcessor, ProcessingMode, LLMConfig
 
 def run_processing(config: Config, logger: ProcessingLogger, stop_event: threading.Event | None = None,
                     allowed_types: set[str] | None = None,
-                    on_cdp_restart_needed: callable = None) -> ProcessingSummary | None:
+                    on_cdp_restart_needed: callable = None,
+                    on_headless_no_auth: callable = None) -> ProcessingSummary | None:
     """Core processing logic, reusable from CLI and GUI.
 
     on_cdp_restart_needed: optional callback(BrowserCDPNotActive) -> bool.
         Called when browser needs restart for CDP. Return True to restart.
+    on_headless_no_auth: optional callback() -> None.
+        Called when headless is active but no SISS session exists.
+        Used by the GUI to show a blocking warning dialog.
     Returns ProcessingSummary with results, or None on early exit.
     """
 
@@ -109,6 +113,19 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
                 )
             else:
                 raise
+        # Block headless mode if no active SISS session exists
+        if not browser.check_headless_auth():
+            if on_headless_no_auth:
+                on_headless_no_auth()
+            else:
+                logger.error(
+                    "Headless attivo ma nessuna sessione SISS valida. "
+                    "Disattiva la modalita' headless o effettua prima il "
+                    "login con il browser visibile."
+                )
+            browser.stop()
+            email_client.disconnect()
+            return
         browser.wait_for_manual_login(stop_event=stop_event)
     except Exception as e:
         logger.error(f"Avvio browser fallito: {e}")
