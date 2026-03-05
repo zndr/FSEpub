@@ -1,8 +1,8 @@
 {
-    "Version": "2.4.5",
+    "Version": "2.4.6",
     "ReleaseNotes": "Fix CDP: auto-configurazione registro, riavvio con ripristino tab, timeout ridotto.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.5/FSE_Processor_Setup_2.4.5_QT6.exe",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.6/FSE_Processor_Setup_2.4.6_QT6.exe",
     "ReleaseDate": "2026-03-05",
-    "Sha256Hash": "6b4069118a7b693a031e1a761cd684549c01fdfb991a5c8c2e73f7fdf8518745",
-    "FileSize": 78319118
+    "Sha256Hash": "5a3d11b91116a71a505d5b1b3c70b0662f97bd339d44737709fae9b6102fd7d3",
+    "FileSize": 78321211
 }

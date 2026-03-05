@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.6] - 2026-03-05
+
+### Corretto
+
+- Conteggio email non letti nella status bar: ora conta solo le notifiche FSE (filtro FROM/SUBJECT server-side) e sottrae i referti gia' scaricati tramite tracking locale, evitando conteggi gonfiati che inducevano a download duplicati
+- Rilevamento sessione SISS via CDP: corretto errore "405 Method Not Allowed" con Edge/Chromium 120+ che richiede metodo PUT per l'endpoint /json/new (fallback GET per browser piu' vecchi)
+
 ## [2.4.0] - 2026-03-02
 
 ### Aggiunto
