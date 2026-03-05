@@ -1964,10 +1964,11 @@ def _count_unread_imap(
 ) -> int | None:
     """Count unread FSE-relevant IMAP messages. Returns None on error.
 
-    Uses server-side SEARCH with FROM/SUBJECT criteria to count only
-    FSE notification emails, then subtracts locally-tracked processed UIDs
-    to avoid counting already-downloaded reports.
+    Mirrors the same logic as EmailClient.fetch_unread_emails():
+    SEARCH UNSEEN (with ALL fallback), fetch headers, filter by
+    sender/subject client-side, and subtract locally-tracked UIDs.
     """
+    from email.header import decode_header as _decode_header
     from email_client import _load_processed_uids, _uid_key
 
     if not host or not user or not password:
@@ -1993,34 +1994,74 @@ def _count_unread_imap(
             try:
                 conn.select(folder, readonly=True)
 
-                # Search UNSEEN messages filtered by FSE sender and subject
-                status, data = conn.uid(
-                    "SEARCH", None,
-                    'UNSEEN FROM "crs lombardia" SUBJECT "nuovo documento per"',
-                )
+                # Search UNSEEN first, fallback to ALL + local filter
+                status, data = conn.uid("SEARCH", None, "UNSEEN")
+                use_local_filter = False
                 if status == "OK" and data[0]:
-                    uids = data[0].split()
-                    # Subtract locally-tracked processed UIDs
-                    unprocessed = [
-                        u for u in uids
+                    uid_list = data[0].split()
+                else:
+                    status, data = conn.uid("SEARCH", None, "ALL")
+                    if status != "OK" or not data[0]:
+                        continue
+                    uid_list = data[0].split()
+                    use_local_filter = True
+
+                if use_local_filter:
+                    uid_list = [
+                        u for u in uid_list
                         if _uid_key(folder, u.decode()) not in processed
                         and u.decode() not in processed
                     ]
-                    total += len(unprocessed)
-                else:
-                    # Fallback: UNSEEN returned nothing — check ALL with local filter
-                    status, data = conn.uid(
-                        "SEARCH", None,
-                        'FROM "crs lombardia" SUBJECT "nuovo documento per"',
-                    )
-                    if status == "OK" and data[0]:
-                        uids = data[0].split()
-                        unprocessed = [
-                            u for u in uids
-                            if _uid_key(folder, u.decode()) not in processed
-                            and u.decode() not in processed
-                        ]
-                        total += len(unprocessed)
+
+                if not uid_list:
+                    continue
+
+                # Fetch headers only (not full body) for each candidate
+                for uid_bytes in uid_list:
+                    uid = uid_bytes.decode()
+                    # Subtract locally-tracked UIDs
+                    if _uid_key(folder, uid) in processed or uid in processed:
+                        continue
+                    try:
+                        st, hdata = conn.uid(
+                            "FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])",
+                        )
+                        if st != "OK" or not hdata or hdata[0] is None:
+                            continue
+                        raw = hdata[0][1] if isinstance(hdata[0], tuple) else b""
+                        if not raw:
+                            continue
+                        header_text = raw.decode("utf-8", errors="replace")
+
+                        # Parse From and Subject from raw header
+                        from_val = ""
+                        subject_val = ""
+                        for line in header_text.splitlines():
+                            ll = line.lower()
+                            if ll.startswith("from:"):
+                                from_val = line[5:].strip()
+                            elif ll.startswith("subject:"):
+                                subject_val = line[8:].strip()
+
+                        # Decode MIME-encoded headers
+                        def _dec(raw_h: str) -> str:
+                            parts = _decode_header(raw_h)
+                            out = []
+                            for content, charset in parts:
+                                if isinstance(content, bytes):
+                                    out.append(content.decode(charset or "utf-8", errors="replace"))
+                                else:
+                                    out.append(content)
+                            return " ".join(out)
+
+                        from_decoded = _dec(from_val).lower()
+                        subject_decoded = _dec(subject_val).lower()
+
+                        if ("mail crs lombardia" in from_decoded
+                                and "nuovo documento per" in subject_decoded):
+                            total += 1
+                    except Exception:
+                        continue
             except Exception:
                 continue
         try:
@@ -2103,20 +2144,28 @@ def _check_siss_via_cdp(port: int) -> bool | str | None:
             except Exception:
                 pass
 
-        # Wait for the probe tab to navigate / redirect
-        time.sleep(4)
-
-        # Check the probe tab's final URL and title
-        req = urllib.request.Request(f"{base}/json/list")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            tabs_after = json.loads(resp.read())
-
+        # Poll the probe tab URL until it resolves (up to 10s, check every 0.5s)
         final_url = ""
         final_title = ""
-        for tab in tabs_after:
-            if tab.get("id") == probe_id:
-                final_url = tab.get("url", "").lower()
-                final_title = tab.get("title", "")
+        for _ in range(20):  # 20 × 0.5s = 10s max
+            time.sleep(0.5)
+            try:
+                req = urllib.request.Request(f"{base}/json/list")
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    tabs_now = json.loads(resp.read())
+                for tab in tabs_now:
+                    if tab.get("id") == probe_id:
+                        url = tab.get("url", "").lower()
+                        title = tab.get("title", "")
+                        # Still loading — keep polling
+                        if not url or url in ("", "about:blank", fse_url.lower()):
+                            break
+                        final_url = url
+                        final_title = title
+                        break
+            except Exception:
+                continue
+            if final_url:
                 break
 
         # Check for browser error page (network unreachable)
