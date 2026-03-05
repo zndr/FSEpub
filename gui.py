@@ -3004,8 +3004,8 @@ class FSEApp(QMainWindow):
                 "Il browser e' aperto ma non e' pronto per collegarsi al FSE.\n"
                 "Per procedere, l'app deve chiudere e riaprire il browser "
                 "con le impostazioni corrette.\n\n"
-                "ATTENZIONE: le schede (tab) aperte nel browser "
-                "verranno chiuse.\n\n"
+                "Le schede (tab) aperte verranno RIPRISTINATE\n"
+                "automaticamente dopo il riavvio.\n\n"
                 "Vuoi chiudere e riaprire il browser ora?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,

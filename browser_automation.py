@@ -533,12 +533,15 @@ def _kill_browser_processes(process_name: str, timeout: int = 10, logger=None) -
         logger.debug(f"_kill_browser_processes: timeout dopo {time.time()-t0:.1f}s")
 
 
-def _launch_browser_with_cdp(exe_path: str, port: int, logger=None) -> None:
+def _launch_browser_with_cdp(exe_path: str, port: int, restore_session: bool = False, logger=None) -> None:
     """Launch a browser with --remote-debugging-port as a detached process."""
     if logger:
-        logger.debug(f"_launch_browser_with_cdp({exe_path}, port={port})")
+        logger.debug(f"_launch_browser_with_cdp({exe_path}, port={port}, restore_session={restore_session})")
+    args = [exe_path, f"--remote-debugging-port={port}"]
+    if restore_session:
+        args.append("--restore-last-session")
     subprocess.Popen(
-        [exe_path, f"--remote-debugging-port={port}"],
+        args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
@@ -737,6 +740,20 @@ class FSEBrowser:
 
         self._logger.debug(f"[CDP] process_name={process_name}, exe_path={exe_path}, port={port}")
 
+        # 1b. Auto-enforce CDP in registry for future launches
+        #     Ensures every future browser start (from Millewin, shortcuts, links)
+        #     will have CDP active automatically.
+        if browser_info and browser_info.get("cdp_compatible", True):
+            progid = browser_info["progid"]
+            if not get_cdp_registry_status(progid, port):
+                try:
+                    enable_cdp_in_registry(progid, port)
+                    self._logger.info(
+                        f"[CDP] Flag CDP attivato automaticamente nel registro per {progid}"
+                    )
+                except Exception as e:
+                    self._logger.debug(f"[CDP] Impossibile attivare CDP nel registro: {e}")
+
         # 2. Check if browser process is running
         browser_running = (
             _is_browser_process_running(process_name, logger=self._logger)
@@ -814,6 +831,11 @@ class FSEBrowser:
             # has_flag is False or None — no CDP flag (or check failed).
             # Likely just background processes (crashpad, utility, GPU).
             # Try launching a new browser window with CDP enabled.
+            # Use a short timeout: if only background processes exist, CDP
+            # comes up in 2-3s. If a full browser window is open, the
+            # single-instance mechanism absorbs the launch and CDP never
+            # activates — no point waiting 20s.
+            QUICK_CDP_TIMEOUT = 5  # seconds (reduced from CDP_CONNECT_TIMEOUT=20)
             if exe_path and Path(exe_path).exists():
                 self._logger.info(
                     f"Nessun flag CDP nei processi {process_name}, "
@@ -822,7 +844,7 @@ class FSEBrowser:
                 _launch_browser_with_cdp(exe_path, port, logger=self._logger)
 
                 elapsed = 0.0
-                while elapsed < CDP_CONNECT_TIMEOUT:
+                while elapsed < QUICK_CDP_TIMEOUT:
                     try:
                         self._connect_cdp(endpoint, port)
                         self._logger.info(
@@ -833,14 +855,14 @@ class FSEBrowser:
                         time.sleep(CDP_CONNECT_POLL)
                         elapsed += CDP_CONNECT_POLL
 
-                # Launch absorbed by existing processes — need full restart
+                # Launch absorbed by existing browser window — need full restart
                 self._logger.warning(
-                    f"Lancio browser non ha attivato CDP sulla porta {port}"
+                    f"Lancio browser non ha attivato CDP sulla porta {port} "
+                    f"(timeout {QUICK_CDP_TIMEOUT}s)"
                 )
                 raise BrowserCDPNotActive(
-                    f"Non e' stato possibile attivare CDP sulla porta {port}.\n"
-                    f"I processi {process_name} in background impediscono l'avvio con CDP.\n"
-                    f"Vuoi riavviare il browser? Le tab aperte verranno chiuse.",
+                    f"Il browser e' aperto ma senza supporto CDP sulla porta {port}.\n"
+                    f"Per procedere e' necessario riavviare il browser.",
                     process_name=process_name,
                     exe_path=exe_path,
                     port=port,
@@ -889,10 +911,24 @@ class FSEBrowser:
         """Kill the browser and relaunch it with CDP, then connect.
 
         Should only be called after user consent (e.g. from GUI dialog).
+        Ensures CDP registry flag is applied before killing, and uses
+        --restore-last-session to preserve the user's open tabs.
         """
+        # Ensure CDP registry is applied BEFORE killing, so the restarted
+        # browser (and all future launches) will have CDP active.
+        browser_info = detect_default_browser()
+        if browser_info and browser_info.get("cdp_compatible", True):
+            try:
+                enable_cdp_in_registry(browser_info["progid"], port)
+                self._logger.debug(
+                    f"[CDP] Registro verificato/aggiornato prima del riavvio"
+                )
+            except Exception as e:
+                self._logger.debug(f"[CDP] Impossibile aggiornare registro: {e}")
+
         self._logger.info(f"Riavvio del browser con CDP (porta {port})...")
         _kill_browser_processes(process_name, logger=self._logger)
-        _launch_browser_with_cdp(exe_path, port, logger=self._logger)
+        _launch_browser_with_cdp(exe_path, port, restore_session=True, logger=self._logger)
 
         endpoint = f"http://127.0.0.1:{port}"
         elapsed = 0.0
