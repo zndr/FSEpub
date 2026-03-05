@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.7] - 2026-03-05
+
+### Corretto
+
+- Conteggio email non letti nella status bar: ora conta solo le notifiche FSE con fetch headers e filtro client-side (FROM/SUBJECT), allineato alla stessa logica di "Controlla Email" per eliminare mismatch tra status bar e pulsante
+- Rilevamento sessione SISS via CDP: corretto errore "405 Method Not Allowed" con Edge/Chromium 120+ (metodo PUT per /json/new, fallback GET per browser vecchi)
+- Timing probe SISS: sostituito sleep fisso di 4s con polling adattivo (0.5s intervalli, max 10s) che esce appena l'URL si risolve — piu' veloce (~3s) e piu' affidabile su connessioni lente
+
 ## [2.4.6] - 2026-03-05
 
 ### Corretto
