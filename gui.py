@@ -1962,7 +1962,14 @@ class DocumentListDialog(QDialog):
 def _count_unread_imap(
     host: str, port: int, user: str, password: str, use_ssl: bool, folders: list[str],
 ) -> int | None:
-    """Count unread IMAP messages without fetching them. Returns None on error."""
+    """Count unread FSE-relevant IMAP messages. Returns None on error.
+
+    Uses server-side SEARCH with FROM/SUBJECT criteria to count only
+    FSE notification emails, then subtracts locally-tracked processed UIDs
+    to avoid counting already-downloaded reports.
+    """
+    from email_client import _load_processed_uids, _uid_key
+
     if not host or not user or not password:
         return None
     try:
@@ -1978,13 +1985,42 @@ def _count_unread_imap(
         else:
             conn = imaplib.IMAP4(host, port)
         conn.login(user, password)
+
+        processed = _load_processed_uids()
         total = 0
+
         for folder in folders:
             try:
                 conn.select(folder, readonly=True)
-                status, data = conn.uid("SEARCH", None, "UNSEEN")
+
+                # Search UNSEEN messages filtered by FSE sender and subject
+                status, data = conn.uid(
+                    "SEARCH", None,
+                    'UNSEEN FROM "crs lombardia" SUBJECT "nuovo documento per"',
+                )
                 if status == "OK" and data[0]:
-                    total += len(data[0].split())
+                    uids = data[0].split()
+                    # Subtract locally-tracked processed UIDs
+                    unprocessed = [
+                        u for u in uids
+                        if _uid_key(folder, u.decode()) not in processed
+                        and u.decode() not in processed
+                    ]
+                    total += len(unprocessed)
+                else:
+                    # Fallback: UNSEEN returned nothing — check ALL with local filter
+                    status, data = conn.uid(
+                        "SEARCH", None,
+                        'FROM "crs lombardia" SUBJECT "nuovo documento per"',
+                    )
+                    if status == "OK" and data[0]:
+                        uids = data[0].split()
+                        unprocessed = [
+                            u for u in uids
+                            if _uid_key(folder, u.decode()) not in processed
+                            and u.decode() not in processed
+                        ]
+                        total += len(unprocessed)
             except Exception:
                 continue
         try:
