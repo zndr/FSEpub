@@ -2072,12 +2072,24 @@ def _check_siss_via_cdp(port: int) -> bool | str | None:
         pass
 
     # Open a temporary probe tab navigating to the SISS portal
+    # Newer Chromium/Edge versions require PUT for /json/new (GET returns 405)
     try:
-        req = urllib.request.Request(f"{base}/json/new?{fse_url}")
+        req = urllib.request.Request(f"{base}/json/new?{fse_url}", method="PUT")
         with urllib.request.urlopen(req, timeout=5) as resp:
             probe_tab = json.loads(resp.read())
         probe_id = probe_tab.get("id")
         if not probe_id:
+            return None
+    except urllib.error.HTTPError:
+        # Fallback to GET for older browser versions
+        try:
+            req = urllib.request.Request(f"{base}/json/new?{fse_url}")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                probe_tab = json.loads(resp.read())
+            probe_id = probe_tab.get("id")
+            if not probe_id:
+                return None
+        except Exception:
             return None
     except Exception:
         return None
