@@ -1897,6 +1897,7 @@ class DocumentListDialog(QDialog):
 
     def __init__(self, docs: list[PatientDocumentInfo],
                  allowed_types: set[str] | None = None,
+                 discipline_filter: str = "",
                  parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Seleziona referti da scaricare")
@@ -1918,18 +1919,26 @@ class DocumentListDialog(QDialog):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # List widget
+        disc_upper = discipline_filter.strip().upper()
+
+        # List widget — only show documents matching allowed types and discipline
         self._list = QListWidget()
-        self._docs = docs
+        self._docs = []
         for doc in docs:
-            text = f"{doc.date_text}  |  {doc.tipo_text}  |  {doc.ente_text}"
+            if allowed_types is not None and not _is_tipologia_valida(doc.tipo_text, allowed_types):
+                continue
+            # Discipline filter: exclude REFERTO SPECIALISTICO not matching
+            if disc_upper and doc.tipo_text.upper() == "REFERTO SPECIALISTICO":
+                if disc_upper not in doc.disciplina_text.upper():
+                    continue
+            self._docs.append(doc)
+            text = f"{doc.date_text}  |  {doc.tipo_text}"
+            if doc.disciplina_text:
+                text += f"  |  {doc.disciplina_text}"
+            text += f"  |  {doc.ente_text}"
             item = QListWidgetItem(text)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            # Pre-filter: uncheck documents not matching allowed types
-            if allowed_types is not None and not _is_tipologia_valida(doc.tipo_text, allowed_types):
-                item.setCheckState(Qt.CheckState.Unchecked)
-            else:
-                item.setCheckState(Qt.CheckState.Checked)
+            item.setCheckState(Qt.CheckState.Checked)
             self._list.addItem(item)
         layout.addWidget(self._list)
 
@@ -2856,6 +2865,36 @@ class FSEApp(QMainWindow):
             referto_list.addItem(item)
 
         referti_layout.addWidget(referto_list)
+
+        # Discipline filter (visible only when "Referto non specificato" is checked)
+        self._discipline_container = QWidget()
+        disc_layout = QHBoxLayout(self._discipline_container)
+        disc_layout.setContentsMargins(0, 2, 0, 2)
+        disc_layout.addWidget(QLabel("Disciplina:"))
+        self._discipline_combo = QComboBox()
+        self._discipline_combo.setEditable(True)
+        self._discipline_combo.addItem("Tutti")
+        self._discipline_combo.setToolTip("Filtra i referti specialistici per disciplina medica")
+        small_font = self._discipline_combo.font()
+        small_font.setPointSize(small_font.pointSize() - 1)
+        self._discipline_combo.setFont(small_font)
+        disc_layout.addWidget(self._discipline_combo, 1)
+        self._discipline_loading_label = QLabel("recupero info in corso...")
+        self._discipline_loading_label.setStyleSheet("color: #b0b0b0; font-style: italic;")
+        self._discipline_loading_label.setAlignment(Qt.AlignCenter)
+        self._discipline_loading_label.setVisible(False)
+        disc_layout.addWidget(self._discipline_loading_label, 1)
+        # Blink timer: toggle label visibility for flashing effect
+        self._discipline_blink_timer = QTimer(self)
+        self._discipline_blink_timer.setInterval(600)
+        self._discipline_blink_timer.timeout.connect(
+            lambda: self._discipline_loading_label.setVisible(
+                not self._discipline_loading_label.isVisible()
+            )
+        )
+        self._discipline_container.setVisible(False)
+        referti_layout.addWidget(self._discipline_container)
+
         sel_layout.addWidget(referti_group)
         sel_layout.addStretch(1)
 
@@ -2892,6 +2931,7 @@ class FSEApp(QMainWindow):
                 if not any_checked:
                     tutti_item.setCheckState(Qt.Checked)
             referto_list.blockSignals(False)
+            self._update_discipline_visibility()
 
         radio_tutti.toggled.connect(on_radio_toggled)
         referto_list.itemChanged.connect(on_list_item_changed)
@@ -3208,6 +3248,55 @@ class FSEApp(QMainWindow):
         idx = self._ente_combo.findText(current)
         if idx >= 0:
             self._ente_combo.setCurrentIndex(idx)
+
+    def _update_discipline_visibility(self) -> None:
+        """Show the discipline combobox only when 'Referto non specificato' is checked.
+
+        When the dropdown becomes visible and is still empty (only "Tutti"),
+        automatically triggers an ente+discipline scan if a valid CF is present.
+        """
+        lst = self._patient_referto_list
+        show = False
+        for i in range(lst.count()):
+            item = lst.item(i)
+            if item.data(Qt.UserRole) == "REFERTO SPECIALISTICO" and item.checkState() == Qt.Checked:
+                show = True
+                break
+        self._discipline_container.setVisible(show)
+
+        # Auto-trigger scan when dropdown appears empty and CF is valid
+        if show and self._discipline_combo.count() <= 1:
+            cf = self._cf_entry.text().strip().upper()
+            if re.match(r"^[A-Z0-9]{16}$", cf):
+                # Only if no other worker is running
+                scan_busy = self._ente_scan_worker and self._ente_scan_worker.is_alive()
+                dl_busy = self._patient_worker and self._patient_worker.is_alive()
+                list_busy = self._list_docs_worker and self._list_docs_worker.is_alive()
+                if not scan_busy and not dl_busy and not list_busy:
+                    self._show_discipline_loading(True)
+                    self._start_ente_scan()
+
+    def _show_discipline_loading(self, loading: bool) -> None:
+        """Toggle the discipline widget between loading label and combobox."""
+        if loading:
+            self._discipline_combo.setVisible(False)
+            self._discipline_loading_label.setVisible(True)
+            self._discipline_blink_timer.start()
+        else:
+            self._discipline_blink_timer.stop()
+            self._discipline_loading_label.setVisible(False)
+            self._discipline_combo.setVisible(True)
+
+    def _update_discipline_combobox(self, discipline: list[str]) -> None:
+        """Update the Disciplina combobox with values from the table."""
+        self._show_discipline_loading(False)
+        current = self._discipline_combo.currentText()
+        self._discipline_combo.clear()
+        self._discipline_combo.addItem("Tutti")
+        self._discipline_combo.addItems(discipline)
+        idx = self._discipline_combo.findText(current)
+        if idx >= 0:
+            self._discipline_combo.setCurrentIndex(idx)
 
     def _build_settings_tab(self, parent: QWidget) -> None:
         """Build the Settings tab with nested sub-tabs: Parametri + Processazione Testi."""
@@ -5148,7 +5237,7 @@ class FSEApp(QMainWindow):
             self._start_browser_safe(browser)
             browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
-            enti = browser.scan_patient_enti(codice_fiscale)
+            enti, discipline = browser.scan_patient_enti(codice_fiscale)
             if enti:
                 self._bridge.call_on_main.emit(lambda e=enti: self._update_ente_combobox(e))
                 self._bridge.append_text.emit(
@@ -5157,6 +5246,11 @@ class FSEApp(QMainWindow):
             else:
                 self._bridge.append_text.emit(
                     self._patient_console, "Nessuna struttura trovata"
+                )
+            if discipline:
+                self._bridge.call_on_main.emit(lambda d=discipline: self._update_discipline_combobox(d))
+                self._bridge.append_text.emit(
+                    self._patient_console, f"Trovate {len(discipline)} discipline specialistiche"
                 )
 
             # Save the browser for reuse by download worker.
@@ -5174,6 +5268,7 @@ class FSEApp(QMainWindow):
         if self._ente_scan_worker and self._ente_scan_worker.is_alive():
             return
         self._ente_scan_poll_timer.stop()
+        self._show_discipline_loading(False)
         self._btn_load_enti.setEnabled(True)
         self._btn_patient_start.setEnabled(True)
         self._btn_list_docs.setEnabled(True)
@@ -5248,10 +5343,14 @@ class FSEApp(QMainWindow):
             def on_enti_found(enti):
                 self._bridge.call_on_main.emit(lambda e=enti: self._update_ente_combobox(e))
 
+            def on_discipline_found(discipline):
+                self._bridge.call_on_main.emit(lambda d=discipline: self._update_discipline_combobox(d))
+
             docs = browser.list_patient_documents(
                 codice_fiscale,
                 stop_event=self._patient_stop_event,
                 on_enti_found=on_enti_found,
+                on_discipline_found=on_discipline_found,
             )
 
             # Save browser for reuse by download worker
@@ -5271,7 +5370,10 @@ class FSEApp(QMainWindow):
             return
 
         allowed_types = self._get_patient_selected_types()
-        dlg = DocumentListDialog(docs, allowed_types=allowed_types, parent=self)
+        disc_text = self._discipline_combo.currentText().strip()
+        discipline_filter = "" if disc_text in ("Tutti", "") else disc_text
+        dlg = DocumentListDialog(docs, allowed_types=allowed_types,
+                                 discipline_filter=discipline_filter, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._selected_row_indices = dlg.get_selected_row_indices()
             count = len(self._selected_row_indices)
@@ -5312,6 +5414,8 @@ class FSEApp(QMainWindow):
             return
 
         ente_filter = self._ente_combo.currentText().strip()
+        disc_text = self._discipline_combo.currentText().strip()
+        discipline_filter = "" if disc_text in ("Tutti", "") else disc_text
         date_from = self._parse_user_date(self._date_from_entry.text())
         date_to = self._parse_user_date(self._date_to_entry.text())
         row_indices = self._selected_row_indices
@@ -5326,7 +5430,7 @@ class FSEApp(QMainWindow):
 
         self._patient_worker = threading.Thread(
             target=self._patient_download_worker,
-            args=(cf, selected, ente_filter, date_from, date_to, row_indices),
+            args=(cf, selected, ente_filter, date_from, date_to, row_indices, discipline_filter),
             daemon=True,
         )
         self._patient_worker.start()
@@ -5351,7 +5455,8 @@ class FSEApp(QMainWindow):
                                  ente_filter: str = "",
                                  date_from: date | None = None,
                                  date_to: date | None = None,
-                                 selected_row_indices: set[int] | None = None) -> None:
+                                 selected_row_indices: set[int] | None = None,
+                                 discipline_filter: str = "") -> None:
         try:
             config = Config.load(ENV_FILE)
             logger = ProcessingLogger(config.log_dir)
@@ -5405,11 +5510,16 @@ class FSEApp(QMainWindow):
                 def on_enti_found(enti):
                     self._bridge.call_on_main.emit(lambda e=enti: self._update_ente_combobox(e))
 
+                def on_discipline_found(discipline):
+                    self._bridge.call_on_main.emit(lambda d=discipline: self._update_discipline_combobox(d))
+
                 doc_results = browser.process_patient_all_dates(
                     codice_fiscale, self._patient_stop_event, allowed_types,
                     ente_filter=ente_filter, date_from=date_from, date_to=date_to,
                     on_enti_found=on_enti_found,
                     selected_row_indices=selected_row_indices,
+                    discipline_filter=discipline_filter,
+                    on_discipline_found=on_discipline_found,
                 )
                 # Reset row selection after use
                 self._selected_row_indices = None

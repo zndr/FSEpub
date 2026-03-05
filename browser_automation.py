@@ -35,6 +35,21 @@ PROGID_TO_BROWSER: dict[str, tuple[str, str]] = {
 CDP_CONNECT_TIMEOUT = 20  # seconds to wait for CDP port to become available
 CDP_CONNECT_POLL = 0.5    # poll interval in seconds
 
+# Disciplines to exclude from the discipline filter — these overlap with
+# dedicated referto subtypes (Laboratorio, Radiologia, Anatomia Patologica, PS).
+_EXCLUDED_DISCIPLINES = {
+    "PRESTAZIONI DI LABORATORIO ANALISI CHIMICHE",
+    "RADIOLOGIA",
+    "PRONTO SOCCORSO",
+    "ANATOMIA PATOLOGICA",
+}
+
+
+def _is_discipline_excluded(disciplina: str) -> bool:
+    """Return True if the discipline should be excluded from the filter list."""
+    upper = disciplina.strip().upper()
+    return any(excl in upper for excl in _EXCLUDED_DISCIPLINES)
+
 
 def _is_tipologia_valida(tipologia: str, allowed_types: set[str] | None = None) -> bool:
     types = allowed_types if allowed_types is not None else DEFAULT_ALLOWED_TYPES
@@ -565,6 +580,7 @@ class PatientDocumentInfo:
     date_text: str
     tipo_text: str
     ente_text: str
+    disciplina_text: str = ""
 
 
 class FSEBrowser:
@@ -1943,8 +1959,12 @@ class FSEBrowser:
         # Wait for table to appear
         self._page.wait_for_selector("table tbody tr", state="attached")
 
-    def scan_patient_enti(self, codice_fiscale: str) -> list[str]:
-        """Navigate to the patient page and return sorted unique Ente values without downloading."""
+    def scan_patient_enti(self, codice_fiscale: str) -> tuple[list[str], list[str]]:
+        """Navigate to the patient page and return sorted unique Ente and Disciplina values.
+
+        Returns (enti, discipline) where discipline only includes values from
+        REFERTO SPECIALISTICO rows, excluding blacklisted disciplines.
+        """
         if not self._is_alive():
             self._restart()
 
@@ -1960,36 +1980,51 @@ class FSEBrowser:
         header_count = headers.count()
         header_texts = [headers.nth(j).inner_text().strip() for j in range(header_count)]
 
-        ente_col = None
+        ente_col = tipo_col = disc_col = None
         for idx, h in enumerate(header_texts):
             h_upper = h.upper()
             if "ENTE" in h_upper or "STRUTTURA" in h_upper:
                 ente_col = idx
-                break
+            elif "TIPOLOGIA" in h_upper:
+                tipo_col = idx
+            elif "DISCIPLINA" in h_upper:
+                disc_col = idx
 
         if ente_col is None:
             self._logger.warning(f"Colonna 'Ente/Struttura' non trovata: {header_texts}")
-            return []
+            return [], []
 
         data_rows = referti_table.locator("tbody tr:has(td)")
         row_count = data_rows.count()
         self._logger.info(f"Scansione enti: {row_count} righe trovate")
 
         ente_set: set[str] = set()
+        disc_set: set[str] = set()
         for i in range(row_count):
             cells = data_rows.nth(i).locator("td")
-            if cells.count() <= ente_col:
+            cell_count = cells.count()
+            if cell_count <= ente_col:
                 continue
             ente_text = cells.nth(ente_col).inner_text().strip()
             if ente_text:
                 ente_set.add(ente_text)
+            # Collect disciplines only from REFERTO SPECIALISTICO rows
+            if tipo_col is not None and disc_col is not None and cell_count > disc_col:
+                tipo_text = cells.nth(tipo_col).inner_text().strip()
+                if tipo_text.upper() == "REFERTO SPECIALISTICO":
+                    disc_text = cells.nth(disc_col).inner_text().strip()
+                    if disc_text and not _is_discipline_excluded(disc_text):
+                        disc_set.add(disc_text)
 
         self._logger.info(f"Enti trovati: {sorted(ente_set)}")
-        return sorted(ente_set)
+        if disc_set:
+            self._logger.info(f"Discipline trovate: {sorted(disc_set)}")
+        return sorted(ente_set), sorted(disc_set)
 
     def list_patient_documents(self, codice_fiscale: str,
                                stop_event: threading.Event | None = None,
-                               on_enti_found: callable | None = None) -> list[PatientDocumentInfo]:
+                               on_enti_found: callable | None = None,
+                               on_discipline_found: callable | None = None) -> list[PatientDocumentInfo]:
         """Navigate to the FSE and read the document table without downloading anything.
 
         Returns a list of PatientDocumentInfo for every row in the table.
@@ -2012,7 +2047,7 @@ class FSEBrowser:
         header_count = headers.count()
         header_texts = [headers.nth(j).inner_text().strip() for j in range(header_count)]
 
-        date_col = tipo_col = ente_col = None
+        date_col = tipo_col = ente_col = disc_col = None
         for idx, h in enumerate(header_texts):
             h_upper = h.upper()
             if "DATA" in h_upper and date_col is None:
@@ -2021,6 +2056,8 @@ class FSEBrowser:
                 tipo_col = idx
             elif "ENTE" in h_upper or "STRUTTURA" in h_upper:
                 ente_col = idx
+            elif "DISCIPLINA" in h_upper:
+                disc_col = idx
 
         if tipo_col is None:
             raise RuntimeError(f"Colonna 'Tipologia' non trovata nelle intestazioni: {header_texts}")
@@ -2031,6 +2068,7 @@ class FSEBrowser:
 
         docs: list[PatientDocumentInfo] = []
         ente_set: set[str] = set()
+        disc_set: set[str] = set()
         for i in range(row_count):
             cells = data_rows.nth(i).locator("td")
             cell_count = cells.count()
@@ -2039,12 +2077,18 @@ class FSEBrowser:
             date_text = cells.nth(date_col).inner_text().strip() if date_col is not None else ""
             tipo_text = cells.nth(tipo_col).inner_text().strip()
             ente_text = cells.nth(ente_col).inner_text().strip() if ente_col is not None else ""
-            docs.append(PatientDocumentInfo(row_index=i, date_text=date_text, tipo_text=tipo_text, ente_text=ente_text))
+            disc_text = cells.nth(disc_col).inner_text().strip() if disc_col is not None and cell_count > disc_col else ""
+            docs.append(PatientDocumentInfo(row_index=i, date_text=date_text, tipo_text=tipo_text,
+                                            ente_text=ente_text, disciplina_text=disc_text))
             if ente_text:
                 ente_set.add(ente_text)
+            if disc_text and tipo_text.upper() == "REFERTO SPECIALISTICO" and not _is_discipline_excluded(disc_text):
+                disc_set.add(disc_text)
 
         if on_enti_found and ente_set:
             on_enti_found(sorted(ente_set))
+        if on_discipline_found and disc_set:
+            on_discipline_found(sorted(disc_set))
 
         self._logger.info(f"Elencati {len(docs)} documenti")
         return docs
@@ -2056,7 +2100,9 @@ class FSEBrowser:
                                   date_from: date | None = None,
                                   date_to: date | None = None,
                                   on_enti_found: callable | None = None,
-                                  selected_row_indices: set[int] | None = None) -> list[DocumentResult]:
+                                  selected_row_indices: set[int] | None = None,
+                                  discipline_filter: str = "",
+                                  on_discipline_found: callable | None = None) -> list[DocumentResult]:
         """Download ALL documents (all dates) for a patient, filtered by allowed types, ente, and date range."""
         patient_name = codice_fiscale  # Use CF as label since we don't have name
 
@@ -2092,7 +2138,7 @@ class FSEBrowser:
             header_texts = [headers.nth(j).inner_text().strip() for j in range(header_count)]
             self._logger.info(f"Intestazioni tabella referti: {header_texts}")
 
-            date_col = tipo_col = ente_col = visualizza_col = None
+            date_col = tipo_col = ente_col = visualizza_col = disc_col = None
             for idx, h in enumerate(header_texts):
                 h_upper = h.upper()
                 if "DATA" in h_upper and date_col is None:
@@ -2103,6 +2149,8 @@ class FSEBrowser:
                     ente_col = idx
                 elif "VISUALIZZA" in h_upper:
                     visualizza_col = idx
+                elif "DISCIPLINA" in h_upper:
+                    disc_col = idx
 
             if tipo_col is None:
                 raise RuntimeError(f"Colonna 'Tipologia' non trovata nelle intestazioni: {header_texts}")
@@ -2114,10 +2162,11 @@ class FSEBrowser:
             if row_count == 0:
                 return results
 
-            # Phase 1: Scan all rows to extract data and collect unique enti
+            # Phase 1: Scan all rows to extract data and collect unique enti/discipline
             self._logger.start_progress(f"Analisi {row_count} righe della tabella")
-            row_info: list[tuple[int, str, str, str]] = []  # (index, date_text, tipo_text, ente_text)
+            row_info: list[tuple[int, str, str, str, str]] = []  # (index, date_text, tipo_text, ente_text, disc_text)
             ente_set: set[str] = set()
+            disc_set: set[str] = set()
             for i in range(row_count):
                 cells = data_rows.nth(i).locator("td")
                 cell_count = cells.count()
@@ -2126,21 +2175,27 @@ class FSEBrowser:
                 date_text = cells.nth(date_col).inner_text().strip() if date_col is not None else ""
                 tipo_text = cells.nth(tipo_col).inner_text().strip()
                 ente_text = cells.nth(ente_col).inner_text().strip() if ente_col is not None else ""
-                row_info.append((i, date_text, tipo_text, ente_text))
+                disc_text = cells.nth(disc_col).inner_text().strip() if disc_col is not None and cell_count > disc_col else ""
+                row_info.append((i, date_text, tipo_text, ente_text, disc_text))
                 if ente_text:
                     ente_set.add(ente_text)
+                if disc_text and tipo_text.upper() == "REFERTO SPECIALISTICO" and not _is_discipline_excluded(disc_text):
+                    disc_set.add(disc_text)
             self._logger.stop_progress()
 
-            # Notify callback with unique enti
+            # Notify callbacks with unique enti and discipline
             if on_enti_found and ente_set:
                 on_enti_found(sorted(ente_set))
+            if on_discipline_found and disc_set:
+                on_discipline_found(sorted(disc_set))
 
             # Phase 2: Filter and download
             ente_filter_upper = ente_filter.strip().upper()
+            disc_filter_upper = discipline_filter.strip().upper()
 
             # Pre-filter to identify matching rows and count
             rows_to_download: list[tuple[int, str, str, str]] = []
-            for i, date_text, tipo_text, ente_text in row_info:
+            for i, date_text, tipo_text, ente_text, disc_text in row_info:
                 if selected_row_indices is not None and i not in selected_row_indices:
                     results.append(DocumentResult(
                         disciplina=tipo_text, skipped=True, download_path=None, error=None,
@@ -2159,6 +2214,14 @@ class FSEBrowser:
                         date_text=date_text,
                     ))
                     continue
+                # Discipline filter: applies only to REFERTO SPECIALISTICO rows
+                if disc_filter_upper and tipo_text.upper() == "REFERTO SPECIALISTICO":
+                    if disc_filter_upper not in disc_text.upper():
+                        results.append(DocumentResult(
+                            disciplina=tipo_text, skipped=True, download_path=None, error=None,
+                            date_text=date_text,
+                        ))
+                        continue
                 if date_from or date_to:
                     parsed = _parse_table_date(date_text)
                     if parsed:
