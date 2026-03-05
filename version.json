@@ -1,8 +1,8 @@
 {
-    "Version": "2.4.7",
-    "ReleaseNotes": "Fix CDP: auto-configurazione registro, riavvio con ripristino tab, timeout ridotto.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.7/FSE_Processor_Setup_2.4.7_QT6.exe",
+    "Version": "2.4.9",
+    "ReleaseNotes": "Nuovo filtro per disciplina nei referti specialistici (tab Paziente).",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.9/FSE_Processor_Setup_2.4.9_QT6.exe",
     "ReleaseDate": "2026-03-05",
-    "Sha256Hash": "80392a051e5e9007f28012a44a0698f2b5f40a323371a72ead33aa49daa11989",
-    "FileSize": 78325795
+    "Sha256Hash": "0818d9566758c1688a19b16f3748eff4afd6b13e41baf8242df6e07817de1ebb",
+    "FileSize": 76819882
 }
