@@ -224,17 +224,24 @@ def _exe_from_command(cmd: str) -> str | None:
 
 
 def _read_original_open_command(progid: str) -> str | None:
-    """Read the original shell\\open\\command from HKCR (machine-level default)."""
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CLASSES_ROOT,
-            rf"{progid}\shell\open\command",
-        ) as key:
-            cmd, _ = winreg.QueryValueEx(key, "")
-            if isinstance(cmd, str):
-                return cmd
-    except OSError:
-        pass
+    """Read the original shell\\open\\command, preferring HKLM over HKCR.
+
+    HKCR is a merged view of HKLM + HKCU.  After enable_cdp_in_registry()
+    writes the HKCU override, HKCR returns the *modified* value — not the
+    original system command.  Reading HKLM first avoids this.
+    HKCR is kept as fallback for per-user browser installs that only register there.
+    """
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CLASSES_ROOT):
+        try:
+            subkey = (rf"SOFTWARE\Classes\{progid}\shell\open\command"
+                      if hive == winreg.HKEY_LOCAL_MACHINE
+                      else rf"{progid}\shell\open\command")
+            with winreg.OpenKey(hive, subkey) as key:
+                cmd, _ = winreg.QueryValueEx(key, "")
+                if isinstance(cmd, str) and cmd.strip():
+                    return cmd
+        except OSError:
+            continue
     return None
 
 
@@ -295,6 +302,34 @@ def enable_cdp_in_registry(progid: str, port: int) -> None:
     with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE) as key:
         winreg.SetValueEx(key, "", 0, winreg.REG_SZ, new_cmd)
 
+    # Verify write
+    _verify_cdp_registry_write(progid, port, new_cmd)
+
+
+def _verify_cdp_registry_write(progid: str, port: int, expected_cmd: str) -> None:
+    """Verify that the CDP flag was actually written to the registry.
+
+    Raises RuntimeError if the read-back does not contain the flag.
+    """
+    cdp_flag = f"--remote-debugging-port={port}"
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            rf"SOFTWARE\Classes\{progid}\shell\open\command",
+        ) as key:
+            actual, _ = winreg.QueryValueEx(key, "")
+            if not isinstance(actual, str) or cdp_flag not in actual:
+                raise RuntimeError(
+                    f"Verifica registro fallita: il flag CDP non risulta scritto.\n"
+                    f"Atteso: {expected_cmd}\n"
+                    f"Trovato: {actual}"
+                )
+    except OSError as e:
+        raise RuntimeError(
+            f"Verifica registro fallita: impossibile rileggere la chiave HKCU.\n"
+            f"Errore: {e}"
+        )
+
 
 def disable_cdp_in_registry(progid: str) -> None:
     """Remove the HKCU override, restoring the original HKCR command."""
@@ -321,6 +356,32 @@ def _delete_registry_tree(hive: int, subkey: str) -> None:
         winreg.DeleteKey(hive, subkey)
     except OSError:
         pass
+
+
+def _has_problematic_cdp_targets(port: int, logger=None) -> bool:
+    """Lightweight HTTP check for CDP targets that cause Playwright to hang.
+
+    Queries /json endpoint (no WebSocket, no side effects) to detect "other"
+    type targets (Edge newtab, Copilot sidebar) and blank pages that cause
+    connect_over_cdp to deadlock.  Returns True if cleanup is needed.
+    """
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/json")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            targets = json.loads(resp.read())
+    except Exception:
+        return False
+
+    for t in targets:
+        ttype = t.get("type", "")
+        url = t.get("url", "")
+        if ttype == "other" or (ttype == "page" and not url):
+            if logger:
+                logger.debug(
+                    f"[CDP] Target problematico rilevato: type={ttype} url={url!r}"
+                )
+            return True
+    return False
 
 
 def _cleanup_cdp_targets(port: int, logger=None) -> int:
@@ -410,8 +471,12 @@ def _cleanup_cdp_targets(port: int, logger=None) -> int:
                 if logger:
                     logger.debug(f"[CDP cleanup] Chiuso target: {desc}")
 
-        # WebSocket close frame
+        # WebSocket close frame (proper handshake: send close, read ack)
         sock.sendall(bytearray([0x88, 0x80]) + os.urandom(4))
+        try:
+            sock.recv(1024)  # Read server's close acknowledgment
+        except Exception:
+            pass
         sock.close()
 
         if closed and logger:
@@ -459,6 +524,30 @@ def _is_browser_process_running(process_name: str, logger=None) -> bool:
         return False
 
 
+def _find_powershell() -> str:
+    """Find powershell.exe, trying absolute paths if it's not in PATH."""
+    # Try PATH first
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "echo ok"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return "powershell"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Try well-known absolute paths
+    for candidate in (
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe",
+    ):
+        if Path(candidate).exists():
+            return candidate
+
+    return ""  # empty string → not found
+
+
 def _browser_has_cdp_flag(process_name: str, port: int, logger=None) -> bool | None:
     """Check if the running browser process was launched with --remote-debugging-port.
 
@@ -489,13 +578,20 @@ def _browser_has_cdp_flag(process_name: str, port: int, logger=None) -> bool | N
             logger.debug(f"_browser_has_cdp_flag: errore wmic ({e}), provo PowerShell")
 
     # Fallback to PowerShell Get-CimInstance
+    ps_exe = _find_powershell()
+    if not ps_exe:
+        if logger:
+            logger.debug("_browser_has_cdp_flag: PowerShell non trovato")
+        return None
+
     try:
         ps_cmd = (
             f"Get-CimInstance Win32_Process -Filter \"name='{process_name}'\" "
             f"| Select-Object -ExpandProperty CommandLine"
         )
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            [ps_exe, "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
             capture_output=True, text=True, timeout=10,
         )
         found = flag in result.stdout
@@ -503,6 +599,8 @@ def _browser_has_cdp_flag(process_name: str, port: int, logger=None) -> bool | N
             logger.debug(
                 f"_browser_has_cdp_flag({process_name}, {port}) [powershell]: {found}"
             )
+            if result.stderr.strip():
+                logger.debug(f"_browser_has_cdp_flag powershell stderr: {result.stderr.strip()[:200]}")
         return found
     except Exception as e:
         if logger:
@@ -581,6 +679,445 @@ class PatientDocumentInfo:
     tipo_text: str
     ente_text: str
     disciplina_text: str = ""
+
+
+def _read_hkcu_open_command(progid: str) -> str | None:
+    """Read shell\\open\\command specifically from HKCU (user override)."""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            rf"SOFTWARE\Classes\{progid}\shell\open\command",
+        ) as key:
+            cmd, _ = winreg.QueryValueEx(key, "")
+            return cmd if isinstance(cmd, str) else None
+    except OSError:
+        return None
+
+
+def _read_hklm_open_command(progid: str) -> str | None:
+    """Read shell\\open\\command specifically from HKLM (machine-level install)."""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            rf"SOFTWARE\Classes\{progid}\shell\open\command",
+        ) as key:
+            cmd, _ = winreg.QueryValueEx(key, "")
+            return cmd if isinstance(cmd, str) else None
+    except OSError:
+        return None
+
+
+def _get_browser_version(exe_path: str) -> str:
+    """Get the browser version from the exe via PowerShell Get-Item."""
+    if not exe_path or not Path(exe_path).exists():
+        return "(exe non trovato)"
+    ps_exe = _find_powershell()
+    if not ps_exe:
+        return "(PowerShell non disponibile)"
+    try:
+        result = subprocess.run(
+            [ps_exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+             "-Command", f"(Get-Item '{exe_path}').VersionInfo.ProductVersion"],
+            capture_output=True, text=True, timeout=10,
+        )
+        ver = result.stdout.strip()
+        return ver if ver else "(versione non disponibile)"
+    except Exception as e:
+        return f"(errore: {e})"
+
+
+def _test_playwright_connect(port: int) -> tuple[bool, str]:
+    """Test Playwright CDP connection and immediately close.
+
+    Returns (success: bool, detail: str).
+    """
+    try:
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{port}", timeout=10000
+            )
+            contexts = len(browser.contexts)
+            pages = sum(len(c.pages) for c in browser.contexts)
+            browser.close()
+            return True, f"{contexts} contesti, {pages} pagine"
+        except Exception as e:
+            return False, str(e)
+        finally:
+            pw.stop()
+    except Exception as e:
+        return False, f"Errore avvio Playwright: {e}"
+
+
+def run_cdp_diagnostics(port: int) -> str:
+    """Run comprehensive CDP diagnostics and return a copiable text report.
+
+    Sections:
+    1. Sistema (OS, arch, date)
+    2. Browser (ProgId, exe, version, CDP compatibility)
+    3. Registro (HKCU override, HKLM original, CDP flag)
+    4. Processo (running? CDP flag in command line?)
+    5. Porta CDP (responding? /json/version? targets)
+    6. Connessione Playwright (quick connect+close test)
+    7. Sessione SISS (probe via CDP)
+    """
+    lines = []
+    lines.append("=" * 60)
+    lines.append("  DIAGNOSTICA CDP — FSE Processor")
+    lines.append("=" * 60)
+
+    # ── 1. Sistema ──
+    lines.append("")
+    lines.append("── 1. SISTEMA ──")
+    lines.append(f"  Data/ora:      {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"  Windows:       {platform.platform()}")
+    lines.append(f"  Architettura:  {platform.machine()}")
+    lines.append(f"  Python:        {platform.python_version()}")
+    ps_exe = _find_powershell()
+    lines.append(f"  PowerShell:    {'[OK] ' + ps_exe if ps_exe else '[PROBLEMA] Non trovato'}")
+
+    # ── 2. Browser ──
+    lines.append("")
+    lines.append("── 2. BROWSER PREDEFINITO ──")
+    browser_info = detect_default_browser()
+    if browser_info:
+        progid = browser_info["progid"]
+        exe_path = browser_info.get("exe_path")
+        cdp_compat = browser_info.get("cdp_compatible", True)
+        lines.append(f"  ProgId:        {progid}")
+        lines.append(f"  Exe:           {exe_path or '(non trovato)'}")
+        lines.append(f"  CDP compat.:   {'[OK] Si' if cdp_compat else '[PROBLEMA] No (Legacy Edge?)'}")
+        if exe_path:
+            version = _get_browser_version(exe_path)
+            lines.append(f"  Versione:      {version}")
+            exe_exists = Path(exe_path).exists()
+            lines.append(f"  Exe esiste:    {'[OK] Si' if exe_exists else '[PROBLEMA] No'}")
+        else:
+            lines.append(f"  Versione:      (exe non disponibile)")
+    else:
+        progid = None
+        exe_path = None
+        lines.append("  [PROBLEMA] Browser predefinito non rilevato")
+
+    # ── 3. Registro ──
+    lines.append("")
+    lines.append("── 3. REGISTRO WINDOWS ──")
+    if progid:
+        hklm_cmd = _read_hklm_open_command(progid)
+        hkcu_cmd = _read_hkcu_open_command(progid)
+        cdp_flag = f"--remote-debugging-port={port}"
+
+        lines.append(f"  HKLM original: {hklm_cmd or '(non presente)'}")
+        lines.append(f"  HKCU override: {hkcu_cmd or '(non presente)'}")
+
+        if hkcu_cmd:
+            has_cdp_in_hkcu = cdp_flag in hkcu_cmd
+            lines.append(f"  Flag CDP HKCU: {'[OK] Presente' if has_cdp_in_hkcu else '[PROBLEMA] Assente'}")
+        else:
+            lines.append(f"  Flag CDP HKCU: [INFO] Nessun override HKCU")
+
+        if hklm_cmd and cdp_flag in hklm_cmd:
+            lines.append(f"  [INFO] Flag CDP presente anche in HKLM (insolito)")
+
+        # Check if HKCR returns the HKCU value (merged view)
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CLASSES_ROOT,
+                rf"{progid}\shell\open\command",
+            ) as key:
+                hkcr_cmd, _ = winreg.QueryValueEx(key, "")
+                if isinstance(hkcr_cmd, str):
+                    lines.append(f"  HKCR (merged): {hkcr_cmd}")
+        except OSError:
+            lines.append(f"  HKCR (merged): (non leggibile)")
+    else:
+        lines.append("  (nessun ProgId da verificare)")
+
+    # ── 4. Processo ──
+    lines.append("")
+    lines.append("── 4. PROCESSO BROWSER ──")
+    process_name = browser_info["process_name"] if browser_info else None
+    if process_name:
+        running = _is_browser_process_running(process_name)
+        lines.append(f"  {process_name}: {'[OK] In esecuzione' if running else '[INFO] Non in esecuzione'}")
+        if running:
+            has_flag = _browser_has_cdp_flag(process_name, port)
+            if has_flag is True:
+                lines.append(f"  Flag CDP processo: [OK] Presente")
+            elif has_flag is False:
+                lines.append(f"  Flag CDP processo: [PROBLEMA] Assente — browser avviato senza CDP")
+            else:
+                lines.append(f"  Flag CDP processo: [PROBLEMA] Verifica fallita (WMIC/PS non disponibili)")
+
+            # Log raw command lines
+            try:
+                result = subprocess.run(
+                    ["wmic", "process", "where", f"name='{process_name}'",
+                     "get", "CommandLine", "/FORMAT:LIST"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                cmdlines = [l.strip() for l in result.stdout.splitlines()
+                            if l.strip() and l.strip().startswith("CommandLine=")]
+                for cl in cmdlines[:5]:
+                    lines.append(f"    {cl[:200]}")
+            except Exception:
+                lines.append("    (impossibile leggere command line)")
+    else:
+        lines.append("  (nessun processo da verificare)")
+
+    # ── 5. Porta CDP ──
+    lines.append("")
+    lines.append(f"── 5. PORTA CDP ({port}) ──")
+    port_active = _is_cdp_port_available(port)
+    lines.append(f"  Porta attiva:  {'[OK] Si' if port_active else '[INFO] No'}")
+
+    if port_active:
+        # /json/version
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/json/version")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                version_info = json.loads(resp.read())
+            lines.append(f"  Browser:       {version_info.get('Browser', '?')}")
+            lines.append(f"  Protocol:      {version_info.get('Protocol-Version', '?')}")
+            lines.append(f"  User-Agent:    {version_info.get('User-Agent', '?')[:80]}")
+            lines.append(f"  WebSocket URL: {version_info.get('webSocketDebuggerUrl', '?')}")
+        except Exception as e:
+            lines.append(f"  /json/version: [PROBLEMA] {e}")
+
+        # /json targets list
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/json")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                targets = json.loads(resp.read())
+            lines.append(f"  Target totali: {len(targets)}")
+            for i, t in enumerate(targets[:10]):
+                ttype = t.get("type", "?")
+                url = t.get("url", "")[:80]
+                title = t.get("title", "")[:40]
+                lines.append(f"    [{i}] {ttype}: {title} — {url}")
+            if len(targets) > 10:
+                lines.append(f"    ... e altri {len(targets) - 10} target")
+        except Exception as e:
+            lines.append(f"  /json (targets): [PROBLEMA] {e}")
+    else:
+        lines.append("  (porta non attiva — sezioni 6 e 7 potrebbero fallire)")
+
+    # ── 6. Connessione Playwright ──
+    lines.append("")
+    lines.append("── 6. CONNESSIONE PLAYWRIGHT ──")
+    if port_active:
+        pw_ok, pw_detail = _test_playwright_connect(port)
+        if pw_ok:
+            lines.append(f"  [OK] Connessione riuscita: {pw_detail}")
+        else:
+            lines.append(f"  [PROBLEMA] Connessione fallita: {pw_detail}")
+    else:
+        lines.append("  [INFO] Saltata (porta CDP non attiva)")
+
+    # ── 7. Sessione SISS ──
+    lines.append("")
+    lines.append("── 7. SESSIONE SISS ──")
+    if port_active:
+        siss_result = _check_siss_via_cdp(port)
+        if siss_result is True:
+            lines.append("  [OK] Sessione SISS attiva")
+        elif siss_result is False:
+            lines.append("  [INFO] Nessuna sessione SISS (redirect a SSO login)")
+        elif siss_result == _SISS_UNREACHABLE:
+            lines.append("  [PROBLEMA] Portale SISS non raggiungibile")
+        else:
+            lines.append("  [PROBLEMA] CDP non disponibile per il probe")
+    else:
+        lines.append("  [INFO] Saltata (porta CDP non attiva)")
+
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("  Fine diagnostica")
+    lines.append("=" * 60)
+
+    return "\n".join(lines)
+
+
+_SISS_UNREACHABLE = "unreachable"  # sentinel for portal unreachable
+
+
+def _create_background_tab(port: int, url: str, ws_url: str) -> str | None:
+    """Create a browser tab in the background via CDP WebSocket.
+
+    Uses Target.createTarget with background:true to avoid bringing the
+    browser window to the foreground.  Returns the targetId or None on failure.
+    """
+    import base64 as _b64
+    import select as _sel
+
+    if not ws_url:
+        return None
+
+    ws_path = ws_url.replace(f"ws://127.0.0.1:{port}", "")
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        ws_key = _b64.b64encode(os.urandom(16)).decode()
+        handshake = (
+            f"GET {ws_path} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{port}\r\n"
+            f"Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {ws_key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        sock.sendall(handshake.encode())
+        resp_buf = b""
+        while b"\r\n\r\n" not in resp_buf:
+            resp_buf += sock.recv(4096)
+        if b"101" not in resp_buf:
+            sock.close()
+            return None
+
+        # Send Target.createTarget with background: true
+        payload = json.dumps({
+            "id": 1,
+            "method": "Target.createTarget",
+            "params": {"url": url, "background": True},
+        }).encode()
+        mask_key = os.urandom(4)
+        frame = bytearray([0x81])
+        plen = len(payload)
+        frame.append(0x80 | (plen if plen < 126 else 126))
+        if plen >= 126:
+            frame.extend(plen.to_bytes(2, "big"))
+        frame.extend(mask_key)
+        frame.extend(bytearray(b ^ mask_key[j % 4] for j, b in enumerate(payload)))
+        sock.sendall(frame)
+
+        # Read response to get targetId
+        target_id = None
+        ready = _sel.select([sock], [], [], 5)
+        if ready[0]:
+            data = sock.recv(8192)
+            # Skip WebSocket frame header to get JSON payload
+            if len(data) > 2:
+                offset = 2
+                plen_byte = data[1] & 0x7F
+                if plen_byte == 126:
+                    offset = 4
+                elif plen_byte == 127:
+                    offset = 10
+                try:
+                    resp = json.loads(data[offset:])
+                    target_id = resp.get("result", {}).get("targetId")
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass
+
+        # Close WebSocket cleanly
+        sock.sendall(bytearray([0x88, 0x80]) + os.urandom(4))
+        try:
+            sock.recv(1024)
+        except Exception:
+            pass
+        sock.close()
+        return target_id
+    except Exception:
+        return None
+
+
+def _create_tab_via_http(base: str, url: str) -> str | None:
+    """Fallback: create a tab via HTTP /json/new (may bring browser to foreground)."""
+    try:
+        req = urllib.request.Request(f"{base}/json/new?{url}", method="PUT")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            tab = json.loads(resp.read())
+        return tab.get("id")
+    except urllib.error.HTTPError:
+        try:
+            req = urllib.request.Request(f"{base}/json/new?{url}")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                tab = json.loads(resp.read())
+            return tab.get("id")
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def _check_siss_via_cdp(port: int) -> bool | str | None:
+    """Check SISS session by opening a probe tab via CDP.
+
+    Opens a temporary browser tab to the SISS portal, waits for the server
+    to respond (redirect to SSO login = no session, stay on portal = active),
+    checks the final URL and title, and closes the tab.
+
+    Returns:
+        True   – session is active
+        False  – no active session (redirected to SSO login)
+        _SISS_UNREACHABLE – SISS portal is unreachable (network error page)
+        None   – CDP not available
+    """
+    base = f"http://127.0.0.1:{port}"
+    fse_url = "https://operatorisiss.servizirl.it/opefseie/"
+
+    # Quick check: is CDP available at all?  Get WebSocket URL at the same time.
+    try:
+        req = urllib.request.Request(f"{base}/json/version")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status != 200:
+                return None
+            version_info = json.loads(resp.read())
+        ws_url = version_info.get("webSocketDebuggerUrl", "")
+    except Exception:
+        return None
+
+    # Open a temporary probe tab in BACKGROUND via CDP WebSocket.
+    # Using Target.createTarget with background:true avoids bringing
+    # the browser window to the foreground (unlike /json/new).
+    probe_id = _create_background_tab(port, fse_url, ws_url)
+    if not probe_id:
+        # Fallback to HTTP /json/new if WebSocket approach fails
+        probe_id = _create_tab_via_http(base, fse_url)
+    if not probe_id:
+        return None
+
+    try:
+        # Poll the probe tab URL until it resolves (up to 10s, check every 0.5s)
+        final_url = ""
+        final_title = ""
+        for _ in range(20):  # 20 × 0.5s = 10s max
+            time.sleep(0.5)
+            try:
+                req = urllib.request.Request(f"{base}/json/list")
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    tabs_now = json.loads(resp.read())
+                for tab in tabs_now:
+                    if tab.get("id") == probe_id:
+                        url = tab.get("url", "").lower()
+                        title = tab.get("title", "")
+                        # Still loading — keep polling
+                        if not url or url in ("", "about:blank", fse_url.lower()):
+                            break
+                        final_url = url
+                        final_title = title
+                        break
+            except Exception:
+                continue
+            if final_url:
+                break
+
+        # Check for browser error page (network unreachable)
+        if "impossibile raggiungere" in final_title.lower():
+            return _SISS_UNREACHABLE
+
+        # Redirected to SSO login → no active session
+        if "idpcrlmain" in final_url or "ssoauth" in final_url:
+            return False
+        # Stayed on SISS portal → session is active
+        if "operatorisiss" in final_url or "servizirl" in final_url:
+            return True
+        return False
+    finally:
+        # Always close the probe tab
+        try:
+            req = urllib.request.Request(f"{base}/json/close/{probe_id}")
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass
 
 
 class FSEBrowser:
@@ -845,7 +1382,35 @@ class FSEBrowser:
                 )
 
             # has_flag is False or None — no CDP flag (or check failed).
-            # Likely just background processes (crashpad, utility, GPU).
+            # Likely the browser was started from a shortcut, Start Menu or
+            # another app (e.g. Millewin) BEFORE the registry override was in
+            # place, so it's running without --remote-debugging-port.
+            if has_flag is None:
+                self._logger.warning(
+                    f"[CDP] Impossibile verificare i flag del processo {process_name} "
+                    f"(WMIC e PowerShell entrambi falliti). "
+                    f"Il browser potrebbe avere CDP ma non e' verificabile."
+                )
+            else:
+                self._logger.info(
+                    f"[CDP] Il browser {process_name} e' in esecuzione SENZA flag CDP. "
+                    f"Causa probabile: avviato da scorciatoia/Start Menu/altro programma "
+                    f"prima che il registro fosse aggiornato con --remote-debugging-port={port}."
+                )
+                # Log raw WMIC/PowerShell output for remote debugging
+                try:
+                    wmic_result = subprocess.run(
+                        ["wmic", "process", "where", f"name='{process_name}'",
+                         "get", "CommandLine", "/FORMAT:LIST"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    cmdlines = [l.strip() for l in wmic_result.stdout.splitlines() if l.strip()]
+                    self._logger.debug(
+                        f"[CDP] CommandLine raw dal processo: {cmdlines[:5]}"
+                    )
+                except Exception:
+                    pass
+
             # Try launching a new browser window with CDP enabled.
             # Use a short timeout: if only background processes exist, CDP
             # comes up in 2-3s. If a full browser window is open, the
@@ -877,8 +1442,12 @@ class FSEBrowser:
                     f"(timeout {QUICK_CDP_TIMEOUT}s)"
                 )
                 raise BrowserCDPNotActive(
-                    f"Il browser e' aperto ma senza supporto CDP sulla porta {port}.\n"
-                    f"Per procedere e' necessario riavviare il browser.",
+                    f"Il browser e' aperto ma senza supporto CDP sulla porta {port}.\n\n"
+                    f"Causa probabile: il browser e' stato avviato tramite scorciatoia, "
+                    f"Start Menu o un altro programma (es. Millewin) PRIMA che il "
+                    f"registro venisse configurato per CDP.\n\n"
+                    f"Soluzione: riavviare il browser per applicare la configurazione CDP.\n"
+                    f"Le tab aperte verranno ripristinate automaticamente.",
                     process_name=process_name,
                     exe_path=exe_path,
                     port=port,
@@ -966,8 +1535,16 @@ class FSEBrowser:
 
     def _connect_cdp(self, endpoint: str, port: int) -> None:
         """Connect to a browser via CDP and set up context/page."""
-        # Pre-cleanup: close targets that cause Playwright to hang
-        _cleanup_cdp_targets(port, logger=self._logger)
+        # Pre-check: look for problematic targets via lightweight HTTP call.
+        # Only run the heavy WebSocket cleanup if "other" or blank targets exist.
+        # This avoids destabilizing browsers that don't need cleanup (most machines),
+        # while still fixing the Playwright hang on machines with Edge Copilot/newtab
+        # "other" targets (where connect_over_cdp deadlocks ignoring its timeout).
+        needs_cleanup = _has_problematic_cdp_targets(port, logger=self._logger)
+        if needs_cleanup:
+            closed = _cleanup_cdp_targets(port, logger=self._logger)
+            if closed > 0:
+                time.sleep(1.5)  # Edge needs time to stabilize after target closures
 
         try:
             self._browser = self._playwright.chromium.connect_over_cdp(

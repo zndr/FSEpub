@@ -67,10 +67,13 @@ from browser_automation import (
     BrowserCDPNotActive,
     PatientDocumentInfo,
     _is_tipologia_valida,
+    _check_siss_via_cdp,
+    _SISS_UNREACHABLE,
     detect_default_browser,
     get_cdp_registry_status,
     enable_cdp_in_registry,
     disable_cdp_in_registry,
+    run_cdp_diagnostics,
 )
 from config import Config
 from email_client import EmailClient
@@ -1892,6 +1895,41 @@ class SummaryDialog(QDialog):
         QApplication.clipboard().setText(self._text)
 
 
+class CDPDiagnosticsDialog(QDialog):
+    """Modal dialog showing CDP diagnostic report."""
+
+    def __init__(self, report_text: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Diagnostica CDP")
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(500)
+
+        layout = QVBoxLayout(self)
+
+        self._text = report_text
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setFont(QFont("Consolas", 9))
+        text_edit.setPlainText(report_text)
+        layout.addWidget(text_edit)
+
+        btn_layout = QHBoxLayout()
+        btn_copy = QPushButton("Copia")
+        btn_copy.setIcon(qta.icon("fa5s.copy", color="white"))
+        btn_copy.clicked.connect(self._copy_to_clipboard)
+        btn_layout.addWidget(btn_copy)
+        btn_layout.addStretch()
+        btn_close = QPushButton("Chiudi")
+        btn_close.setIcon(qta.icon("fa5s.times", color="white"))
+        btn_close.clicked.connect(self.accept)
+        btn_close.setDefault(True)
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+
+    def _copy_to_clipboard(self) -> None:
+        QApplication.clipboard().setText(self._text)
+
+
 class DocumentListDialog(QDialog):
     """Modal dialog showing a list of patient documents with checkboxes."""
 
@@ -2080,121 +2118,6 @@ def _count_unread_imap(
         return total
     except Exception:
         return None
-
-
-_SISS_UNREACHABLE = "unreachable"  # sentinel for portal unreachable
-
-
-def _check_siss_via_cdp(port: int) -> bool | str | None:
-    """Check SISS session by opening a probe tab via CDP.
-
-    Opens a temporary browser tab to the SISS portal, waits for the server
-    to respond (redirect to SSO login = no session, stay on portal = active),
-    checks the final URL and title, and closes the tab.
-
-    Returns:
-        True   – session is active
-        False  – no active session (redirected to SSO login)
-        _SISS_UNREACHABLE – SISS portal is unreachable (network error page)
-        None   – CDP not available
-    """
-    base = f"http://127.0.0.1:{port}"
-    fse_url = "https://operatorisiss.servizirl.it/opefseie/"
-
-    # Quick check: is CDP available at all?
-    try:
-        req = urllib.request.Request(f"{base}/json/version")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            if resp.status != 200:
-                return None
-    except Exception:
-        return None
-
-    # Remember the currently active tab to re-activate it later
-    active_tab_id = None
-    try:
-        req = urllib.request.Request(f"{base}/json/list")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            tabs_before = json.loads(resp.read())
-        if tabs_before:
-            active_tab_id = tabs_before[0].get("id")
-    except Exception:
-        pass
-
-    # Open a temporary probe tab navigating to the SISS portal
-    # Newer Chromium/Edge versions require PUT for /json/new (GET returns 405)
-    try:
-        req = urllib.request.Request(f"{base}/json/new?{fse_url}", method="PUT")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            probe_tab = json.loads(resp.read())
-        probe_id = probe_tab.get("id")
-        if not probe_id:
-            return None
-    except urllib.error.HTTPError:
-        # Fallback to GET for older browser versions
-        try:
-            req = urllib.request.Request(f"{base}/json/new?{fse_url}")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                probe_tab = json.loads(resp.read())
-            probe_id = probe_tab.get("id")
-            if not probe_id:
-                return None
-        except Exception:
-            return None
-    except Exception:
-        return None
-
-    try:
-        # Re-activate the original tab so the probe stays in background
-        if active_tab_id:
-            try:
-                req = urllib.request.Request(f"{base}/json/activate/{active_tab_id}")
-                urllib.request.urlopen(req, timeout=2)
-            except Exception:
-                pass
-
-        # Poll the probe tab URL until it resolves (up to 10s, check every 0.5s)
-        final_url = ""
-        final_title = ""
-        for _ in range(20):  # 20 × 0.5s = 10s max
-            time.sleep(0.5)
-            try:
-                req = urllib.request.Request(f"{base}/json/list")
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    tabs_now = json.loads(resp.read())
-                for tab in tabs_now:
-                    if tab.get("id") == probe_id:
-                        url = tab.get("url", "").lower()
-                        title = tab.get("title", "")
-                        # Still loading — keep polling
-                        if not url or url in ("", "about:blank", fse_url.lower()):
-                            break
-                        final_url = url
-                        final_title = title
-                        break
-            except Exception:
-                continue
-            if final_url:
-                break
-
-        # Check for browser error page (network unreachable)
-        if "impossibile raggiungere" in final_title.lower():
-            return _SISS_UNREACHABLE
-
-        # Redirected to SSO login → no active session
-        if "idpcrlmain" in final_url or "ssoauth" in final_url:
-            return False
-        # Stayed on SISS portal → session is active
-        if "operatorisiss" in final_url or "servizirl" in final_url:
-            return True
-        return False
-    finally:
-        # Always close the probe tab
-        try:
-            req = urllib.request.Request(f"{base}/json/close/{probe_id}")
-            urllib.request.urlopen(req, timeout=3)
-        except Exception:
-            pass
 
 
 class FSEApp(QMainWindow):
@@ -3479,6 +3402,15 @@ class FSEApp(QMainWindow):
         br_layout.addWidget(self._headless_cb, r, 2)
         self._fields["HEADLESS"] = spec["HEADLESS"][1]
 
+        r += 1
+        self._cdp_diag_btn = QPushButton("  Diagnostica CDP")
+        self._cdp_diag_btn.setIcon(qta.icon("fa5s.stethoscope", color="white"))
+        self._cdp_diag_btn.setToolTip(
+            "Esegui un test completo della connessione CDP e genera un report diagnostico"
+        )
+        self._cdp_diag_btn.clicked.connect(self._run_cdp_diagnostics_action)
+        br_layout.addWidget(self._cdp_diag_btn, r, 0, 1, 3)
+
         top_layout.addWidget(br_group)
         layout.addLayout(top_layout)
 
@@ -3875,6 +3807,31 @@ class FSEApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Impossibile modificare il registro:\n{e}")
             self._sync_cdp_registry_checkbox()
+
+    def _run_cdp_diagnostics_action(self) -> None:
+        """Run CDP diagnostics in a background thread."""
+        self._cdp_diag_btn.setEnabled(False)
+        self._cdp_diag_btn.setText("  Analisi in corso...")
+
+        port = int(self._fields.get("CDP_PORT", "9222") or "9222")
+
+        def _worker():
+            try:
+                result = run_cdp_diagnostics(port)
+            except Exception as e:
+                result = f"Errore durante la diagnostica:\n{e}"
+            # Schedule GUI update on main thread via signal (safe from bg thread)
+            self._sig_call.emit(lambda: self._show_cdp_diagnostics_result(result))
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+    def _show_cdp_diagnostics_result(self, report: str) -> None:
+        """Show the diagnostics report in a dialog (called on main thread)."""
+        self._cdp_diag_btn.setEnabled(True)
+        self._cdp_diag_btn.setText("  Diagnostica CDP")
+        dlg = CDPDiagnosticsDialog(report, parent=self)
+        dlg.exec()
 
     def _rebuild_pdf_combo_values(self, extra_exe: str | None = None) -> None:
         """Rebuild the combobox value maps from scratch."""

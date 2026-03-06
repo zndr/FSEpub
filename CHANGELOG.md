@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.11] - 2026-03-06
+
+- TODO: aggiungere note di rilascio
+
+
+## [2.4.10] - 2026-03-05
+
+- TODO: aggiungere note di rilascio
+
+
 ## [2.4.7] - 2026-03-05
 
 ### Corretto

@@ -1,8 +1,8 @@
 {
-    "Version": "2.4.9",
-    "ReleaseNotes": "Nuovo filtro per disciplina nei referti specialistici (tab Paziente).",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.9/FSE_Processor_Setup_2.4.9_QT6.exe",
-    "ReleaseDate": "2026-03-05",
-    "Sha256Hash": "0818d9566758c1688a19b16f3748eff4afd6b13e41baf8242df6e07817de1ebb",
-    "FileSize": 76819882
+    "Version": "2.4.15",
+    "ReleaseNotes": "",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.10/FSE_Processor_Setup_2.4.10_QT6.exe",
+    "ReleaseDate": "2026-03-06",
+    "Sha256Hash": "de93b6bba3182d10f579a38d751c1eab0d91f201e9de17094b66ed33e1c69217",
+    "FileSize": 76844423
 }
