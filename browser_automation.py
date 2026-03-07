@@ -682,13 +682,16 @@ def _kill_browser_processes(process_name: str, timeout: int = 10, logger=None) -
         logger.debug(f"_kill_browser_processes: timeout dopo {time.time()-t0:.1f}s")
 
 
-def _launch_browser_with_cdp(exe_path: str, port: int, restore_session: bool = False, logger=None) -> None:
+def _launch_browser_with_cdp(exe_path: str, port: int, restore_session: bool = False,
+                             logger=None, start_url: str = None) -> None:
     """Launch a browser with --remote-debugging-port as a detached process."""
     if logger:
         logger.debug(f"_launch_browser_with_cdp({exe_path}, port={port}, restore_session={restore_session})")
     args = [exe_path, f"--remote-debugging-port={port}"]
     if restore_session:
         args.append("--restore-last-session")
+    if start_url:
+        args.append(start_url)
     subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -1495,7 +1498,8 @@ class FSEBrowser:
                 )
                 _kill_browser_processes(process_name, logger=self._logger)
                 time.sleep(1)  # Let processes fully exit
-                _launch_browser_with_cdp(exe_path, port, logger=self._logger)
+                _launch_browser_with_cdp(exe_path, port, logger=self._logger,
+                                         start_url=FSE_BASE_URL)
 
                 port_ready = False
                 elapsed = 0.0
@@ -1568,7 +1572,8 @@ class FSEBrowser:
         self._logger.debug(f"[CDP] Browser non in esecuzione, exe_path={exe_path}")
         if exe_path and Path(exe_path).exists():
             self._logger.info(f"Browser non in esecuzione, lancio con CDP: {exe_path}")
-            _launch_browser_with_cdp(exe_path, port, logger=self._logger)
+            _launch_browser_with_cdp(exe_path, port, logger=self._logger,
+                                     start_url=FSE_BASE_URL)
 
             # Wait for CDP port to become available first
             port_ready = False
@@ -1645,7 +1650,8 @@ class FSEBrowser:
 
         self._logger.info(f"Riavvio del browser con CDP (porta {port})...")
         _kill_browser_processes(process_name, logger=self._logger)
-        _launch_browser_with_cdp(exe_path, port, restore_session=True, logger=self._logger)
+        _launch_browser_with_cdp(exe_path, port, restore_session=True, logger=self._logger,
+                                 start_url=FSE_BASE_URL)
 
         endpoint = f"http://127.0.0.1:{port}"
 
@@ -1690,23 +1696,12 @@ class FSEBrowser:
 
     def _connect_cdp(self, endpoint: str, port: int) -> None:
         """Connect to a browser via CDP and set up context/page."""
-        # Multi-pass cleanup: Edge recreates internal targets (newtab, Copilot)
-        # after closure. Loop until stable (no new targets found).
-        MAX_CLEANUP_PASSES = 5
-        for pass_num in range(1, MAX_CLEANUP_PASSES + 1):
-            closed = _cleanup_cdp_targets(port, logger=self._logger)
-            if closed == 0:
-                break
-            self._logger.debug(
-                f"[CDP] Cleanup pass {pass_num}: chiusi {closed} target, "
-                f"attesa stabilizzazione..."
-            )
-            time.sleep(1.5)
-        else:
-            self._logger.warning(
-                f"[CDP] Target problematici ancora presenti dopo "
-                f"{MAX_CLEANUP_PASSES} passaggi di cleanup. Tentativo connessione comunque."
-            )
+        # Single-pass cleanup: close edge:// and blank targets before connecting.
+        # Edge recreates internal targets (newtab, Copilot) immediately,
+        # so multi-pass looping is pointless — just clean once and connect.
+        closed = _cleanup_cdp_targets(port, logger=self._logger)
+        if closed:
+            time.sleep(1.0)
 
         # Connect directly on this thread — MUST be same thread as sync_playwright().start()
         # Playwright's 15s timeout is sufficient after aggressive multi-pass cleanup.
@@ -1854,7 +1849,8 @@ class FSEBrowser:
                 except Exception:
                     url = page.url.lower()
                 self._logger.debug(f"  Tab candidata: {url}")
-                if url in BLANK_URLS or "newtab" in url or "ntp" in url:
+                if (url in BLANK_URLS or "newtab" in url or "ntp" in url
+                        or "idpcrlmain" in url or "ssoauth" in url):
                     self._logger.info(f"Tab esistente riutilizzato: {url}")
                     return page
             except Exception as e:
@@ -2030,19 +2026,22 @@ class FSEBrowser:
         except Exception:
             pass
 
-    def stop(self) -> None:
+    def stop(self, keep_page: bool = False) -> None:
         if self._attached:
             # CDP mode: restore browser state, close only OUR tab, leave browser running.
             # Never close tabs we didn't create (e.g. Millewin's SISS session).
             self._reset_download_behavior()
 
             # Close the tab we created/found during _connect_cdp
+            # If keep_page=True, leave the tab open to preserve SISS session
             page_to_close = self._owned_page
-            if page_to_close:
+            if page_to_close and not keep_page:
                 try:
                     page_to_close.close()
                 except Exception:
                     pass
+            elif keep_page:
+                self._logger.info("Sessione SISS mantenuta attiva nel browser")
 
             # If self._page was switched to a borrowed tab (e.g. by
             # wait_for_manual_login finding an existing SISS tab),
@@ -2100,15 +2099,25 @@ class FSEBrowser:
         try:
             current_url = self._get_real_url().lower()
 
+            # Dismiss cookie consent if present (must be done before clicking
+            # Firma Remota, otherwise the dialog overlay blocks the click)
+            try:
+                cookie_btn = self._page.locator("button[aria-label='dismiss cookie message']")
+                if cookie_btn.is_visible(timeout=2000):
+                    cookie_btn.click()
+                    self._logger.debug("Login automatico: cookie consent chiuso")
+            except Exception:
+                pass
+
             # If we're already on the SSO page, click Firma Remota
             if "idpcrlmain" in current_url or "ssoauth" in current_url:
                 self._logger.info("Login automatico: pagina SSO rilevata, selezione Firma Remota...")
                 # Check if we're already on the Firma Remota form (loginOtp.jsp)
                 if "loginotp" not in current_url:
-                    firma_remota = self._page.locator(
-                        "xpath=//strong[normalize-space()='Accesso con Firma Remota']"
+                    firma_remota = self._page.get_by_role(
+                        "link", name="Firma Remota"
                     )
-                    firma_remota.wait_for(state="visible", timeout=10000)
+                    firma_remota.wait_for(state="visible", timeout=15000)
                     firma_remota.click()
                     self._page.wait_for_load_state("domcontentloaded")
             else:
@@ -2135,24 +2144,24 @@ class FSEBrowser:
                     self._logger.warning("Login automatico: redirect SSO non avvenuto")
                     return False
 
+                # Dismiss cookie consent again (may appear after redirect)
+                try:
+                    cookie_btn = self._page.locator("button[aria-label='dismiss cookie message']")
+                    if cookie_btn.is_visible(timeout=1000):
+                        cookie_btn.click()
+                except Exception:
+                    pass
+
                 # Select Firma Remota
                 self._logger.info("Login automatico: selezione 'Accesso con Firma Remota'...")
-                firma_remota = self._page.locator(
-                    "xpath=//strong[normalize-space()='Accesso con Firma Remota']"
+                firma_remota = self._page.get_by_role(
+                    "link", name="Firma Remota"
                 )
-                firma_remota.wait_for(state="visible", timeout=10000)
+                firma_remota.wait_for(state="visible", timeout=15000)
                 firma_remota.click()
                 self._page.wait_for_load_state("domcontentloaded")
 
             self._logger.info("Login automatico: compilazione credenziali...")
-
-            # Dismiss cookie consent if present
-            try:
-                cookie_btn = self._page.locator("button[aria-label='dismiss cookie message']")
-                if cookie_btn.is_visible(timeout=1000):
-                    cookie_btn.click()
-            except Exception:
-                pass
 
             # Fill username and password
             self._page.get_by_placeholder("Username").fill(username)
@@ -2226,44 +2235,41 @@ class FSEBrowser:
             self._page.bring_to_front()
             return
 
-        # ── Step 1: Navigate OUR page to FSE, authenticate via existing cookies ──
-        self._logger.info("Navigazione al portale FSE per verifica sessione...")
-        self._page.goto(FSE_BASE_URL, wait_until="domcontentloaded", timeout=30000)
-        self._page.bring_to_front()
+        # ── Step 1: Check current page URL — skip navigation if already on SSO ──
+        current_url = self._get_real_url().lower()
+        already_on_sso = "idpcrlmain" in current_url or "ssoauth" in current_url
 
-        # Try clicking "Accedi" to trigger SSO redirect
-        try:
-            accedi = self._page.get_by_role("button", name="Accedi")
-            if accedi.is_visible(timeout=5000):
-                accedi.click()
-                self._page.wait_for_load_state("networkidle")
-        except Exception:
-            pass  # Button might not be there, that's ok
-
-        # ── Step 2: Check if we ended up on an authenticated page (no SSO redirect) ──
-        if self._is_siss_authenticated():
+        if already_on_sso:
+            self._logger.info("Pagina SSO gia' presente, skip navigazione FSE")
+            self._page.bring_to_front()
+        elif self._is_siss_authenticated():
             self._logger.info(
                 f"Sessione SISS attiva: {self._get_real_url()} — "
                 f"login manuale non necessario"
             )
             return
+        else:
+            self._logger.info("Navigazione al portale FSE per verifica sessione...")
+            self._page.goto(FSE_BASE_URL, wait_until="domcontentloaded", timeout=30000)
+            self._page.bring_to_front()
 
-        # Also check other tabs — if another tab is authenticated, the cookies
-        # are valid but our page didn't pick them up (SPA quirk). Try refreshing.
-        auth_page = self._find_authenticated_siss_page()
-        if auth_page and auth_page != self._page:
-            self._logger.info(
-                "Sessione SISS attiva su altro tab ma non sul nostro — "
-                "tentativo refresh..."
-            )
-            self._page.reload(wait_until="networkidle")
+            # Try clicking "Accedi" to trigger SSO redirect
+            try:
+                accedi = self._page.get_by_role("button", name="Accedi")
+                if accedi.is_visible(timeout=5000):
+                    accedi.click()
+                    self._page.wait_for_load_state("networkidle")
+            except Exception:
+                pass
+
             if self._is_siss_authenticated():
                 self._logger.info(
-                    f"Sessione attiva dopo refresh: {self._get_real_url()}"
+                    f"Sessione SISS attiva: {self._get_real_url()} — "
+                    f"login manuale non necessario"
                 )
                 return
 
-        # ── Step 3: Attempt auto-login via Firma Remota if credentials available ──
+        # ── Step 2: Attempt auto-login via Firma Remota if credentials available ──
         if self._config.sso_username and self._config.sso_password and self._otp_callback:
             self._logger.info("Tentativo di login automatico via Firma Remota...")
             if self._auto_login_firma_remota():

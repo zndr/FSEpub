@@ -28,7 +28,9 @@ from text_processing import TextProcessor, ProcessingMode, LLMConfig
 def run_processing(config: Config, logger: ProcessingLogger, stop_event: threading.Event | None = None,
                     allowed_types: set[str] | None = None,
                     on_cdp_restart_needed: callable = None,
-                    on_headless_no_auth: callable = None) -> ProcessingSummary | None:
+                    on_headless_no_auth: callable = None,
+                    otp_callback: callable = None,
+                    on_ask_keep_session: callable = None) -> ProcessingSummary | None:
     """Core processing logic, reusable from CLI and GUI.
 
     on_cdp_restart_needed: optional callback(BrowserCDPNotActive) -> bool.
@@ -36,6 +38,11 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
     on_headless_no_auth: optional callback() -> None.
         Called when headless is active but no SISS session exists.
         Used by the GUI to show a blocking warning dialog.
+    otp_callback: optional callback() -> str | None.
+        Called to request OTP from user for auto-login via Firma Remota.
+    on_ask_keep_session: optional callback() -> bool.
+        Called at end of processing to ask user whether to keep SISS session.
+        Return True to keep session open, False to close.
     Returns ProcessingSummary with results, or None on early exit.
     """
 
@@ -103,6 +110,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
     # Start browser and perform manual login
     file_manager = FileManager(config, logger)
     browser = FSEBrowser(config, logger)
+    browser._otp_callback = otp_callback
     try:
         try:
             browser.start()
@@ -236,7 +244,13 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
                 )
 
     finally:
-        browser.stop()
+        keep_session = False
+        if on_ask_keep_session:
+            try:
+                keep_session = on_ask_keep_session()
+            except Exception:
+                pass
+        browser.stop(keep_page=keep_session)
         email_client.disconnect()
 
     # Deferred text processing phase

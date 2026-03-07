@@ -5141,6 +5141,30 @@ class FSEApp(QMainWindow):
         buttons.rejected.connect(dlg.reject)
         dlg.exec()
 
+    def _ask_keep_session(self) -> bool:
+        """Ask user whether to keep SISS session open (thread-safe).
+
+        Returns True to keep session, False to close.
+        """
+        result = [False]
+        event = threading.Event()
+
+        def _show_dialog():
+            reply = QMessageBox.question(
+                self,
+                "Sessione SISS",
+                "Il processamento e' terminato.\n\n"
+                "Vuoi mantenere la sessione SISS attiva nel browser?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            result[0] = reply == QMessageBox.StandardButton.Yes
+            event.set()
+
+        self._bridge.call_on_main.emit(_show_dialog)
+        event.wait()
+        return result[0]
+
     def _request_otp_from_user(self) -> str | None:
         """Show OTP input dialog on main thread (thread-safe).
 
@@ -5307,6 +5331,8 @@ class FSEApp(QMainWindow):
                 allowed_types=allowed_types,
                 on_cdp_restart_needed=self._ask_restart_browser,
                 on_headless_no_auth=self._show_headless_auth_warning,
+                otp_callback=self._request_otp_from_user,
+                on_ask_keep_session=self._ask_keep_session,
             )
         except Exception as e:
             self._bridge.append_text.emit(self._console, f"Errore fatale: {e}")
@@ -5375,6 +5401,7 @@ class FSEApp(QMainWindow):
             logger._logger.addHandler(handler)
 
             browser = FSEBrowser(config, logger)
+            browser._otp_callback = self._request_otp_from_user
             self._start_browser_safe(browser)
             browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
