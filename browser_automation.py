@@ -1352,59 +1352,87 @@ class FSEBrowser:
                     f"[CDP] Connessione diretta fallita, procedo con rilevamento: {e}"
                 )
 
-        # 1. Detect browser info + log diagnostics
-        browser_info = detect_default_browser()
-        self._log_system_info(browser_info, port)
+        # 1. Resolve browser: prefer user's BROWSER_CHANNEL, fallback to system default
         process_name = None
         exe_path = None
+        browser_info = None  # only populated if detect_default_browser() is called
 
-        if browser_info:
-            cdp_compatible = browser_info.get("cdp_compatible", True)
-            process_name = browser_info["process_name"]
-            exe_path = browser_info["exe_path"]
+        CHANNEL_TO_PROCESS = {
+            "msedge": "msedge.exe",
+            "chrome": "chrome.exe",
+        }
 
-            # Legacy Edge or other non-CDP browser detected
-            if not cdp_compatible:
-                self._logger.warning(
-                    f"Browser predefinito ({browser_info['progid']}) non supporta CDP. "
-                    f"Ricerca browser Chromium alternativo..."
+        # 1a. Try resolving directly from user's channel choice
+        if channel and channel != "chromium":
+            if channel in CHANNEL_TO_PROCESS:
+                resolved = self._resolve_exe_from_channel(channel)
+                if resolved and Path(resolved).exists():
+                    exe_path = resolved
+                    process_name = CHANNEL_TO_PROCESS[channel]
+                    self._logger.info(
+                        f"[CDP] Browser dall'impostazione utente: {channel} ({exe_path})"
+                    )
+            elif Path(channel).exists():
+                # Direct exe path (e.g. Brave)
+                exe_path = channel
+                process_name = Path(channel).name
+                self._logger.info(
+                    f"[CDP] Browser da percorso utente: {exe_path}"
                 )
+
+        # 1b. Fallback: detect system default browser
+        if not exe_path:
+            browser_info = detect_default_browser()
+            self._log_system_info(browser_info, port)
+
+            if browser_info:
+                cdp_compatible = browser_info.get("cdp_compatible", True)
+                process_name = browser_info["process_name"]
+                exe_path = browser_info["exe_path"]
+
+                # Legacy Edge or other non-CDP browser detected
+                if not cdp_compatible:
+                    self._logger.warning(
+                        f"Browser predefinito ({browser_info['progid']}) non supporta CDP. "
+                        f"Ricerca browser Chromium alternativo..."
+                    )
+                    alt = _find_any_chromium_browser()
+                    if alt:
+                        self._logger.info(
+                            f"Browser Chromium alternativo trovato: {alt['exe_path']}"
+                        )
+                        process_name = alt["process_name"]
+                        exe_path = alt["exe_path"]
+                        channel = alt["channel"] or channel
+                    else:
+                        raise ConnectionError(
+                            f"Il browser predefinito ({browser_info['progid']}) non supporta CDP "
+                            f"e non e' stato trovato nessun browser Chromium (Edge o Chrome) installato.\n"
+                            f"Installa Microsoft Edge (Chromium) o Google Chrome per usare la modalita' CDP."
+                        )
+
+            if not exe_path:
+                # detect_default_browser() returned None — try finding any Chromium browser
                 alt = _find_any_chromium_browser()
                 if alt:
                     self._logger.info(
-                        f"Browser Chromium alternativo trovato: {alt['exe_path']}"
+                        f"Browser predefinito non rilevato, trovato: {alt['exe_path']}"
                     )
                     process_name = alt["process_name"]
                     exe_path = alt["exe_path"]
                     channel = alt["channel"] or channel
                 else:
-                    raise ConnectionError(
-                        f"Il browser predefinito ({browser_info['progid']}) non supporta CDP "
-                        f"e non e' stato trovato nessun browser Chromium (Edge o Chrome) installato.\n"
-                        f"Installa Microsoft Edge (Chromium) o Google Chrome per usare la modalita' CDP."
-                    )
+                    exe_path = self._resolve_exe_from_channel(channel)
+                    self._logger.debug(f"[CDP] exe_path da channel '{channel}': {exe_path}")
 
-        if not exe_path:
-            # detect_default_browser() returned None — try finding any Chromium browser
-            alt = _find_any_chromium_browser()
-            if alt:
-                self._logger.info(
-                    f"Browser predefinito non rilevato, trovato: {alt['exe_path']}"
-                )
-                process_name = alt["process_name"]
-                exe_path = alt["exe_path"]
-                channel = alt["channel"] or channel
-            else:
-                exe_path = self._resolve_exe_from_channel(channel)
-                self._logger.debug(f"[CDP] exe_path da channel '{channel}': {exe_path}")
         if not process_name and channel in ("msedge", "chrome"):
             process_name = "msedge.exe" if channel == "msedge" else "chrome.exe"
 
         self._logger.debug(f"[CDP] process_name={process_name}, exe_path={exe_path}, port={port}")
 
-        # 1b. Auto-enforce CDP in registry for future launches
-        #     Ensures every future browser start (from Millewin, shortcuts, links)
-        #     will have CDP active automatically.
+        # 1c. Auto-enforce CDP in registry for future launches
+        #     Only when browser was detected via system default (browser_info populated).
+        #     When user selected a specific channel, the wizard handles registry separately.
         if browser_info and browser_info.get("cdp_compatible", True):
             progid = browser_info["progid"]
             if not get_cdp_registry_status(progid, port):
