@@ -2048,6 +2048,20 @@ class FSEBrowser:
         except Exception:
             pass  # Spinner might not exist on this page, that's fine
 
+    def _check_consent_service_error(self, codice_fiscale: str) -> None:
+        """Raise if the page shows 'Errore nel servizio di consenso'."""
+        try:
+            err = self._page.locator("text=Errore nel servizio di consenso")
+            if err.is_visible(timeout=500):
+                raise RuntimeError(
+                    f"Errore nel servizio di consenso per {codice_fiscale}. "
+                    "Paziente saltato."
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+
     def _navigate_to_referti(self, codice_fiscale: str) -> None:
         """Navigate to the Referti tab, adapting to the current page state.
 
@@ -2091,6 +2105,9 @@ class FSEBrowser:
 
                 self._page.wait_for_load_state("networkidle")
                 self._wait_for_spinner()
+
+                # Check for consent service error before assuming session expired
+                self._check_consent_service_error(codice_fiscale)
 
                 # Post-search session check: the spinner may have briefly
                 # flashed (Angular started processing) but the expired
@@ -2262,6 +2279,9 @@ class FSEBrowser:
 
             # Spinner appeared → search started, wait for completion
             self._wait_for_spinner()
+
+            # Check for consent service error before assuming session expired
+            self._check_consent_service_error(codice_fiscale)
 
             # Post-search session check: the spinner may have briefly
             # flashed (Angular started processing) but the expired
