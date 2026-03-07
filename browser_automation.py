@@ -524,6 +524,42 @@ def _is_browser_process_running(process_name: str, logger=None) -> bool:
         return False
 
 
+def _browser_has_visible_windows(process_name: str, logger=None) -> bool:
+    """Check if a browser process has visible windows (not just background processes).
+
+    Uses 'tasklist /V' to inspect window titles. Background-only processes
+    show 'N/D' or 'N/A' as window title (locale-dependent).
+    Returns True if at least one process has a real window title.
+    """
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/V", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        for line in result.stdout.strip().splitlines():
+            # CSV format: "Image Name","PID","Session Name","Session#","Mem Usage","Status","User Name","CPU Time","Window Title"
+            parts = line.split('","')
+            if len(parts) >= 9:
+                title = parts[-1].strip('"').strip()
+                # Background processes have "N/D" (Italian), "N/A" (English), or empty title.
+                # "OleMainThreadWndName" is an internal OLE system window (not visible).
+                if title and title not in ("N/D", "N/A", "Non disponibile", "OleMainThreadWndName"):
+                    if logger:
+                        logger.debug(
+                            f"_browser_has_visible_windows({process_name}): True "
+                            f"(titolo: {title[:60]})"
+                        )
+                    return True
+        if logger:
+            logger.debug(f"_browser_has_visible_windows({process_name}): False (solo processi in background)")
+        return False
+    except Exception as e:
+        if logger:
+            logger.debug(f"_browser_has_visible_windows({process_name}): errore {e}")
+        return True  # Assume visible on error (safe fallback: don't kill anything)
+
+
 def _find_powershell() -> str:
     """Find powershell.exe, trying absolute paths if it's not in PATH."""
     # Try PATH first
@@ -1185,6 +1221,7 @@ class FSEBrowser:
         self._page: Page | None = None
         self._owned_page: Page | None = None  # The tab WE created/found — safe to close
         self._attached = False  # True when connected to existing browser via CDP
+        self._otp_callback: callable | None = None  # GUI callback to request OTP from user
 
     def start(self) -> None:
         self._playwright = sync_playwright().start()
@@ -1441,11 +1478,64 @@ class FSEBrowser:
             # another app (e.g. Millewin) BEFORE the registry override
             # was in place, so it's running without --remote-debugging-port.
             #
+            # Check if the browser has actual visible windows or just
+            # background processes. Edge/Chrome keep background processes
+            # running (notifications, updates, PWAs) even with no windows.
+            has_windows = _browser_has_visible_windows(
+                process_name, logger=self._logger
+            )
+
+            if not has_windows and exe_path and Path(exe_path).exists():
+                # Only background processes — safe to kill and relaunch with CDP.
+                # Edge's single-instance mechanism would absorb a plain launch,
+                # so we must kill background processes first.
+                self._logger.info(
+                    f"[CDP] Solo processi {process_name} in background "
+                    f"(nessuna finestra visibile). Terminazione e rilancio con CDP..."
+                )
+                _kill_browser_processes(process_name, logger=self._logger)
+                time.sleep(1)  # Let processes fully exit
+                _launch_browser_with_cdp(exe_path, port, logger=self._logger)
+
+                port_ready = False
+                elapsed = 0.0
+                while elapsed < CDP_CONNECT_TIMEOUT:
+                    if _is_cdp_port_available(port):
+                        port_ready = True
+                        break
+                    time.sleep(CDP_CONNECT_POLL)
+                    elapsed += CDP_CONNECT_POLL
+
+                if not port_ready:
+                    raise ConnectionError(
+                        f"Browser lanciato ma la porta CDP {port} non risponde "
+                        f"entro {CDP_CONNECT_TIMEOUT} secondi."
+                    )
+
+                self._logger.debug("[CDP] Porta attiva, attesa stabilizzazione browser...")
+                time.sleep(3)
+
+                last_error = None
+                for attempt in range(1, 3):
+                    try:
+                        self._connect_cdp(endpoint, port)
+                        self._logger.info(
+                            f"Connesso al browser lanciato da background "
+                            f"(tentativo {attempt})"
+                        )
+                        return
+                    except ConnectionError as e:
+                        last_error = e
+                        if attempt < 2:
+                            time.sleep(2)
+                raise ConnectionError(
+                    f"Browser lanciato ma connessione CDP fallita: {last_error}"
+                )
+
+            # Browser has actual visible windows but no CDP — needs manual restart.
             # IMPORTANT: Do NOT try to launch a new browser window here.
             # Edge's single-instance mechanism absorbs the launch, creating
             # unwanted tabs without enabling CDP.
-            # Do NOT offer automatic restart — it kills ALL browser
-            # processes including Millewin's session, which is unrecoverable.
             if has_flag is None:
                 self._logger.warning(
                     f"[CDP] Impossibile verificare i flag del processo {process_name} "
@@ -1458,7 +1548,7 @@ class FSEBrowser:
                     f"Necessario riavvio manuale del browser."
                 )
 
-            raise ConnectionError(
+            raise BrowserCDPNotActive(
                 f"Il browser e' in esecuzione ma senza supporto CDP "
                 f"(porta {port} non risponde).\n\n"
                 f"Il browser e' stato avviato prima che FSE Processor potesse "
@@ -1468,7 +1558,10 @@ class FSEBrowser:
                 f"  2. Riapri il browser normalmente\n"
                 f"  3. Riprova il download\n\n"
                 f"Il registro e' gia' configurato: ogni futuro avvio del "
-                f"browser includera' automaticamente il supporto CDP."
+                f"browser includera' automaticamente il supporto CDP.",
+                process_name=process_name,
+                exe_path=exe_path,
+                port=port,
             )
 
         # 4. Browser NOT running → launch it with CDP
@@ -1985,6 +2078,134 @@ class FSEBrowser:
         self._attached = False
         self._logger.info("Browser chiuso")
 
+    def _auto_login_firma_remota(self) -> bool:
+        """Automate SSO login via Firma Remota.
+
+        Fills username and password from config, requests OTP via callback,
+        then submits the form and waits for redirect to SISS portal.
+
+        Returns True if login succeeded, False otherwise.
+        """
+        username = self._config.sso_username
+        password = self._config.sso_password
+
+        if not username or not password:
+            self._logger.debug("Login automatico: credenziali SSO non configurate")
+            return False
+
+        if not self._otp_callback:
+            self._logger.debug("Login automatico: nessun callback OTP disponibile")
+            return False
+
+        try:
+            current_url = self._get_real_url().lower()
+
+            # If we're already on the SSO page, click Firma Remota
+            if "idpcrlmain" in current_url or "ssoauth" in current_url:
+                self._logger.info("Login automatico: pagina SSO rilevata, selezione Firma Remota...")
+                # Check if we're already on the Firma Remota form (loginOtp.jsp)
+                if "loginotp" not in current_url:
+                    firma_remota = self._page.locator(
+                        "xpath=//strong[normalize-space()='Accesso con Firma Remota']"
+                    )
+                    firma_remota.wait_for(state="visible", timeout=10000)
+                    firma_remota.click()
+                    self._page.wait_for_load_state("domcontentloaded")
+            else:
+                # Navigate to FSE which will redirect to SSO
+                self._logger.info("Login automatico: navigazione al portale FSE...")
+                self._page.goto(FSE_BASE_URL, wait_until="domcontentloaded", timeout=30000)
+
+                # If we're now authenticated, no need to login
+                if self._is_siss_authenticated():
+                    self._logger.info("Login automatico: sessione gia' attiva")
+                    return True
+
+                # Click "Accedi" if present
+                try:
+                    accedi = self._page.get_by_role("button", name="Accedi")
+                    if accedi.is_visible(timeout=3000):
+                        accedi.click()
+                        self._page.wait_for_load_state("domcontentloaded")
+                except Exception:
+                    pass
+
+                # Now we should be on the SSO page
+                if "idpcrlmain" not in self._get_real_url().lower():
+                    self._logger.warning("Login automatico: redirect SSO non avvenuto")
+                    return False
+
+                # Select Firma Remota
+                self._logger.info("Login automatico: selezione 'Accesso con Firma Remota'...")
+                firma_remota = self._page.locator(
+                    "xpath=//strong[normalize-space()='Accesso con Firma Remota']"
+                )
+                firma_remota.wait_for(state="visible", timeout=10000)
+                firma_remota.click()
+                self._page.wait_for_load_state("domcontentloaded")
+
+            self._logger.info("Login automatico: compilazione credenziali...")
+
+            # Dismiss cookie consent if present
+            try:
+                cookie_btn = self._page.locator("button[aria-label='dismiss cookie message']")
+                if cookie_btn.is_visible(timeout=1000):
+                    cookie_btn.click()
+            except Exception:
+                pass
+
+            # Fill username and password
+            self._page.get_by_placeholder("Username").fill(username)
+            self._page.get_by_placeholder("Password").fill(password)
+
+            # Request OTP from user via callback
+            self._logger.info("Login automatico: in attesa del codice OTP dall'utente...")
+            otp = self._otp_callback()
+            if not otp:
+                self._logger.info("Login automatico: OTP annullato dall'utente")
+                return False
+
+            # Fill OTP and submit
+            self._page.get_by_placeholder("Otp").fill(otp)
+            self._logger.info("Login automatico: invio credenziali...")
+            self._page.get_by_role("button", name="Invia").click()
+
+            # Wait for redirect — either back to SISS portal or error
+            self._page.wait_for_load_state("networkidle", timeout=30000)
+
+            # Check if login succeeded (redirected back to SISS portal)
+            if self._is_siss_authenticated():
+                self._logger.info(
+                    f"Login automatico completato: {self._get_real_url()}"
+                )
+                return True
+
+            # Check for SSO error message
+            final_url = self._get_real_url().lower()
+            if "idpcrlmain" in final_url or "ssoauth" in final_url:
+                # Still on SSO page — login failed
+                try:
+                    error_el = self._page.locator("p.errore, .errMsg, [class*='error']")
+                    if error_el.count() > 0:
+                        error_text = error_el.first.text_content()
+                        self._logger.warning(
+                            f"Login automatico fallito: {error_text}"
+                        )
+                    else:
+                        self._logger.warning("Login automatico fallito: credenziali o OTP non validi")
+                except Exception:
+                    self._logger.warning("Login automatico fallito: credenziali o OTP non validi")
+                return False
+
+            self._logger.warning(
+                f"Login automatico: stato incerto, URL finale: {self._get_real_url()}"
+            )
+            return False
+
+        except Exception as e:
+            self._logger.warning(f"Login automatico fallito: {e}")
+            return False
+
     def wait_for_manual_login(self, stop_event: threading.Event | None = None) -> None:
         """Navigate to the FSE portal and wait for the user to complete SSO login.
 
@@ -2042,7 +2263,13 @@ class FSEBrowser:
                 )
                 return
 
-        # ── Step 3: No active session found — wait for manual login ──
+        # ── Step 3: Attempt auto-login via Firma Remota if credentials available ──
+        if self._config.sso_username and self._config.sso_password and self._otp_callback:
+            self._logger.info("Tentativo di login automatico via Firma Remota...")
+            if self._auto_login_firma_remota():
+                return
+
+        # ── Step 4: No active session found — wait for manual login ──
         self._logger.info(
             "LOGIN MANUALE RICHIESTO - Completa l'accesso nel browser. "
             "L'app proseguira' automaticamente dopo il login."
@@ -2447,29 +2674,39 @@ class FSEBrowser:
             if not self._is_siss_authenticated():
                 self._logger.stop_progress()
                 import time
-                self._logger.warning(
-                    "Sessione SSO scaduta - completa il login nel browser. "
-                    "L'app proseguira' automaticamente."
-                )
-                max_wait = 60
-                elapsed = 0
-                while elapsed < max_wait:
-                    try:
-                        if self._is_siss_authenticated():
-                            break
-                        # Check if user logged in on another tab → cookies valid
-                        auth_page = self._find_authenticated_siss_page()
-                        if auth_page and auth_page != self._page:
-                            self._logger.info("Login su altro tab, navigazione nostro tab...")
-                            self._page.goto(fse_link, wait_until="networkidle", timeout=15000)
+
+                # Try auto-login first
+                if self._config.sso_username and self._config.sso_password and self._otp_callback:
+                    self._logger.info("Sessione SSO scaduta - tentativo login automatico...")
+                    if self._auto_login_firma_remota():
+                        self._page.goto(fse_link, wait_until="networkidle", timeout=15000)
+                        self._wait_for_spinner()
+
+                # Fall back to manual login if auto-login didn't succeed
+                if not self._is_siss_authenticated():
+                    self._logger.warning(
+                        "Sessione SSO scaduta - completa il login nel browser. "
+                        "L'app proseguira' automaticamente."
+                    )
+                    max_wait = 60
+                    elapsed = 0
+                    while elapsed < max_wait:
+                        try:
                             if self._is_siss_authenticated():
                                 break
-                    except Exception:
-                        pass
-                    time.sleep(2)
-                    elapsed += 2
-                if elapsed >= max_wait:
-                    raise RuntimeError("Timeout attesa re-login (1 minuto)")
+                            # Check if user logged in on another tab → cookies valid
+                            auth_page = self._find_authenticated_siss_page()
+                            if auth_page and auth_page != self._page:
+                                self._logger.info("Login su altro tab, navigazione nostro tab...")
+                                self._page.goto(fse_link, wait_until="networkidle", timeout=15000)
+                                if self._is_siss_authenticated():
+                                    break
+                        except Exception:
+                            pass
+                        time.sleep(2)
+                        elapsed += 2
+                    if elapsed >= max_wait:
+                        raise RuntimeError("Timeout attesa re-login (1 minuto)")
 
                 self._page.wait_for_load_state("networkidle")
                 # After re-login, navigate again to the patient
@@ -2591,29 +2828,39 @@ class FSEBrowser:
         # Check if we got redirected to SSO (session expired)
         if not self._is_siss_authenticated():
             import time
-            self._logger.warning(
-                "Sessione SSO scaduta - completa il login nel browser. "
-                "L'app proseguira' automaticamente."
-            )
-            max_wait = 60
-            elapsed = 0
-            while elapsed < max_wait:
-                try:
-                    if self._is_siss_authenticated():
-                        break
-                    # Check if user logged in on another tab → cookies valid
-                    auth_page = self._find_authenticated_siss_page()
-                    if auth_page and auth_page != self._page:
-                        self._logger.info("Login su altro tab, navigazione nostro tab...")
-                        self._page.goto(fse_link, wait_until="networkidle", timeout=15000)
+
+            # Try auto-login first
+            if self._config.sso_username and self._config.sso_password and self._otp_callback:
+                self._logger.info("Sessione SSO scaduta - tentativo login automatico...")
+                if self._auto_login_firma_remota():
+                    self._page.goto(fse_link, wait_until="networkidle", timeout=15000)
+                    self._wait_for_spinner()
+
+            # Fall back to manual login if auto-login didn't succeed
+            if not self._is_siss_authenticated():
+                self._logger.warning(
+                    "Sessione SSO scaduta - completa il login nel browser. "
+                    "L'app proseguira' automaticamente."
+                )
+                max_wait = 60
+                elapsed = 0
+                while elapsed < max_wait:
+                    try:
                         if self._is_siss_authenticated():
                             break
-                except Exception:
-                    pass
-                time.sleep(2)
-                elapsed += 2
-            if elapsed >= max_wait:
-                raise RuntimeError("Timeout attesa re-login (1 minuto)")
+                        # Check if user logged in on another tab → cookies valid
+                        auth_page = self._find_authenticated_siss_page()
+                        if auth_page and auth_page != self._page:
+                            self._logger.info("Login su altro tab, navigazione nostro tab...")
+                            self._page.goto(fse_link, wait_until="networkidle", timeout=15000)
+                            if self._is_siss_authenticated():
+                                break
+                    except Exception:
+                        pass
+                    time.sleep(2)
+                    elapsed += 2
+                if elapsed >= max_wait:
+                    raise RuntimeError("Timeout attesa re-login (1 minuto)")
 
             self._page.wait_for_load_state("networkidle")
             # After re-login, navigate again to the patient

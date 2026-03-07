@@ -116,6 +116,8 @@ SETTINGS_SPEC = [
     ("LLM_MODEL", "Modello AI", "", "text"),
     ("LLM_TIMEOUT", "Timeout AI (sec)", "120", "int"),
     ("LLM_BASE_URL", "URL endpoint AI", "", "text"),
+    ("SSO_USERNAME", "Username SSO", "", "text"),
+    ("SSO_PASSWORD", "Password SSO", "", "password"),
 ]
 
 # Sentinel values for PDF reader selection
@@ -2997,6 +2999,7 @@ class FSEApp(QMainWindow):
 
             if not reused:
                 browser = FSEBrowser(config, logger)
+                browser._otp_callback = self._request_otp_from_user
                 self._start_browser_safe(browser)
                 self._mw_browser = browser
 
@@ -3434,6 +3437,48 @@ class FSEApp(QMainWindow):
 
         top_layout.addWidget(br_group)
         layout.addLayout(top_layout)
+
+        # ── Credenziali SSO (Firma Remota) ──
+        sso_group = QGroupBox("Login automatico SISS (Firma Remota)")
+        sso_layout = QGridLayout(sso_group)
+        sso_layout.setColumnStretch(1, 1)
+
+        sso_layout.addWidget(QLabel("Username:"), 0, 0)
+        self._sso_username_entry = QLineEdit(spec["SSO_USERNAME"][1])
+        self._sso_username_entry.setPlaceholderText("Username (senza @dominio)")
+        self._sso_username_entry.setToolTip(
+            "Username per l'accesso SSO via Firma Remota.\n"
+            "Non aggiungere la @ e il dominio."
+        )
+        sso_layout.addWidget(self._sso_username_entry, 0, 1)
+        self._settings_entries["SSO_USERNAME"] = self._sso_username_entry
+        self._fields["SSO_USERNAME"] = spec["SSO_USERNAME"][1]
+
+        sso_layout.addWidget(QLabel("Password:"), 1, 0)
+        self._sso_password_entry = QLineEdit(spec["SSO_PASSWORD"][1])
+        self._sso_password_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        self._sso_password_entry.setToolTip("Password per l'accesso SSO via Firma Remota")
+        sso_pass_row = QHBoxLayout()
+        sso_pass_row.addWidget(self._sso_password_entry)
+        btn_change_sso_pass = QPushButton("Cambia...")
+        btn_change_sso_pass.setIcon(qta.icon("fa5s.key", color="white"))
+        btn_change_sso_pass.setToolTip("Cambia la password SSO")
+        btn_change_sso_pass.clicked.connect(self._show_change_sso_password_dialog)
+        sso_pass_row.addWidget(btn_change_sso_pass)
+        sso_layout.addLayout(sso_pass_row, 1, 1)
+        self._sso_password_entry.setReadOnly(True)
+        self._settings_entries["SSO_PASSWORD"] = self._sso_password_entry
+        self._fields["SSO_PASSWORD"] = spec["SSO_PASSWORD"][1]
+
+        sso_note = QLabel(
+            "Se configurate, l'app compilera' automaticamente username e password "
+            "nella pagina di login SSO e ti chiedera' solo il codice OTP."
+        )
+        sso_note.setStyleSheet("color: #6b7b8d; font-size: 11px;")
+        sso_note.setWordWrap(True)
+        sso_layout.addWidget(sso_note, 2, 0, 1, 2)
+
+        layout.addWidget(sso_group)
 
         # ── Parametri ──
         params_group = QGroupBox("Parametri")
@@ -4825,6 +4870,8 @@ class FSEApp(QMainWindow):
         self._fields["MARK_AS_READ"] = "true" if self._siss_mark_cb.isChecked() else "false"
         self._fields["DELETE_AFTER_PROCESSING"] = "true" if self._siss_delete_cb.isChecked() else "false"
         self._fields["EMAIL_CHECK_INTERVAL"] = str(self._email_interval_spin.value())
+        self._fields["SSO_USERNAME"] = self._sso_username_entry.text()
+        # SSO_PASSWORD is synced via _settings_entries dict (read-only field updated by dialog)
 
     def _get_field_values(self) -> dict[str, str]:
         """Collect current field values as strings for env file."""
@@ -4843,6 +4890,9 @@ class FSEApp(QMainWindow):
         raw_api_key = values.get("LLM_API_KEY", "")
         if raw_api_key and not is_encrypted(raw_api_key):
             values["LLM_API_KEY"] = encrypt_password(raw_api_key)
+        raw_sso_pass = values.get("SSO_PASSWORD", "")
+        if raw_sso_pass and not is_encrypted(raw_sso_pass):
+            values["SSO_PASSWORD"] = encrypt_password(raw_sso_pass)
         return values
 
     # ---- Settings ----
@@ -4860,6 +4910,8 @@ class FSEApp(QMainWindow):
                 if raw_val and not is_encrypted(raw_val):
                     need_migration = True
             elif key == "LLM_API_KEY":
+                val = decrypt_password(val)
+            elif key == "SSO_PASSWORD":
                 val = decrypt_password(val)
 
             self._fields[key] = val
@@ -4930,6 +4982,10 @@ class FSEApp(QMainWindow):
                 self._llm_timeout_entry.setText(val)
             elif key == "LLM_BASE_URL":
                 self._llm_base_url_entry.setText(val)
+            elif key == "SSO_USERNAME":
+                self._sso_username_entry.setText(val)
+            elif key == "SSO_PASSWORD":
+                self._sso_password_entry.setText(val)
 
         # Apply initial states
         self._on_mode_changed()
@@ -5017,6 +5073,98 @@ class FSEApp(QMainWindow):
         buttons.accepted.connect(on_accept)
         buttons.rejected.connect(dlg.reject)
         dlg.exec()
+
+    def _show_change_sso_password_dialog(self) -> None:
+        """Show a modal dialog to change the SSO password."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Cambia password SSO (Firma Remota)")
+        dlg.setMinimumWidth(360)
+        lay = QVBoxLayout(dlg)
+
+        env_vals = _load_env_values()
+        stored_pass = env_vals.get("SSO_PASSWORD", "")
+        has_existing = bool(stored_pass)
+
+        error_label = QLabel("")
+        error_label.setStyleSheet("color: red;")
+        error_label.setWordWrap(True)
+        error_label.hide()
+        lay.addWidget(error_label)
+
+        current_entry = None
+        if has_existing:
+            lay.addWidget(QLabel("Password attuale:"))
+            current_entry = QLineEdit()
+            current_entry.setEchoMode(QLineEdit.EchoMode.Password)
+            lay.addWidget(current_entry)
+
+        lay.addWidget(QLabel("Nuova password:"))
+        new_entry = QLineEdit()
+        new_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        lay.addWidget(new_entry)
+
+        lay.addWidget(QLabel("Conferma nuova password:"))
+        confirm_entry = QLineEdit()
+        confirm_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        lay.addWidget(confirm_entry)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        lay.addWidget(buttons)
+
+        def on_accept():
+            error_label.hide()
+            if has_existing and current_entry is not None:
+                if not verify_password(current_entry.text(), stored_pass):
+                    error_label.setText("La password attuale non e' corretta.")
+                    error_label.show()
+                    return
+            new_pass = new_entry.text()
+            if not new_pass:
+                error_label.setText("La nuova password non puo' essere vuota.")
+                error_label.show()
+                return
+            if new_pass != confirm_entry.text():
+                error_label.setText("Le password non coincidono.")
+                error_label.show()
+                return
+            self._fields["SSO_PASSWORD"] = new_pass
+            self._sso_password_entry.setText(new_pass)
+            self._save_settings_quietly()
+            dlg.accept()
+            QMessageBox.information(
+                self, "Password SSO", "Password SSO aggiornata correttamente."
+            )
+
+        buttons.accepted.connect(on_accept)
+        buttons.rejected.connect(dlg.reject)
+        dlg.exec()
+
+    def _request_otp_from_user(self) -> str | None:
+        """Show OTP input dialog on main thread (thread-safe).
+
+        Returns the OTP string or None if the user cancelled.
+        """
+        result = [None]
+        event = threading.Event()
+
+        def _show_dialog():
+            from PySide6.QtWidgets import QInputDialog
+            otp, ok = QInputDialog.getText(
+                self,
+                "Codice OTP richiesto",
+                "Inserisci il codice OTP per il login SISS\n(Firma Remota):",
+                QLineEdit.EchoMode.Normal,
+                "",
+            )
+            if ok and otp.strip():
+                result[0] = otp.strip()
+            event.set()
+
+        self._bridge.call_on_main.emit(_show_dialog)
+        event.wait()
+        return result[0]
 
     def _save_settings(self) -> None:
         values = self._get_field_values()
@@ -5330,6 +5478,7 @@ class FSEApp(QMainWindow):
                     self._patient_browser = None
             if not reused:
                 browser = FSEBrowser(config, logger)
+                browser._otp_callback = self._request_otp_from_user
                 self._start_browser_safe(browser)
                 browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
@@ -5496,6 +5645,7 @@ class FSEApp(QMainWindow):
                     self._patient_browser = None
             if not reused:
                 browser = FSEBrowser(config, logger)
+                browser._otp_callback = self._request_otp_from_user
                 self._start_browser_safe(browser)
                 browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 

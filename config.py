@@ -40,6 +40,10 @@ class Config:
     text_dir: Path | None
     deferred_processing: bool
 
+    # SSO (Firma Remota) credentials — optional, for auto-login
+    sso_username: str
+    sso_password: str
+
     # LLM / AI text processing
     processing_mode: str        # "none", "ai", "local"
     llm_provider: str           # "claude_api", "openai_api", "gemini_api", "claude_cli", "custom_url"
@@ -89,6 +93,9 @@ class Config:
         text_dir = Path(text_dir_str) if text_dir_str else None
         deferred_processing = os.getenv("DEFERRED_PROCESSING", "false").lower() == "true"
 
+        sso_username = os.getenv("SSO_USERNAME", "")
+        sso_password = decrypt_password(os.getenv("SSO_PASSWORD", ""))
+
         processing_mode = os.getenv("PROCESSING_MODE", "local")
         llm_provider = os.getenv("LLM_PROVIDER", "")
         llm_api_key = decrypt_password(os.getenv("LLM_API_KEY", ""))
@@ -121,6 +128,8 @@ class Config:
             process_text=process_text,
             text_dir=text_dir,
             deferred_processing=deferred_processing,
+            sso_username=sso_username,
+            sso_password=sso_password,
             processing_mode=processing_mode,
             llm_provider=llm_provider,
             llm_api_key=llm_api_key,
