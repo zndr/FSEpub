@@ -771,6 +771,44 @@ class SetupWizard(QDialog):
             val = decrypt_password(val)
         return val
 
+    def _update_wiz_browser_warning(self) -> None:
+        """Show/hide warning when selected browser differs from Windows default and Millewin is installed."""
+        parent_app = self.parent()
+        # Check Millewin (use cached value if available)
+        if hasattr(parent_app, "_millewin_installed"):
+            mw = parent_app._millewin_installed
+        else:
+            mw = _is_millewin_installed()
+        if not mw:
+            self._wiz_browser_warning.setVisible(False)
+            return
+
+        # Get default browser channel
+        default_channel = None
+        if hasattr(parent_app, "_default_browser_info") and parent_app._default_browser_info:
+            default_channel = parent_app._default_browser_info.get("channel")
+        if not default_channel:
+            self._wiz_browser_warning.setVisible(False)
+            return
+
+        # Get selected channel
+        selected_label = self._wiz_browser_combo.currentText()
+        selected_channel = self._wiz_browser_map.get(selected_label, "")
+
+        # No conflict if same browser or chromium (standalone)
+        if not selected_channel or selected_channel == "chromium" or selected_channel == default_channel:
+            self._wiz_browser_warning.setVisible(False)
+            return
+
+        friendly = {"msedge": "Edge", "chrome": "Chrome", "brave": "Brave", "firefox": "Firefox"}
+        default_name = friendly.get(default_channel, default_channel)
+        selected_name = friendly.get(selected_channel, selected_channel)
+        self._wiz_browser_warning.setText(
+            f"\u26a0\ufe0f Millewin apre sempre il browser predefinito ({default_name}). "
+            f"Usare un browser diverso ({selected_name}) puo' causare conflitti di sessione SISS."
+        )
+        self._wiz_browser_warning.setVisible(True)
+
     # ---- UI construction ----
 
     def _build_ui(self) -> None:
@@ -1002,8 +1040,18 @@ class SetupWizard(QDialog):
                 break
         grid.addWidget(self._wiz_browser_combo, 0, 1)
 
+        # Millewin browser conflict warning
+        self._wiz_browser_warning = QLabel("")
+        self._wiz_browser_warning.setWordWrap(True)
+        self._wiz_browser_warning.setStyleSheet("color: #e67e00; font-size: 11px;")
+        self._wiz_browser_warning.setVisible(False)
+        grid.addWidget(self._wiz_browser_warning, 1, 0, 1, 2)
+        self._wiz_browser_combo.currentTextChanged.connect(self._update_wiz_browser_warning)
+        # Trigger initial check
+        self._update_wiz_browser_warning()
+
         # PDF reader combo
-        grid.addWidget(QLabel("Lettore PDF:"), 1, 0)
+        grid.addWidget(QLabel("Lettore PDF:"), 2, 0)
         self._wiz_pdf_combo = QComboBox()
         self._wiz_pdf_combo.setToolTip(
             "Il programma usato per aprire i referti PDF scaricati.\n"
@@ -1021,10 +1069,10 @@ class SetupWizard(QDialog):
             if val == saved_pdf or _norm(val) == _norm(saved_pdf):
                 self._wiz_pdf_combo.setCurrentText(label)
                 break
-        grid.addWidget(self._wiz_pdf_combo, 1, 1)
+        grid.addWidget(self._wiz_pdf_combo, 2, 1)
 
         # Checkboxes
-        r = 2
+        r = 3
         self._wiz_cdp_cb = QCheckBox("Usa browser CDP")
         self._wiz_cdp_cb.setChecked(
             self._env_val("USE_EXISTING_BROWSER", "true").lower() == "true"
@@ -2151,12 +2199,16 @@ class FSEApp(QMainWindow):
         self._list_docs_worker: threading.Thread | None = None
         self._fields: dict[str, str | bool] = {}  # key -> current value
         self._btn_analyze: QPushButton | None = None  # created in _build_ui
+        self._millewin_installed: bool | None = None  # cached at startup
 
         # Signal bridge for thread-safe GUI updates
         self._bridge = _SignalBridge()
 
         self._build_ui()
         self._load_settings()
+
+        # Cache Millewin detection once at startup (I/O: file check + sc query)
+        self._millewin_installed = _is_millewin_installed()
 
         # First-run detection: show wizard if no settings file or no email configured
         if not Path(ENV_FILE).exists() or not self._fields.get("EMAIL_USER"):
@@ -2504,6 +2556,14 @@ class FSEApp(QMainWindow):
         self._browser_info_label = QLabel("")
         self._browser_info_label.setProperty("class", "subtle-label")
         layout.addWidget(self._browser_info_label)
+
+        # Millewin browser conflict warning (settings tab)
+        self._browser_millewin_warning = QLabel("")
+        self._browser_millewin_warning.setWordWrap(True)
+        self._browser_millewin_warning.setStyleSheet("color: #e67e00; font-size: 11px;")
+        self._browser_millewin_warning.setVisible(False)
+        layout.addWidget(self._browser_millewin_warning)
+
         self._update_browser_info_label()
 
         # Controls
@@ -3042,6 +3102,9 @@ class FSEApp(QMainWindow):
         to restart it. Raises the original exception if user declines.
         After starting, checks headless+auth and blocks if no SISS session.
         """
+        # Check for Millewin browser conflict before starting
+        self._check_browser_millewin_conflict(browser)
+
         try:
             browser.start()
         except BrowserCDPNotActive as e:
@@ -3120,6 +3183,72 @@ class FSEApp(QMainWindow):
         self._bridge.call_on_main.emit(_show_dialog)
         event.wait()
         return result[0]
+
+    def _check_browser_millewin_conflict(self, browser: FSEBrowser) -> None:
+        """Warn if configured browser differs from Windows default when Millewin is installed.
+
+        Only applies in CDP mode. Shows a 3-option dialog:
+        - Prosegui: continue with configured browser
+        - Usa predefinito: override browser_channel for this session
+        - Annulla: raise InterruptedError
+        """
+        if not self._millewin_installed:
+            return
+        if not self._default_browser_info:
+            return
+        if not browser._config.use_existing_browser:
+            return
+
+        default_channel = self._default_browser_info.get("channel")
+        selected_channel = browser._config.browser_channel
+
+        if not selected_channel or selected_channel == "chromium":
+            return
+        if selected_channel == default_channel:
+            return
+
+        friendly = {"msedge": "Microsoft Edge", "chrome": "Google Chrome", "brave": "Brave", "firefox": "Firefox"}
+        default_name = friendly.get(default_channel, default_channel)
+        selected_name = friendly.get(selected_channel, selected_channel)
+
+        # Thread-safe dialog dispatch
+        result = [None]  # "proceed" | "default" | "cancel"
+        event = threading.Event()
+
+        def _show_dialog():
+            from PySide6.QtWidgets import QMessageBox
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("Conflitto browser con Millewin")
+            dlg.setIcon(QMessageBox.Icon.Warning)
+            dlg.setText(
+                f"Il browser configurato ({selected_name}) e' diverso dal browser "
+                f"predefinito di Windows ({default_name}).\n\n"
+                f"Millewin apre sempre il browser predefinito ({default_name}). "
+                f"Se prosegui con {selected_name}, la sessione SISS di Millewin "
+                f"potrebbe essere invalidata.\n"
+            )
+            btn_proceed = dlg.addButton(f"Prosegui con {selected_name}", QMessageBox.ButtonRole.AcceptRole)
+            btn_default = dlg.addButton(f"Usa {default_name}", QMessageBox.ButtonRole.YesRole)
+            btn_cancel = dlg.addButton("Annulla", QMessageBox.ButtonRole.RejectRole)
+            dlg.setDefaultButton(btn_cancel)
+            dlg.exec()
+            clicked = dlg.clickedButton()
+            if clicked == btn_proceed:
+                result[0] = "proceed"
+            elif clicked == btn_default:
+                result[0] = "default"
+            else:
+                result[0] = "cancel"
+            event.set()
+
+        self._bridge.call_on_main.emit(_show_dialog)
+        event.wait()
+
+        if result[0] == "cancel":
+            raise InterruptedError("Operazione annullata dall'utente")
+        elif result[0] == "default":
+            # Temporary session override — does NOT save to settings.env
+            browser._config.browser_channel = default_channel
 
     def _poll_mw_worker(self) -> None:
         """Poll the Millewin workflow worker thread."""
@@ -3793,8 +3922,29 @@ class FSEApp(QMainWindow):
         self._browser_map[BROWSER_CHROMIUM_LABEL] = BROWSER_CHROMIUM
         self._browser_revmap[BROWSER_CHROMIUM] = BROWSER_CHROMIUM_LABEL
 
+        # Mark the default browser in the combobox
+        default_channel = self._default_browser_info.get("channel") if self._default_browser_info else None
+        default_combo_index = -1
+        if default_channel:
+            for display_name, channel in self._browser_map.items():
+                if channel == default_channel:
+                    # Rename to add "(predefinito)" suffix
+                    new_name = f"{display_name} (predefinito)"
+                    del self._browser_map[display_name]
+                    self._browser_map[new_name] = channel
+                    self._browser_revmap[channel] = new_name
+                    break
+
         self._browser_combo = QComboBox()
         self._browser_combo.addItems(list(self._browser_map.keys()))
+
+        # Color the default browser item red
+        if default_channel:
+            for i in range(self._browser_combo.count()):
+                item_label = self._browser_combo.itemText(i)
+                if item_label.endswith(" (predefinito)"):
+                    self._browser_combo.setItemData(i, QColor("#cc0000"), Qt.ItemDataRole.ForegroundRole)
+                    break
 
         label = self._browser_revmap.get(default)
         if label:
@@ -3837,12 +3987,32 @@ class FSEApp(QMainWindow):
 
         default_channel = self._default_browser_info.get("channel") if self._default_browser_info else None
         selected_channel = self._fields.get("BROWSER_CHANNEL", "")
-        if default_channel != selected_channel:
+        mismatch = (
+            default_channel
+            and selected_channel
+            and selected_channel != "chromium"
+            and default_channel != selected_channel
+        )
+        if mismatch:
             selected_label = self._browser_revmap.get(selected_channel, selected_channel)
             text += f"  |  Browser selezionato: {selected_label}"
 
         if hasattr(self, "_browser_info_label"):
             self._browser_info_label.setText(text)
+
+        # Millewin conflict warning
+        if hasattr(self, "_browser_millewin_warning"):
+            if mismatch and self._millewin_installed:
+                friendly = {"msedge": "Edge", "chrome": "Chrome", "brave": "Brave", "firefox": "Firefox"}
+                dn = friendly.get(default_channel, default_channel)
+                sn = friendly.get(selected_channel, selected_channel)
+                self._browser_millewin_warning.setText(
+                    f"\u26a0\ufe0f Millewin apre sempre il browser predefinito ({dn}). "
+                    f"Usare un browser diverso ({sn}) puo' causare conflitti di sessione SISS."
+                )
+                self._browser_millewin_warning.setVisible(True)
+            else:
+                self._browser_millewin_warning.setVisible(False)
 
     def _sync_cdp_registry_checkbox(self) -> None:
         """Read the current CDP registry status and update the checkbox."""
