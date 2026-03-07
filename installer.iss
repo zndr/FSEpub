@@ -2,7 +2,7 @@
 ; Requires Inno Setup 6.x
 
 #define MyAppName "FSE Processor"
-#define MyAppVersion "2.4.15"
+#define MyAppVersion "2.4.19"
 #define MyAppPublisher "FSE Processor"
 #define MyAppExeName "FSE Processor.exe"
 

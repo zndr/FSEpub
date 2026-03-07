@@ -1,8 +1,8 @@
 {
-    "Version": "2.4.15",
+    "Version": "2.4.19",
     "ReleaseNotes": "",
     "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.4.10/FSE_Processor_Setup_2.4.10_QT6.exe",
-    "ReleaseDate": "2026-03-06",
-    "Sha256Hash": "de93b6bba3182d10f579a38d751c1eab0d91f201e9de17094b66ed33e1c69217",
-    "FileSize": 76844423
+    "ReleaseDate": "2026-03-07",
+    "Sha256Hash": "99c3e57f4ee2f8e827a06286f73ee474b215350aec78f35695396fcf334741fd",
+    "FileSize": 76859843
 }
