@@ -2947,9 +2947,9 @@ class FSEApp(QMainWindow):
         self._mw_stop_event.clear()
         self._btn_mw_start.setEnabled(False)
         self._btn_mw_stop.setEnabled(True)
-        if cf_override is None:
+        if cf_override is None and _is_millewin_installed():
             self._cf_entry.clear()
-        self._mw_log("--- Avvio workflow Millewin → FSE ---")
+        self._mw_log("--- Avvio workflow FSE ---")
 
         self._mw_worker = threading.Thread(
             target=self._mw_workflow_worker, args=(cf_override,), daemon=True,
@@ -2962,13 +2962,18 @@ class FSEApp(QMainWindow):
     def _mw_workflow_worker(self, cf_override: str | None = None) -> None:
         """Worker thread for the Millewin → FSE workflow."""
         try:
-            # Step 1: Read CF from Millewin (or use override from auto-poll)
+            # Step 1: Read CF from Millewin, override, or manual entry
             if cf_override is not None:
                 cf = cf_override
-            else:
+            elif _is_millewin_installed():
                 cf = self._read_millewin_cf()
                 if cf is None:
                     self._mw_log("Nessun paziente aperto in Millewin (finestra non trovata o CF assente nel titolo)")
+                    return
+            else:
+                cf = self._cf_entry.text().strip().upper()
+                if not cf:
+                    self._mw_log("Inserisci il codice fiscale del paziente nel campo CF")
                     return
 
             self._mw_log(f"CF estratto: {cf}")
