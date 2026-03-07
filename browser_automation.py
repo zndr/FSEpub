@@ -1238,6 +1238,7 @@ class FSEBrowser:
         self._attached = False  # True when connected to existing browser via CDP
         self._siss_authenticated_on_connect = False  # True when CDP found active SISS session
         self._otp_callback: callable | None = None  # GUI callback to request OTP from user
+        self._warning_callback: callable | None = None  # GUI callback (title, msg) to show warning dialog
 
     def start(self) -> None:
         self._playwright = sync_playwright().start()
@@ -2297,6 +2298,19 @@ class FSEBrowser:
             self._logger.info("Tentativo di login automatico via Firma Remota...")
             if self._auto_login_firma_remota():
                 return
+        elif not self._config.sso_username or not self._config.sso_password:
+            self._logger.warning(
+                "Credenziali accesso SISS (OTP) non configurate: il login automatico non e' disponibile. "
+                "Configura Username e Password SISS (OTP) nella scheda Impostazioni per "
+                "abilitare il login automatico via Firma Remota."
+            )
+            if self._warning_callback:
+                self._warning_callback(
+                    "Login automatico non disponibile",
+                    "Credenziali accesso SISS (OTP) non configurate.\n\n"
+                    "Configura Username e Password SISS (OTP) nella scheda Impostazioni "
+                    "per abilitare il login automatico via Firma Remota.",
+                )
 
         # ── Step 4: No active session found — wait for manual login ──
         self._logger.info(
@@ -2740,6 +2754,18 @@ class FSEBrowser:
                     if self._auto_login_firma_remota():
                         self._page.goto(fse_link, wait_until="networkidle", timeout=15000)
                         self._wait_for_spinner()
+                elif not self._config.sso_username or not self._config.sso_password:
+                    self._logger.warning(
+                        "Credenziali accesso SISS (OTP) non configurate: il login automatico non e' disponibile. "
+                        "Configura Username e Password SISS (OTP) nella scheda Impostazioni."
+                    )
+                    if self._warning_callback:
+                        self._warning_callback(
+                            "Login automatico non disponibile",
+                            "Credenziali accesso SISS (OTP) non configurate.\n\n"
+                            "Configura Username e Password SISS (OTP) nella scheda Impostazioni "
+                            "per abilitare il login automatico via Firma Remota.",
+                        )
 
                 # Fall back to manual login if auto-login didn't succeed
                 if not self._is_siss_authenticated():
@@ -2894,6 +2920,18 @@ class FSEBrowser:
                 if self._auto_login_firma_remota():
                     self._page.goto(fse_link, wait_until="networkidle", timeout=15000)
                     self._wait_for_spinner()
+            elif not self._config.sso_username or not self._config.sso_password:
+                self._logger.warning(
+                    "Credenziali accesso SISS (OTP) non configurate: il login automatico non e' disponibile. "
+                    "Configura Username e Password SISS (OTP) nella scheda Impostazioni."
+                )
+                if self._warning_callback:
+                    self._warning_callback(
+                        "Login automatico non disponibile",
+                        "Credenziali accesso SISS (OTP) non configurate.\n\n"
+                        "Configura Username e Password SISS (OTP) nella scheda Impostazioni "
+                        "per abilitare il login automatico via Firma Remota.",
+                    )
 
             # Fall back to manual login if auto-login didn't succeed
             if not self._is_siss_authenticated():

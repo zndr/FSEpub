@@ -30,7 +30,8 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
                     on_cdp_restart_needed: callable = None,
                     on_headless_no_auth: callable = None,
                     otp_callback: callable = None,
-                    on_ask_keep_session: callable = None) -> ProcessingSummary | None:
+                    on_ask_keep_session: callable = None,
+                    warning_callback: callable = None) -> ProcessingSummary | None:
     """Core processing logic, reusable from CLI and GUI.
 
     on_cdp_restart_needed: optional callback(BrowserCDPNotActive) -> bool.
@@ -111,6 +112,7 @@ def run_processing(config: Config, logger: ProcessingLogger, stop_event: threadi
     file_manager = FileManager(config, logger)
     browser = FSEBrowser(config, logger)
     browser._otp_callback = otp_callback
+    browser._warning_callback = warning_callback
     try:
         try:
             browser.start()

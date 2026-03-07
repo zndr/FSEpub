@@ -3010,6 +3010,7 @@ class FSEApp(QMainWindow):
             if not reused:
                 browser = FSEBrowser(config, logger)
                 browser._otp_callback = self._request_otp_from_user
+                browser._warning_callback = self._bridge.show_warning.emit
                 self._start_browser_safe(browser)
                 self._mw_browser = browser
 
@@ -5345,6 +5346,7 @@ class FSEApp(QMainWindow):
                 on_headless_no_auth=self._show_headless_auth_warning,
                 otp_callback=self._request_otp_from_user,
                 on_ask_keep_session=self._ask_keep_session,
+                warning_callback=self._bridge.show_warning.emit,
             )
         except Exception as e:
             self._bridge.append_text.emit(self._console, f"Errore fatale: {e}")
@@ -5416,6 +5418,7 @@ class FSEApp(QMainWindow):
 
             browser = FSEBrowser(config, logger)
             browser._otp_callback = self._request_otp_from_user
+            browser._warning_callback = self._bridge.show_warning.emit
             self._start_browser_safe(browser)
             browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
@@ -5526,6 +5529,7 @@ class FSEApp(QMainWindow):
             if not reused:
                 browser = FSEBrowser(config, logger)
                 browser._otp_callback = self._request_otp_from_user
+                browser._warning_callback = self._bridge.show_warning.emit
                 self._start_browser_safe(browser)
                 browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
@@ -5704,6 +5708,7 @@ class FSEApp(QMainWindow):
             if not reused:
                 browser = FSEBrowser(config, logger)
                 browser._otp_callback = self._request_otp_from_user
+                browser._warning_callback = self._bridge.show_warning.emit
                 self._start_browser_safe(browser)
                 browser.wait_for_manual_login(stop_event=self._patient_stop_event)
 
