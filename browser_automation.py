@@ -1477,22 +1477,49 @@ class FSEBrowser:
             self._logger.info(f"Browser non in esecuzione, lancio con CDP: {exe_path}")
             _launch_browser_with_cdp(exe_path, port, logger=self._logger)
 
-            # Wait for CDP port + connect
+            # Wait for CDP port to become available first
+            port_ready = False
             elapsed = 0.0
             while elapsed < CDP_CONNECT_TIMEOUT:
+                if _is_cdp_port_available(port):
+                    port_ready = True
+                    break
+                time.sleep(CDP_CONNECT_POLL)
+                elapsed += CDP_CONNECT_POLL
+
+            if not port_ready:
+                raise ConnectionError(
+                    f"Browser lanciato ma la porta CDP {port} non risponde "
+                    f"entro {CDP_CONNECT_TIMEOUT} secondi."
+                )
+
+            # Let Edge finish creating internal targets (Copilot sidebar, extensions, etc.)
+            # before cleanup. Without this delay, _cleanup_cdp_targets misses late-arriving
+            # "other" targets, and connect_over_cdp deadlocks on them.
+            self._logger.debug("[CDP] Porta attiva, attesa stabilizzazione browser...")
+            time.sleep(3)
+
+            # Now cleanup + connect (with one retry if deadlock occurs)
+            last_error = None
+            for attempt in range(1, 3):
                 try:
                     self._connect_cdp(endpoint, port)
                     self._logger.info(
-                        f"Connesso al browser lanciato dopo {elapsed:.1f}s"
+                        f"Connesso al browser lanciato (tentativo {attempt})"
                     )
                     return
-                except ConnectionError:
-                    time.sleep(CDP_CONNECT_POLL)
-                    elapsed += CDP_CONNECT_POLL
+                except ConnectionError as e:
+                    last_error = e
+                    self._logger.warning(
+                        f"Connessione al browser lanciato fallita (tentativo {attempt}): {e}"
+                    )
+                    if attempt < 2:
+                        # Retry: cleanup again in case new targets appeared
+                        time.sleep(2)
 
             raise ConnectionError(
                 f"Browser lanciato ma la connessione CDP sulla porta {port} "
-                f"non e' riuscita entro {CDP_CONNECT_TIMEOUT} secondi."
+                f"non e' riuscita.\nUltimo errore: {last_error}"
             )
 
         # 5. No browser found, cannot launch
@@ -1555,16 +1582,37 @@ class FSEBrowser:
         if closed > 0:
             time.sleep(1.5)  # Edge needs time to stabilize after target closures
 
-        try:
-            self._browser = self._playwright.chromium.connect_over_cdp(
-                endpoint, timeout=15000
+        # Use a thread to enforce a hard timeout — connect_over_cdp's
+        # built-in timeout is bypassed when it deadlocks on "other" targets.
+        result = [None]
+        error = [None]
+
+        def _do_connect():
+            try:
+                result[0] = self._playwright.chromium.connect_over_cdp(
+                    endpoint, timeout=15000
+                )
+            except Exception as e:
+                error[0] = e
+
+        thread = threading.Thread(target=_do_connect, daemon=True)
+        thread.start()
+        thread.join(timeout=20)
+
+        if thread.is_alive():
+            raise ConnectionError(
+                f"connect_over_cdp deadlock sulla porta {port} "
+                f"(timeout 20s superato). Probabile target CDP problematico."
             )
-        except Exception as e:
+
+        if error[0]:
             raise ConnectionError(
                 f"Impossibile connettersi al browser su {endpoint}. "
                 f"Assicurati che il browser sia avviato con --remote-debugging-port={port}\n"
-                f"Errore: {e}"
+                f"Errore: {error[0]}"
             )
+
+        self._browser = result[0]
 
         # Use the default context (carries existing cookies/session)
         contexts = self._browser.contexts
@@ -1944,7 +1992,8 @@ class FSEBrowser:
 
         # ── Step 1: Navigate OUR page to FSE, authenticate via existing cookies ──
         self._logger.info("Navigazione al portale FSE per verifica sessione...")
-        self._page.goto(FSE_BASE_URL, wait_until="networkidle")
+        self._page.goto(FSE_BASE_URL, wait_until="domcontentloaded", timeout=30000)
+        self._page.bring_to_front()
 
         # Try clicking "Accedi" to trigger SSO redirect
         try:
