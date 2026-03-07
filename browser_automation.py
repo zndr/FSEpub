@@ -2406,35 +2406,49 @@ class FSEBrowser:
                 # Check for consent service error before assuming session expired
                 self._check_consent_service_error(codice_fiscale)
 
-                # Post-search session check: the spinner may have briefly
-                # flashed (Angular started processing) but the expired
-                # session caused an instant redirect back to the search
-                # form.  Detect this by checking if #inputcf reappeared.
-                cf_input_post = self._page.locator("#inputcf")
-                if cf_input_post.is_visible(timeout=1500):
-                    self._logger.warning(
-                        "Pagina di ricerca scaduta: la pagina e' tornata "
-                        "al form di ricerca dopo il click su 'Cerca' "
-                        "(sessione Angular scaduta). Refresh automatico..."
-                    )
-                    self._page.reload(wait_until="networkidle")
-                    self._wait_for_spinner()
-                    # Retry: fill CF and click Cerca once more
+                # Post-search session check: check for positive success
+                # indicators before assuming session expired.  The search
+                # form (#inputcf) stays visible even after a successful
+                # search, so we must look for results (Accedi button,
+                # Accesso autorizzato, or Referti tab).
+                success_indicator = self._page.locator(
+                    "button:has-text('Accedi'), "
+                    ":text-is('Accesso autorizzato'), "
+                    ":text-is('Referti')"
+                ).first
+                has_success = False
+                try:
+                    success_indicator.wait_for(state="visible", timeout=5000)
+                    has_success = True
+                except Exception:
+                    pass
+
+                if not has_success:
                     cf_input_post = self._page.locator("#inputcf")
-                    if cf_input_post.is_visible(timeout=5000):
-                        cf_input_post.fill(codice_fiscale)
+                    if cf_input_post.is_visible(timeout=1500):
+                        self._logger.warning(
+                            "Pagina di ricerca scaduta: la pagina e' tornata "
+                            "al form di ricerca dopo il click su 'Cerca' "
+                            "(sessione Angular scaduta). Refresh automatico..."
+                        )
+                        self._page.reload(wait_until="networkidle")
                         self._wait_for_spinner()
-                        cerca = self._page.get_by_role("button", name="Cerca")
-                        if cerca.is_visible(timeout=3000):
-                            cerca.click()
-                            self._page.wait_for_load_state("networkidle")
+                        # Retry: fill CF and click Cerca once more
+                        cf_input_post = self._page.locator("#inputcf")
+                        if cf_input_post.is_visible(timeout=5000):
+                            cf_input_post.fill(codice_fiscale)
                             self._wait_for_spinner()
+                            cerca = self._page.get_by_role("button", name="Cerca")
+                            if cerca.is_visible(timeout=3000):
+                                cerca.click()
+                                self._page.wait_for_load_state("networkidle")
+                                self._wait_for_spinner()
         else:
             self._logger.info("Form ricerca non presente, pagina gia' nel fascicolo")
 
         # Step 2: Click "Accedi" to enter patient FSE (only if visible)
-        accedi_btn = self._page.locator("button.btn-xlarge")
-        if accedi_btn.is_visible(timeout=3000):
+        accedi_btn = self._page.get_by_role("button", name="Accedi")
+        if accedi_btn.is_visible(timeout=5000):
             accedi_btn.click()
             self._page.wait_for_load_state("networkidle")
             self._wait_for_spinner()
@@ -2580,35 +2594,51 @@ class FSEBrowser:
             # Check for consent service error before assuming session expired
             self._check_consent_service_error(codice_fiscale)
 
-            # Post-search session check: the spinner may have briefly
-            # flashed (Angular started processing) but the expired
-            # session caused an instant redirect back to the search
-            # form.  Detect this by checking if #inputcf reappeared.
-            cf_input_post = self._page.locator("#inputcf")
-            if cf_input_post.is_visible(timeout=1500):
-                if on_page_expired is not None:
-                    on_page_expired()
-                if attempt < max_retries - 1:
-                    self._logger.warning(
-                        "Pagina di ricerca scaduta: la pagina e' tornata "
-                        "al form di ricerca dopo il click su 'Cerca' "
-                        "(sessione Angular scaduta). Aggiornamento "
-                        "automatico della pagina..."
-                    )
-                    self._page.reload(wait_until="networkidle")
-                    self._wait_for_spinner()
-                    continue
-                else:
-                    raise RuntimeError(
-                        "Pagina di ricerca scaduta. La pagina torna al "
-                        "form di ricerca dopo aver cliccato 'Cerca', "
-                        "segno che la sessione Angular e' scaduta. "
-                        "Aggiornare manualmente la pagina e riprovare."
-                    )
+            # Post-search session check: after clicking Cerca, the page
+            # may show results (Accedi button, Accesso autorizzato, or
+            # Referti tab) OR redirect back to the empty search form if
+            # the session expired.  We check for positive indicators
+            # first: if they appear, the search succeeded.  Only if
+            # #inputcf is visible WITHOUT any success indicator do we
+            # treat it as a session expiry.
+            success_indicator = self._page.locator(
+                "button:has-text('Accedi'), "
+                ":text-is('Accesso autorizzato'), "
+                ":text-is('Referti')"
+            ).first
+            has_success = False
+            try:
+                success_indicator.wait_for(state="visible", timeout=5000)
+                has_success = True
+            except Exception:
+                pass
+
+            if not has_success:
+                cf_input_post = self._page.locator("#inputcf")
+                if cf_input_post.is_visible(timeout=1500):
+                    if on_page_expired is not None:
+                        on_page_expired()
+                    if attempt < max_retries - 1:
+                        self._logger.warning(
+                            "Pagina di ricerca scaduta: la pagina e' tornata "
+                            "al form di ricerca dopo il click su 'Cerca' "
+                            "(sessione Angular scaduta). Aggiornamento "
+                            "automatico della pagina..."
+                        )
+                        self._page.reload(wait_until="networkidle")
+                        self._wait_for_spinner()
+                        continue
+                    else:
+                        raise RuntimeError(
+                            "Pagina di ricerca scaduta. La pagina torna al "
+                            "form di ricerca dopo aver cliccato 'Cerca', "
+                            "segno che la sessione Angular e' scaduta. "
+                            "Aggiornare manualmente la pagina e riprovare."
+                        )
 
             # Wait for next UI element (Accedi button or Referti tab)
             try:
-                self._page.locator("button.btn-xlarge, :text-is('Referti')").first.wait_for(
+                self._page.locator("button:has-text('Accedi'), :text-is('Referti')").first.wait_for(
                     state="visible", timeout=15000,
                 )
             except Exception:
@@ -2624,8 +2654,8 @@ class FSEBrowser:
             raise InterruptedError("Workflow interrotto dall'utente")
 
         # Step 4: Click "Accedi" if visible
-        accedi_btn = self._page.locator("button.btn-xlarge")
-        if accedi_btn.is_visible(timeout=3000):
+        accedi_btn = self._page.get_by_role("button", name="Accedi")
+        if accedi_btn.is_visible(timeout=5000):
             accedi_btn.click()
             self._page.wait_for_load_state("networkidle")
             self._wait_for_spinner()
