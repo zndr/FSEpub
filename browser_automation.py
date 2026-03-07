@@ -1224,6 +1224,7 @@ class FSEBrowser:
         self._page: Page | None = None
         self._owned_page: Page | None = None  # The tab WE created/found — safe to close
         self._attached = False  # True when connected to existing browser via CDP
+        self._siss_authenticated_on_connect = False  # True when CDP found active SISS session
         self._otp_callback: callable | None = None  # GUI callback to request OTP from user
 
     def start(self) -> None:
@@ -1744,6 +1745,7 @@ class FSEBrowser:
         if siss_page:
             self._page = siss_page
             self._owned_page = None  # Non chiudere su stop() — non è nostra
+            self._siss_authenticated_on_connect = True
             self._logger.info(
                 f"Pagina SISS autenticata riutilizzata: {self._get_real_url(siss_page)}"
             )
@@ -2075,6 +2077,7 @@ class FSEBrowser:
         self._page = None
         self._owned_page = None
         self._attached = False
+        self._siss_authenticated_on_connect = False
         self._logger.info("Browser chiuso")
 
     def _auto_login_firma_remota(self) -> bool:
@@ -2222,6 +2225,14 @@ class FSEBrowser:
         to avoid unnecessary manual login that would invalidate other apps' sessions.
         """
         import time
+
+        # ── Early exit: _connect_cdp already found an authenticated SISS page ──
+        if self._siss_authenticated_on_connect:
+            self._logger.info(
+                "Sessione SISS gia' verificata in fase di connessione CDP — "
+                "login manuale non necessario"
+            )
+            return
 
         # ── Step 0: Check if ANY existing tab already has an active SISS session ──
         existing_siss = self._find_authenticated_siss_page()

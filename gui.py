@@ -3122,6 +3122,8 @@ class FSEApp(QMainWindow):
         if self._btn_mw_stop is not None:
             self._btn_mw_stop.setEnabled(False)
         self._mw_log("--- Workflow terminato ---")
+        # Refresh SISS status after browser operation
+        self._check_siss_status()
 
     def _stop_mw_workflow(self) -> None:
         """Request stop of the Millewin workflow."""
@@ -5348,6 +5350,8 @@ class FSEApp(QMainWindow):
         _play_completion_sound()
         # Refresh email count (emails may have been marked as read)
         self._check_email_status()
+        # Refresh SISS status (session may have been kept or closed)
+        self._check_siss_status()
 
         summary = self._processing_summary
         if summary is not None:
@@ -5442,6 +5446,7 @@ class FSEApp(QMainWindow):
         self._btn_list_docs.setEnabled(True)
         self._btn_patient_stop.setEnabled(False)
         self._patient_log("--- Scansione strutture terminata ---")
+        self._check_siss_status()
 
     # ---- List documents workflow ----
 
@@ -5561,6 +5566,7 @@ class FSEApp(QMainWindow):
         self._btn_load_enti.setEnabled(True)
         self._btn_patient_stop.setEnabled(False)
         self._patient_log("--- Elencazione referti terminata ---")
+        self._check_siss_status()
 
     # ---- Patient download ----
 
@@ -5833,6 +5839,8 @@ class FSEApp(QMainWindow):
         self._btn_list_docs.setEnabled(True)
         self._patient_log("--- Download terminato ---")
         _play_completion_sound()
+        # Refresh SISS status (session may have been kept or closed)
+        self._check_siss_status()
 
         summary = self._patient_summary
         if summary is not None:
