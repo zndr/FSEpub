@@ -1039,11 +1039,13 @@ def _create_tab_via_http(base: str, url: str) -> str | None:
 
 
 def _check_siss_via_cdp(port: int) -> bool | str | None:
-    """Check SISS session by opening a probe tab via CDP.
+    """Check SISS session status via CDP.
 
-    Opens a temporary browser tab to the SISS portal, waits for the server
-    to respond (redirect to SSO login = no session, stay on portal = active),
-    checks the final URL and title, and closes the tab.
+    Strategy:
+      1. Quick scan of existing browser tabs for an active SISS page
+         (avoids creating probe tabs entirely in the common case).
+      2. If no SISS tab exists, create a temporary probe tab to test
+         whether the session cookie is still valid.
 
     Returns:
         True   – session is active
@@ -1054,32 +1056,75 @@ def _check_siss_via_cdp(port: int) -> bool | str | None:
     base = f"http://127.0.0.1:{port}"
     fse_url = "https://operatorisiss.servizirl.it/opefseie/"
 
-    # Quick check: is CDP available at all?  Get WebSocket URL at the same time.
+    # Quick check: is CDP available at all?
     try:
         req = urllib.request.Request(f"{base}/json/version")
         with urllib.request.urlopen(req, timeout=2) as resp:
             if resp.status != 200:
                 return None
-            version_info = json.loads(resp.read())
-        ws_url = version_info.get("webSocketDebuggerUrl", "")
     except Exception:
         return None
 
-    # Open a temporary probe tab in BACKGROUND via CDP WebSocket.
-    # Using Target.createTarget with background:true avoids bringing
-    # the browser window to the foreground (unlike /json/new).
-    probe_id = _create_background_tab(port, fse_url, ws_url)
-    if not probe_id:
-        # Fallback to HTTP /json/new if WebSocket approach fails
-        probe_id = _create_tab_via_http(base, fse_url)
+    # ── Step 1: scan existing tabs for an active SISS page ──
+    tabs = []
+    try:
+        req = urllib.request.Request(f"{base}/json/list")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            tabs = json.loads(resp.read())
+        for tab in tabs:
+            url = tab.get("url", "").lower()
+            title = tab.get("title", "").lower()
+            # Tab is on SISS portal (not on SSO login) → session active
+            if (("operatorisiss" in url or "servizirl" in url)
+                    and "idpcrlmain" not in url
+                    and "ssoauth" not in url):
+                return True
+            # Check for unreachable error on an existing SISS tab
+            if "impossibile raggiungere" in title and "siss" in title:
+                return _SISS_UNREACHABLE
+    except Exception:
+        pass
+
+    # ── Step 2: no SISS tab found — create a probe tab ──
+    # Remember the currently active tab to re-activate it later
+    active_tab_id = tabs[0].get("id") if tabs else None
+
+    # Open a temporary probe tab (PUT for newer Edge, GET fallback)
+    probe_id = None
+    try:
+        req = urllib.request.Request(f"{base}/json/new?{fse_url}", method="PUT")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            probe_tab = json.loads(resp.read())
+        probe_id = probe_tab.get("id")
+    except urllib.error.HTTPError:
+        try:
+            req = urllib.request.Request(f"{base}/json/new?{fse_url}")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                probe_tab = json.loads(resp.read())
+            probe_id = probe_tab.get("id")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     if not probe_id:
         return None
 
     try:
-        # Poll the probe tab URL until it resolves (up to 10s, check every 0.5s)
+        # Re-activate the original tab so the probe stays in background
+        if active_tab_id:
+            try:
+                req = urllib.request.Request(
+                    f"{base}/json/activate/{active_tab_id}"
+                )
+                urllib.request.urlopen(req, timeout=2)
+            except Exception:
+                pass
+
+        # Poll the probe tab URL until it resolves (up to 8s, check every 0.5s)
         final_url = ""
         final_title = ""
-        for _ in range(20):  # 20 × 0.5s = 10s max
+        for poll_i in range(16):  # 16 × 0.5s = 8s max
             time.sleep(0.5)
             try:
                 req = urllib.request.Request(f"{base}/json/list")
@@ -1089,9 +1134,19 @@ def _check_siss_via_cdp(port: int) -> bool | str | None:
                     if tab.get("id") == probe_id:
                         url = tab.get("url", "").lower()
                         title = tab.get("title", "")
-                        # Still loading — keep polling
-                        if not url or url in ("", "about:blank", fse_url.lower()):
+                        # Still loading from blank
+                        if not url or url in ("", "about:blank"):
                             break
+                        # URL is the FSE portal — if we've waited >= 3s
+                        # and no redirect happened, the session IS active.
+                        # (unauthenticated users get redirected to SSO
+                        # within 1-2s; staying on fse_url means logged in)
+                        if url == fse_url.lower():
+                            if poll_i >= 6:
+                                final_url = url
+                                final_title = title
+                            break
+                        # URL changed to something else (SSO login, etc.)
                         final_url = url
                         final_title = title
                         break
@@ -1382,9 +1437,15 @@ class FSEBrowser:
                 )
 
             # has_flag is False or None — no CDP flag (or check failed).
-            # Likely the browser was started from a shortcut, Start Menu or
-            # another app (e.g. Millewin) BEFORE the registry override was in
-            # place, so it's running without --remote-debugging-port.
+            # The browser was started from a shortcut, Start Menu, or
+            # another app (e.g. Millewin) BEFORE the registry override
+            # was in place, so it's running without --remote-debugging-port.
+            #
+            # IMPORTANT: Do NOT try to launch a new browser window here.
+            # Edge's single-instance mechanism absorbs the launch, creating
+            # unwanted tabs without enabling CDP.
+            # Do NOT offer automatic restart — it kills ALL browser
+            # processes including Millewin's session, which is unrecoverable.
             if has_flag is None:
                 self._logger.warning(
                     f"[CDP] Impossibile verificare i flag del processo {process_name} "
@@ -1394,69 +1455,20 @@ class FSEBrowser:
             else:
                 self._logger.info(
                     f"[CDP] Il browser {process_name} e' in esecuzione SENZA flag CDP. "
-                    f"Causa probabile: avviato da scorciatoia/Start Menu/altro programma "
-                    f"prima che il registro fosse aggiornato con --remote-debugging-port={port}."
-                )
-                # Log raw WMIC/PowerShell output for remote debugging
-                try:
-                    wmic_result = subprocess.run(
-                        ["wmic", "process", "where", f"name='{process_name}'",
-                         "get", "CommandLine", "/FORMAT:LIST"],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    cmdlines = [l.strip() for l in wmic_result.stdout.splitlines() if l.strip()]
-                    self._logger.debug(
-                        f"[CDP] CommandLine raw dal processo: {cmdlines[:5]}"
-                    )
-                except Exception:
-                    pass
-
-            # Try launching a new browser window with CDP enabled.
-            # Use a short timeout: if only background processes exist, CDP
-            # comes up in 2-3s. If a full browser window is open, the
-            # single-instance mechanism absorbs the launch and CDP never
-            # activates — no point waiting 20s.
-            QUICK_CDP_TIMEOUT = 5  # seconds (reduced from CDP_CONNECT_TIMEOUT=20)
-            if exe_path and Path(exe_path).exists():
-                self._logger.info(
-                    f"Nessun flag CDP nei processi {process_name}, "
-                    f"lancio browser con CDP sulla porta {port}..."
-                )
-                _launch_browser_with_cdp(exe_path, port, logger=self._logger)
-
-                elapsed = 0.0
-                while elapsed < QUICK_CDP_TIMEOUT:
-                    try:
-                        self._connect_cdp(endpoint, port)
-                        self._logger.info(
-                            f"Connesso al browser lanciato dopo {elapsed:.1f}s"
-                        )
-                        return
-                    except ConnectionError:
-                        time.sleep(CDP_CONNECT_POLL)
-                        elapsed += CDP_CONNECT_POLL
-
-                # Launch absorbed by existing browser window — need full restart
-                self._logger.warning(
-                    f"Lancio browser non ha attivato CDP sulla porta {port} "
-                    f"(timeout {QUICK_CDP_TIMEOUT}s)"
-                )
-                raise BrowserCDPNotActive(
-                    f"Il browser e' aperto ma senza supporto CDP sulla porta {port}.\n\n"
-                    f"Causa probabile: il browser e' stato avviato tramite scorciatoia, "
-                    f"Start Menu o un altro programma (es. Millewin) PRIMA che il "
-                    f"registro venisse configurato per CDP.\n\n"
-                    f"Soluzione: riavviare il browser per applicare la configurazione CDP.\n"
-                    f"Le tab aperte verranno ripristinate automaticamente.",
-                    process_name=process_name,
-                    exe_path=exe_path,
-                    port=port,
+                    f"Necessario riavvio manuale del browser."
                 )
 
             raise ConnectionError(
-                f"Processi {process_name} rilevati ma CDP non attivo "
-                f"e nessun eseguibile trovato.\n"
-                f"Avvia manualmente il browser con --remote-debugging-port={port}"
+                f"Il browser e' in esecuzione ma senza supporto CDP "
+                f"(porta {port} non risponde).\n\n"
+                f"Il browser e' stato avviato prima che FSE Processor potesse "
+                f"configurare il supporto CDP nel registro di Windows.\n\n"
+                f"Per risolvere:\n"
+                f"  1. Chiudi MANUALMENTE il browser (tutte le finestre)\n"
+                f"  2. Riapri il browser normalmente\n"
+                f"  3. Riprova il download\n\n"
+                f"Il registro e' gia' configurato: ogni futuro avvio del "
+                f"browser includera' automaticamente il supporto CDP."
             )
 
         # 4. Browser NOT running → launch it with CDP
@@ -1535,16 +1547,13 @@ class FSEBrowser:
 
     def _connect_cdp(self, endpoint: str, port: int) -> None:
         """Connect to a browser via CDP and set up context/page."""
-        # Pre-check: look for problematic targets via lightweight HTTP call.
-        # Only run the heavy WebSocket cleanup if "other" or blank targets exist.
-        # This avoids destabilizing browsers that don't need cleanup (most machines),
-        # while still fixing the Playwright hang on machines with Edge Copilot/newtab
-        # "other" targets (where connect_over_cdp deadlocks ignoring its timeout).
-        needs_cleanup = _has_problematic_cdp_targets(port, logger=self._logger)
-        if needs_cleanup:
-            closed = _cleanup_cdp_targets(port, logger=self._logger)
-            if closed > 0:
-                time.sleep(1.5)  # Edge needs time to stabilize after target closures
+        # ALWAYS pre-clean problematic CDP targets before connecting.
+        # Edge's "other" targets (Copilot, newtab) cause Playwright's
+        # connect_over_cdp to deadlock indefinitely (ignoring its timeout).
+        # Skipping this step — even conditionally — risks a hard hang.
+        closed = _cleanup_cdp_targets(port, logger=self._logger)
+        if closed > 0:
+            time.sleep(1.5)  # Edge needs time to stabilize after target closures
 
         try:
             self._browser = self._playwright.chromium.connect_over_cdp(

@@ -2160,6 +2160,12 @@ class FSEApp(QMainWindow):
         if not Path(ENV_FILE).exists() or not self._fields.get("EMAIL_USER"):
             QTimer.singleShot(100, self._show_setup_wizard)
 
+        # Ensure CDP registry override is in place BEFORE the user opens
+        # any browser (e.g. via Millewin).  This way, every future Edge/Chrome
+        # launch — from shortcuts, Start Menu, Millewin, or URL clicks — will
+        # automatically include --remote-debugging-port.
+        self._ensure_cdp_registry_at_startup()
+
         # Auto-check for updates after the window is shown
         QTimer.singleShot(2000, self._check_updates_startup)
 
@@ -2189,6 +2195,30 @@ class FSEApp(QMainWindow):
     def _set_field(self, key: str, value) -> None:
         """Set a field value."""
         self._fields[key] = value
+
+    def _ensure_cdp_registry_at_startup(self) -> None:
+        """Set up CDP registry override at app startup.
+
+        Must run BEFORE the user opens any browser (e.g. via Millewin),
+        so that every future browser launch includes --remote-debugging-port.
+        """
+        cdp_enabled = str(self._fields.get("USE_EXISTING_BROWSER", "true")).lower() == "true"
+        if not cdp_enabled:
+            return
+        port_str = str(self._fields.get("CDP_PORT", "9222"))
+        try:
+            port = int(port_str)
+        except ValueError:
+            return
+        browser_info = detect_default_browser()
+        if not browser_info or not browser_info.get("cdp_compatible", True):
+            return
+        progid = browser_info["progid"]
+        if not get_cdp_registry_status(progid, port):
+            try:
+                enable_cdp_in_registry(progid, port)
+            except Exception:
+                pass
 
     def _show_setup_wizard(self) -> None:
         """Launch the setup wizard dialog."""
