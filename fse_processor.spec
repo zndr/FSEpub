@@ -2,16 +2,24 @@
 """PyInstaller spec for FSE Processor (onedir mode)."""
 
 import os
+import glob
 import importlib
 
 # Locate playwright driver directory
 playwright_pkg = os.path.dirname(importlib.import_module("playwright").__file__)
 playwright_driver = os.path.join(playwright_pkg, "driver")
 
+# Locate mypyc compiled modules (used by pdfminer.six)
+# These .pyd files sit in site-packages root with hashed names
+site_packages = os.path.dirname(os.path.dirname(importlib.import_module("pdfminer").__file__))
+mypyc_binaries = [
+    (f, ".") for f in glob.glob(os.path.join(site_packages, "*__mypyc*.pyd"))
+]
+
 a = Analysis(
     ["gui.py"],
     pathex=[],
-    binaries=[],
+    binaries=mypyc_binaries,
     datas=[
         # Include the entire Playwright driver (node.exe + cli.js + browser support)
         (playwright_driver, os.path.join("playwright", "driver")),
