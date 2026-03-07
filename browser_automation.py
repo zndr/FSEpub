@@ -64,12 +64,24 @@ def _is_tipologia_valida(tipologia: str, allowed_types: set[str] | None = None) 
 
 
 def _parse_table_date(date_text: str) -> date | None:
-    """Parse a date string from the FSE table into a date object."""
-    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(date_text.strip(), fmt).date()
-        except ValueError:
-            continue
+    """Parse a date string from the FSE table into a date object.
+
+    Handles various separators, newlines (from <br> in cells), and
+    non-breaking spaces that the FSE portal may produce.
+    """
+    import re as _re
+    # Normalize: collapse newlines/tabs/non-breaking spaces into single space
+    cleaned = _re.sub(r'[\n\r\t\xa0]+', ' ', date_text).strip()
+    # Also try just the date part (before any space) in case time is on a new line
+    date_only = cleaned.split()[0] if cleaned else ""
+    for candidate in (cleaned, date_only):
+        for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                    "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M", "%d-%m-%Y",
+                    "%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
+            try:
+                return datetime.strptime(candidate, fmt).date()
+            except ValueError:
+                continue
     return None
 
 
@@ -2988,7 +3000,9 @@ class FSEBrowser:
     def list_patient_documents(self, codice_fiscale: str,
                                stop_event: threading.Event | None = None,
                                on_enti_found: callable | None = None,
-                               on_discipline_found: callable | None = None) -> list[PatientDocumentInfo]:
+                               on_discipline_found: callable | None = None,
+                               date_from: date | None = None,
+                               date_to: date | None = None) -> list[PatientDocumentInfo]:
         """Navigate to the FSE and read the document table without downloading anything.
 
         Returns a list of PatientDocumentInfo for every row in the table.
@@ -3003,6 +3017,9 @@ class FSEBrowser:
         self._logger.info(f"Navigazione FSE per elenco documenti: {fse_link}")
 
         self._navigate_and_login(fse_link, codice_fiscale)
+
+        # Apply date filter on the portal before reading the table
+        self._apply_portal_date_filter(date_from, date_to)
 
         referti_table = self._page.locator("table:has(th:has-text('Tipologia documento'))")
         referti_table.wait_for(state="attached", timeout=10000)
@@ -3057,6 +3074,68 @@ class FSEBrowser:
         self._logger.info(f"Elencati {len(docs)} documenti")
         return docs
 
+    def _apply_portal_date_filter(self, date_from: date | None, date_to: date | None) -> None:
+        """Fill the 'Data pubblicazione' filter on the FSE portal.
+
+        The field accepts a range in the format 'gg/mm/aaaa - gg/mm/aaaa'.
+        Being an Angular SPA, we use keyboard input (type) instead of fill()
+        to ensure Angular's change detection picks up the value.
+        After filling, we trigger a table reload and wait for updated results.
+        """
+        if not date_from and not date_to:
+            return
+
+        from_str = date_from.strftime("%d/%m/%Y") if date_from else ""
+        to_str = date_to.strftime("%d/%m/%Y") if date_to else ""
+
+        # Locate the date filter input by placeholder
+        date_input = self._page.locator("input[placeholder*='gg/mm/aaaa']").first
+        if not date_input.is_visible(timeout=3000):
+            self._logger.warning("Campo filtro 'Data pubblicazione' non trovato nel portale")
+            return
+
+        if from_str and to_str:
+            date_range = f"{from_str} - {to_str}"
+        elif from_str:
+            date_range = f"{from_str} - "
+        else:
+            date_range = f" - {to_str}"
+
+        self._logger.info(f"Applicazione filtro data sul portale: {date_range}")
+
+        # Count current rows before filtering, to detect reload
+        try:
+            old_count = self._page.locator("table:has(th:has-text('Tipologia documento')) tbody tr:has(td)").count()
+        except Exception:
+            old_count = -1
+
+        # Clear existing value and type the new range character by character
+        date_input.click()
+        date_input.press("Control+a")
+        date_input.press("Backspace")
+        date_input.type(date_range, delay=30)
+
+        # Trigger Angular change detection: Tab away, then wait
+        date_input.press("Tab")
+        import time
+        time.sleep(0.5)
+        self._page.wait_for_load_state("networkidle")
+        self._wait_for_spinner()
+
+        # If Tab didn't trigger, try pressing Enter on the input
+        try:
+            new_count = self._page.locator("table:has(th:has-text('Tipologia documento')) tbody tr:has(td)").count()
+            if old_count >= 0 and new_count == old_count:
+                # Table hasn't changed — try clicking the input and pressing Enter
+                date_input.click()
+                date_input.press("Enter")
+                self._page.wait_for_load_state("networkidle")
+                self._wait_for_spinner()
+        except Exception:
+            pass
+
+        self._logger.info("Filtro data applicato sul portale")
+
     def process_patient_all_dates(self, codice_fiscale: str,
                                   stop_event: threading.Event | None = None,
                                   allowed_types: set[str] | None = None,
@@ -3092,6 +3171,9 @@ class FSEBrowser:
             return [DocumentResult(disciplina="N/A", skipped=False, download_path=None, error=str(e))]
 
         try:
+            # Apply date filter on the portal BEFORE reading the table
+            self._apply_portal_date_filter(date_from, date_to)
+
             self._logger.start_progress("Caricamento tabella referti")
             referti_table = self._page.locator("table:has(th:has-text('Tipologia documento'))")
             referti_table.wait_for(state="attached", timeout=10000)
@@ -3154,6 +3236,8 @@ class FSEBrowser:
                 on_discipline_found(sorted(disc_set))
 
             # Phase 2: Filter and download
+            if date_from or date_to:
+                self._logger.info(f"Filtro periodo: dal {date_from or '(inizio)'} al {date_to or '(fine)'}")
             ente_filter_upper = ente_filter.strip().upper()
             disc_filter_upper = discipline_filter.strip().upper()
 
@@ -3190,17 +3274,28 @@ class FSEBrowser:
                     parsed = _parse_table_date(date_text)
                     if parsed:
                         if date_from and parsed < date_from:
+                            self._logger.debug(f"Riga {i}: data {parsed} prima di {date_from}, saltata")
                             results.append(DocumentResult(
                                 disciplina=tipo_text, skipped=True, download_path=None, error=None,
                                 date_text=date_text,
                             ))
                             continue
                         if date_to and parsed > date_to:
+                            self._logger.debug(f"Riga {i}: data {parsed} dopo {date_to}, saltata")
                             results.append(DocumentResult(
                                 disciplina=tipo_text, skipped=True, download_path=None, error=None,
                                 date_text=date_text,
                             ))
                             continue
+                    else:
+                        self._logger.warning(
+                            f"Riga {i}: impossibile interpretare data '{date_text}', documento saltato"
+                        )
+                        results.append(DocumentResult(
+                            disciplina=tipo_text, skipped=True, download_path=None, error=None,
+                            date_text=date_text,
+                        ))
+                        continue
                 rows_to_download.append((i, date_text, tipo_text, ente_text))
 
             total_match = len(rows_to_download)

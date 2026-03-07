@@ -2719,6 +2719,9 @@ class FSEApp(QMainWindow):
         self._date_to_entry.setEnabled(False)
         filter_layout.addWidget(self._date_to_entry, 2, 3)
 
+        # Apply initial preset so date fields are populated immediately
+        self._on_date_preset_changed("Ieri e oggi")
+
         left_layout.addWidget(filter_group)
         left_layout.addStretch()
         top_layout.addWidget(left_widget, 1)
@@ -2947,8 +2950,6 @@ class FSEApp(QMainWindow):
         self._mw_stop_event.clear()
         self._btn_mw_start.setEnabled(False)
         self._btn_mw_stop.setEnabled(True)
-        if cf_override is None and _is_millewin_installed():
-            self._cf_entry.clear()
         self._mw_log("--- Avvio workflow FSE ---")
 
         self._mw_worker = threading.Thread(
@@ -2968,8 +2969,12 @@ class FSEApp(QMainWindow):
             elif _is_millewin_installed():
                 cf = self._read_millewin_cf()
                 if cf is None:
-                    self._mw_log("Nessun paziente aperto in Millewin (finestra non trovata o CF assente nel titolo)")
-                    return
+                    # Millewin installed but no patient open — fall back to manual CF entry
+                    cf = self._cf_entry.text().strip().upper()
+                    if not cf:
+                        self._mw_log("Nessun paziente aperto in Millewin e campo CF vuoto")
+                        return
+                    self._mw_log(f"Millewin senza paziente aperto, uso CF inserito manualmente: {cf}")
             else:
                 cf = self._cf_entry.text().strip().upper()
                 if not cf:
@@ -5469,6 +5474,9 @@ class FSEApp(QMainWindow):
             QMessageBox.warning(self, "Errore", "Il codice fiscale deve essere di 16 caratteri alfanumerici")
             return
 
+        date_from = self._parse_user_date(self._date_from_entry.text())
+        date_to = self._parse_user_date(self._date_to_entry.text())
+
         self._save_settings_quietly()
         self._patient_stop_event.clear()
         self._btn_list_docs.setEnabled(False)
@@ -5478,14 +5486,16 @@ class FSEApp(QMainWindow):
         self._patient_log("--- Elencazione referti in corso... ---")
 
         self._list_docs_worker = threading.Thread(
-            target=self._list_docs_worker_fn, args=(cf,), daemon=True,
+            target=self._list_docs_worker_fn, args=(cf, date_from, date_to), daemon=True,
         )
         self._list_docs_worker.start()
         self._list_docs_poll_timer = QTimer(self)
         self._list_docs_poll_timer.timeout.connect(self._poll_list_docs)
         self._list_docs_poll_timer.start(500)
 
-    def _list_docs_worker_fn(self, codice_fiscale: str) -> None:
+    def _list_docs_worker_fn(self, codice_fiscale: str,
+                             date_from: date | None = None,
+                             date_to: date | None = None) -> None:
         """Worker: open browser, list documents, then signal main thread to show dialog."""
         try:
             config = Config.load(ENV_FILE)
@@ -5530,6 +5540,8 @@ class FSEApp(QMainWindow):
                 stop_event=self._patient_stop_event,
                 on_enti_found=on_enti_found,
                 on_discipline_found=on_discipline_found,
+                date_from=date_from,
+                date_to=date_to,
             )
 
             # Save browser for reuse by download worker
@@ -5599,6 +5611,14 @@ class FSEApp(QMainWindow):
         date_from = self._parse_user_date(self._date_from_entry.text())
         date_to = self._parse_user_date(self._date_to_entry.text())
         row_indices = self._selected_row_indices
+
+        preset_text = self._date_preset_combo.currentText()
+        self._patient_log(
+            f"Filtro periodo: '{preset_text}' "
+            f"(dal: {self._date_from_entry.text() or 'vuoto'}, "
+            f"al: {self._date_to_entry.text() or 'vuoto'}) "
+            f"→ date_from={date_from}, date_to={date_to}"
+        )
 
         self._save_settings_quietly()
         self._patient_stop_event.clear()
