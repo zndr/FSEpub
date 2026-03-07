@@ -1555,64 +1555,79 @@ class FSEBrowser:
         _launch_browser_with_cdp(exe_path, port, restore_session=True, logger=self._logger)
 
         endpoint = f"http://127.0.0.1:{port}"
+
+        # Phase 1: Wait for CDP port to respond
         elapsed = 0.0
         while elapsed < CDP_CONNECT_TIMEOUT:
+            if _is_cdp_port_available(port):
+                break
+            time.sleep(CDP_CONNECT_POLL)
+            elapsed += CDP_CONNECT_POLL
+        else:
+            raise ConnectionError(
+                f"Browser riavviato ma la porta CDP {port} non risponde "
+                f"entro {CDP_CONNECT_TIMEOUT} secondi."
+            )
+
+        # Phase 2: Let Edge finish spawning internal targets
+        self._logger.debug("[CDP] Porta attiva dopo riavvio, attesa stabilizzazione...")
+        time.sleep(3)
+
+        # Phase 3: Connect with retry (2 attempts)
+        last_error = None
+        for attempt in range(1, 3):
             try:
                 self._connect_cdp(endpoint, port)
                 self._logger.info(
-                    f"Connesso al browser riavviato dopo {elapsed:.1f}s"
+                    f"Connesso al browser riavviato (tentativo {attempt})"
                 )
                 return
-            except ConnectionError:
-                time.sleep(CDP_CONNECT_POLL)
-                elapsed += CDP_CONNECT_POLL
+            except ConnectionError as e:
+                last_error = e
+                self._logger.warning(
+                    f"Connessione dopo riavvio fallita (tentativo {attempt}): {e}"
+                )
+                if attempt < 2:
+                    time.sleep(2)
 
         raise ConnectionError(
             f"Browser riavviato ma la connessione CDP sulla porta {port} "
-            f"non e' riuscita entro {CDP_CONNECT_TIMEOUT} secondi."
+            f"non e' riuscita.\nUltimo errore: {last_error}"
         )
 
     def _connect_cdp(self, endpoint: str, port: int) -> None:
         """Connect to a browser via CDP and set up context/page."""
-        # ALWAYS pre-clean problematic CDP targets before connecting.
-        # Edge's "other" targets (Copilot, newtab) cause Playwright's
-        # connect_over_cdp to deadlock indefinitely (ignoring its timeout).
-        # Skipping this step — even conditionally — risks a hard hang.
-        closed = _cleanup_cdp_targets(port, logger=self._logger)
-        if closed > 0:
-            time.sleep(1.5)  # Edge needs time to stabilize after target closures
-
-        # Use a thread to enforce a hard timeout — connect_over_cdp's
-        # built-in timeout is bypassed when it deadlocks on "other" targets.
-        result = [None]
-        error = [None]
-
-        def _do_connect():
-            try:
-                result[0] = self._playwright.chromium.connect_over_cdp(
-                    endpoint, timeout=15000
-                )
-            except Exception as e:
-                error[0] = e
-
-        thread = threading.Thread(target=_do_connect, daemon=True)
-        thread.start()
-        thread.join(timeout=20)
-
-        if thread.is_alive():
-            raise ConnectionError(
-                f"connect_over_cdp deadlock sulla porta {port} "
-                f"(timeout 20s superato). Probabile target CDP problematico."
+        # Multi-pass cleanup: Edge recreates internal targets (newtab, Copilot)
+        # after closure. Loop until stable (no new targets found).
+        MAX_CLEANUP_PASSES = 5
+        for pass_num in range(1, MAX_CLEANUP_PASSES + 1):
+            closed = _cleanup_cdp_targets(port, logger=self._logger)
+            if closed == 0:
+                break
+            self._logger.debug(
+                f"[CDP] Cleanup pass {pass_num}: chiusi {closed} target, "
+                f"attesa stabilizzazione..."
+            )
+            time.sleep(1.5)
+        else:
+            self._logger.warning(
+                f"[CDP] Target problematici ancora presenti dopo "
+                f"{MAX_CLEANUP_PASSES} passaggi di cleanup. Tentativo connessione comunque."
             )
 
-        if error[0]:
+        # Connect directly on this thread — MUST be same thread as sync_playwright().start()
+        # Playwright's 15s timeout is sufficient after aggressive multi-pass cleanup.
+        try:
+            self._browser = self._playwright.chromium.connect_over_cdp(
+                endpoint, timeout=15000
+            )
+        except Exception as e:
             raise ConnectionError(
                 f"Impossibile connettersi al browser su {endpoint}. "
-                f"Assicurati che il browser sia avviato con --remote-debugging-port={port}\n"
-                f"Errore: {error[0]}"
+                f"Assicurati che il browser sia avviato con "
+                f"--remote-debugging-port={port}\n"
+                f"Errore: {e}"
             )
-
-        self._browser = result[0]
 
         # Use the default context (carries existing cookies/session)
         contexts = self._browser.contexts

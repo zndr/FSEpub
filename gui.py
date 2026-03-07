@@ -3432,15 +3432,6 @@ class FSEApp(QMainWindow):
         br_layout.addWidget(self._headless_cb, r, 2)
         self._fields["HEADLESS"] = spec["HEADLESS"][1]
 
-        r += 1
-        self._cdp_diag_btn = QPushButton("  Diagnostica CDP")
-        self._cdp_diag_btn.setIcon(qta.icon("fa5s.stethoscope", color="white"))
-        self._cdp_diag_btn.setToolTip(
-            "Esegui un test completo della connessione CDP e genera un report diagnostico"
-        )
-        self._cdp_diag_btn.clicked.connect(self._run_cdp_diagnostics_action)
-        br_layout.addWidget(self._cdp_diag_btn, r, 0, 1, 3)
-
         top_layout.addWidget(br_group)
         layout.addLayout(top_layout)
 
@@ -3838,10 +3829,11 @@ class FSEApp(QMainWindow):
             QMessageBox.critical(self, "Errore", f"Impossibile modificare il registro:\n{e}")
             self._sync_cdp_registry_checkbox()
 
-    def _run_cdp_diagnostics_action(self) -> None:
+    def _run_cdp_diagnostics_action(self, btn: QPushButton | None = None) -> None:
         """Run CDP diagnostics in a background thread."""
-        self._cdp_diag_btn.setEnabled(False)
-        self._cdp_diag_btn.setText("  Analisi in corso...")
+        if btn:
+            btn.setEnabled(False)
+            btn.setText("  Analisi in corso...")
 
         port = int(self._fields.get("CDP_PORT", "9222") or "9222")
 
@@ -3850,16 +3842,16 @@ class FSEApp(QMainWindow):
                 result = run_cdp_diagnostics(port)
             except Exception as e:
                 result = f"Errore durante la diagnostica:\n{e}"
-            # Schedule GUI update on main thread via signal (safe from bg thread)
-            self._sig_call.emit(lambda: self._show_cdp_diagnostics_result(result))
+            self._sig_call.emit(lambda: self._show_cdp_diagnostics_result(result, btn))
 
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
-    def _show_cdp_diagnostics_result(self, report: str) -> None:
+    def _show_cdp_diagnostics_result(self, report: str, btn: QPushButton | None = None) -> None:
         """Show the diagnostics report in a dialog (called on main thread)."""
-        self._cdp_diag_btn.setEnabled(True)
-        self._cdp_diag_btn.setText("  Diagnostica CDP")
+        if btn:
+            btn.setEnabled(True)
+            btn.setText("  Diagnostica CDP")
         dlg = CDPDiagnosticsDialog(report, parent=self)
         dlg.exec()
 
@@ -4367,6 +4359,15 @@ class FSEApp(QMainWindow):
             return report
 
         btn_layout = QHBoxLayout()
+
+        cdp_diag_btn = QPushButton("  Diagnostica CDP")
+        cdp_diag_btn.setIcon(qta.icon("fa5s.stethoscope", color="white"))
+        cdp_diag_btn.setToolTip(
+            "Esegui un test completo della connessione CDP e genera un report diagnostico"
+        )
+        cdp_diag_btn.clicked.connect(lambda: self._run_cdp_diagnostics_action(cdp_diag_btn))
+        btn_layout.addWidget(cdp_diag_btn)
+
         copy_btn = QPushButton("Copia")
         copy_btn.setIcon(qta.icon("fa5s.copy", color="white"))
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(_get_full_report()))
