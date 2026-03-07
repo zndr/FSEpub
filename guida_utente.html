@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FSE Processor v2.4.0 — Guida Utente</title>
+<title>FSE Processor v2.4.22 — Guida Utente</title>
 <style>
   :root {
     --blue-900: #1a2744;
@@ -275,7 +275,7 @@
 <!-- ======================== HEADER ======================== -->
 <header class="hero" id="top">
   <h1>FSE Processor</h1>
-  <div class="version">Versione 2.3.14</div>
+  <div class="version">Versione 2.4.22</div>
   <p class="subtitle">Guida Utente &mdash; Scarico e organizzazione automatica dei referti dal Fascicolo Sanitario Elettronico</p>
 </header>
 
@@ -310,8 +310,10 @@
   <li><strong>Da email (Tab SISS)</strong> &mdash; legge le notifiche email di nuovi documenti e scarica automaticamente i referti corrispondenti.</li>
   <li><strong>Per paziente (Tab Paziente)</strong> &mdash; consente di scaricare direttamente i documenti di un paziente specifico tramite codice fiscale.</li>
 </ul>
-<p>In entrambi i casi l'app pilota il browser in modo automatico, richiede un singolo accesso manuale
-  tramite SSO e si occupa di scaricare, rinominare e organizzare i file PDF.</p>
+<p>In entrambi i casi l'app pilota il browser in modo automatico. Se le credenziali
+  <strong>Firma Remota</strong> sono configurate, il login SSO avviene automaticamente
+  (con richiesta del solo codice OTP); altrimenti &egrave; richiesto un singolo accesso manuale.
+  L'app si occupa di scaricare, rinominare e organizzare i file PDF.</p>
 
 <h3>Requisiti di sistema</h3>
 <table>
@@ -433,12 +435,16 @@
   </li>
   <li>
     <strong>Avvia</strong> &mdash; Il browser si apre sulla pagina di login del portale FSE.
-    <strong>Completare manualmente l'accesso SSO</strong> (SPID, CIE o CNS). L'app attende
-    fino a 5 minuti che il login venga completato.
+    Se le <strong>credenziali Firma Remota</strong> sono configurate nelle Impostazioni,
+    l'app tenta il <strong>login automatico</strong>: compila username e password,
+    quindi chiede il codice <strong>OTP</strong> tramite una finestra di dialogo.
+    In caso contrario, <strong>completare manualmente l'accesso SSO</strong> (SPID, CIE o CNS).
+    L'app attende fino a 5 minuti che il login venga completato.
   </li>
   <li>
     <strong>Download automatico</strong> &mdash; Dopo il login, l'app elabora ogni email in sequenza:
     apre il fascicolo del paziente, individua i referti della tipologia selezionata e scarica i PDF che hanno quella data.
+    Al termine viene emesso un <strong>segnale acustico</strong> di completamento.
   </li>
   <li>
     <strong>Rinomina e organizzazione</strong> &mdash; I file vengono automaticamente rinominati
@@ -482,6 +488,29 @@
   <li><code>Nessuna email da processare</code> &mdash; nessuna email non letta trovata</li>
 </ul>
 
+<h3>Barra di stato</h3>
+<p>Nella parte inferiore della finestra, la <strong>barra di stato</strong> mostra in tempo reale:</p>
+<ul>
+  <li><strong>Email non lette</strong> &mdash; conteggio delle notifiche FSE in attesa, aggiornato periodicamente.</li>
+  <li><strong>Sessione SISS</strong> &mdash; indica se la sessione &egrave; attiva (verde), scaduta (rosso) o non verificata (grigio). Viene verificata automaticamente all'avvio in modalit&agrave; CDP.</li>
+  <li><strong>Headless</strong> &mdash; indica se la modalit&agrave; senza finestra &egrave; attiva.</li>
+</ul>
+
+<h3>Login automatico (Firma Remota)</h3>
+<p>Se le <strong>credenziali SSO</strong> (username e password Firma Remota) sono salvate nelle Impostazioni,
+  l'app pu&ograve; effettuare il login automatico al portale FSE. Durante il login viene richiesto solo
+  il codice <strong>OTP</strong> tramite una finestra di dialogo.</p>
+<div class="box box-info">
+  <strong>Configurazione</strong>
+  Nel Tab Impostazioni, nella sezione <strong>Credenziali SSO</strong>, inserire username e password
+  di Firma Remota. Le credenziali vengono salvate in forma <strong>crittografata</strong> nel file
+  <code>settings.env</code>.
+</div>
+
+<h3>Mantenimento sessione</h3>
+<p>L'opzione <strong>Mantieni sessione</strong> evita la chiusura del browser al termine dell'elaborazione,
+  consentendo di riutilizzare la sessione SSO per operazioni successive senza dover ripetere il login.</p>
+
 <a href="#top" class="top-link">&uarr; Torna all'inizio</a>
 </section>
 
@@ -492,6 +521,13 @@
 <h3>Inserimento codice fiscale</h3>
 <p>Inserire il <strong>codice fiscale</strong> del paziente (16 caratteri alfanumerici).
   Il campo viene validato automaticamente.</p>
+<div class="box box-tip">
+  <strong>Integrazione Millewin</strong>
+  Se Millewin &egrave; installato, il pulsante <strong>MW</strong> accanto al campo CF copia
+  automaticamente il codice fiscale del paziente attivo. Se Millewin &egrave; installato ma
+  nessun paziente &egrave; aperto, l'app usa il codice fiscale inserito manualmente nel campo.
+  Il tab Paziente &egrave; disponibile anche su postazioni senza Millewin.
+</div>
 
 <h3>Selezione tipologie documento</h3>
 <p>Le tipologie sono organizzate in una struttura gerarchica:</p>
@@ -506,29 +542,47 @@
 </table>
 <p>La casella <strong>Tutti</strong> seleziona tutte le categorie e i sottotipi.</p>
 
-<h3>Filtri: Ente/Struttura e periodo</h3>
+<h3>Filtri: Ente/Struttura, Disciplina e Periodo</h3>
 
 <h4>Ente / Struttura</h4>
 <p>Il menu a tendina permette di filtrare i documenti per struttura sanitaria di origine.
   Le opzioni vengono popolate automaticamente in base ai documenti disponibili nel fascicolo del paziente.
   Il confronto &egrave; case-insensitive e funziona per sottostringa.</p>
 
+<h4>Disciplina</h4>
+<p>Per i <strong>Referti Specialistici</strong>, un ulteriore menu a tendina consente di filtrare
+  per disciplina medica (es. Cardiologia, Radiologia, Endocrinologia). Le opzioni vengono
+  popolate automaticamente dai documenti del paziente.</p>
+
 <h4>Periodo / Date</h4>
+<p>Il filtro periodo agisce direttamente sul <strong>portale FSE</strong>, compilando il campo
+  &ldquo;Data pubblicazione&rdquo; prima di leggere la tabella dei referti. Questo garantisce
+  risultati precisi anche con fascicoli molto ampi.</p>
 <table>
   <tr><th>Opzione</th><th>Comportamento</th></tr>
-  <tr><td>Tutte</td><td>Nessun filtro temporale, scarica tutti i documenti disponibili</td></tr>
+  <tr><td>Oggi</td><td>Solo documenti pubblicati oggi</td></tr>
+  <tr><td>Ieri e oggi</td><td>Documenti delle ultime 48 ore (default all'avvio)</td></tr>
   <tr><td>Ultima settimana</td><td>Solo documenti degli ultimi 7 giorni</td></tr>
   <tr><td>Ultimo mese</td><td>Solo documenti degli ultimi 30 giorni</td></tr>
   <tr><td>Ultimo anno</td><td>Solo documenti degli ultimi 365 giorni</td></tr>
   <tr><td>Personalizzato</td><td>Intervallo date personalizzato in formato <code>GG/MM/AAAA</code></td></tr>
+  <tr><td>Tutte</td><td>Nessun filtro temporale, scarica tutti i documenti disponibili</td></tr>
 </table>
+
+<h3>Elenca referti</h3>
+<p>Il pulsante <strong>Elenca Referti Selezionati</strong> apre il browser e mostra la lista
+  completa dei referti disponibili per il paziente, rispettando il filtro periodo selezionato.
+  Da questa lista &egrave; possibile selezionare manualmente i singoli documenti da scaricare.</p>
 
 <h3>Avvio download</h3>
 <ol class="steps">
   <li>Inserire il codice fiscale e selezionare tipologie e filtri desiderati.</li>
   <li>Premere <strong>Avvia Download</strong>.</li>
-  <li>Completare il login SSO manuale nel browser che si apre.</li>
+  <li>Se le credenziali Firma Remota sono configurate, il login avviene automaticamente (con richiesta OTP).
+    In caso contrario, completare il login SSO manuale nel browser.</li>
   <li>L'app naviga automaticamente al fascicolo del paziente e scarica i documenti corrispondenti ai filtri selezionati.</li>
+  <li>Al termine viene emesso un <strong>segnale acustico</strong> e, in caso di errori, viene mostrato un
+    <strong>riepilogo dei download falliti</strong> con la possibilit&agrave; di ritentarli.</li>
 </ol>
 <p>Il pulsante <strong>Interrompi</strong> permette di fermare il processo in qualsiasi momento.</p>
 
@@ -559,7 +613,14 @@
 </table>
 
 <h3>Gestione dei duplicati</h3>
-<p>Se un file con lo stesso nome esiste gi&agrave;, viene inserito un contatore progressivo:</p>
+<p>L'app rileva i duplicati in due modi:</p>
+<ul>
+  <li><strong>Per contenuto (SHA-256)</strong> &mdash; Se un file con lo stesso hash SHA-256 esiste gi&agrave;
+    nella cartella di download, il nuovo file viene scartato e segnalato come duplicato nel log.
+    Questo evita di salvare copie identiche anche se hanno nomi diversi.</li>
+  <li><strong>Per nome</strong> &mdash; Se un file con lo stesso nome ma contenuto diverso esiste gi&agrave;,
+    viene inserito un contatore progressivo:</li>
+</ul>
 <pre><code>RSSMRA80A01H501X_Mario_Rossi_LAB.pdf      (primo)
 RSSMRA80A01H501X_Mario_Rossi_1_LAB.pdf    (secondo)
 RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
@@ -893,6 +954,11 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
   <code>%APPDATA%\FSE Processor\playwright_browsers\</code> (installazione) oppure nella
   cartella <code>playwright_browsers</code> accanto all'eseguibile (modalit&agrave; portatile).</p>
 
+<h3>Processazione differita dei testi</h3>
+<p>L'opzione <strong>Processazione differita</strong> (nelle Impostazioni &gt; Analisi referti) consente di
+  <strong>scaricare prima tutti i PDF</strong> e processare i testi solo al termine di tutti i download.
+  Questo &egrave; utile per velocizzare la fase di download e ridurre il rischio di timeout della sessione SSO.</p>
+
 <h3>Persistenza delle sessioni browser</h3>
 <p>I cookie e i dati di sessione vengono conservati tra un'esecuzione e l'altra nella cartella
   <code>browser_data</code>. Questo permette in alcuni casi di riutilizzare una sessione SSO
@@ -1148,8 +1214,8 @@ RSSMRA80A01H501X_Mario_Rossi_2_LAB.pdf    (terzo)</code></pre>
 
 <!-- ======================== FOOTER ======================== -->
 <footer>
-  FSE Processor v2.4.0 &mdash; Guida Utente<br>
-  Ultimo aggiornamento: febbraio 2026
+  FSE Processor v2.4.22 &mdash; Guida Utente<br>
+  Ultimo aggiornamento: marzo 2026
 </footer>
 
 </body>
