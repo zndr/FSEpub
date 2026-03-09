@@ -1,8 +1,8 @@
 {
-    "Version": "2.5.5",
+    "Version": "2.5.7",
     "ReleaseNotes": "",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.5/FSE_Processor_Setup_2.5.5_QT6.exe",
-    "ReleaseDate": "2026-03-08",
-    "Sha256Hash": "0840627e670d4b1e5a2810242641f29d8bf430a7369ad3991a33cf0fcb58a37f",
-    "FileSize": 78481906
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.7/FSE_Processor_Setup_2.5.7_QT6.exe",
+    "ReleaseDate": "2026-03-09",
+    "Sha256Hash": "6b99d4b1afc92e7346d9f7d94c5bfb363188f091eb33e2967d76df04eeee6834",
+    "FileSize": 78493930
 }
