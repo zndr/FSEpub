@@ -1,8 +1,8 @@
 {
-    "Version": "2.5.7",
-    "ReleaseNotes": "",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.7/FSE_Processor_Setup_2.5.7_QT6.exe",
-    "ReleaseDate": "2026-03-09",
-    "Sha256Hash": "cef583f78cbe82ab5277d2d25d15777611c11d6bca87b40ef3bcf50747ca352c",
-    "FileSize": 78862120
+    "Version":  "2.5.9",
+    "ReleaseNotes":  "Aggiunto Report Reperti Patologici aggregato (locale, nessun dato inviato a server esterni)",
+    "DownloadUrl":  "https://github.com/zndr/FSEpub/releases/download/v2.5.9/FSE_Processor_Setup_2.5.9_QT6.exe",
+    "ReleaseDate":  "2026-03-24",
+    "Sha256Hash":  "2a7a95afc177b550358af9217b6eabf81d57e2b70c06e63a92a8b27889d92098",
+    "FileSize":  77208957
 }

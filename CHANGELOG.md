@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.5.9] - 2026-03-24
+
+### Aggiunto
+
+- Report patologici aggregato: nuova funzionalita' che scansiona tutti i file .txt estratti e genera un report riepilogativo con reperti patologici ordinati per gravita' (+++ > ++ > +), raggruppati per paziente e data, con sezione "Reperti normali" in fondo
+- Accessibile da menu Strumenti > Report patologici e da pulsante nella barra inferiore
+- Elaborazione interamente locale (nessun dato inviato a server esterni)
+- Report esportabile in formato testo o copiabile negli appunti
+
+
+## [2.5.7] - 2026-03-09
+
+- TODO: aggiungere note di rilascio
+
+
+## [2.4.11] - 2026-03-06
+
+- TODO: aggiungere note di rilascio
+
+
+## [2.4.10] - 2026-03-05
+
+- TODO: aggiungere note di rilascio
+
+
 ## [2.4.7] - 2026-03-05
 
 ### Corretto
