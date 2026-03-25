@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.5.10] - 2026-03-25
+
+### Aggiunto
+
+- Integrazione database Millewin per anonimizzazione basata su dizionario paziente
+- Impostazione PRIAMO_ENABLED con dialogo riavvio CDP rinviato a on-demand
+
+### Migliorato
+
+- Anonimizzazione potenziata con scrubbing PII inline e fallback basato su nome file
+
 ## [2.5.9] - 2026-03-24
 
 ### Aggiunto

@@ -1,8 +1,8 @@
 {
-    "Version":  "2.5.9",
-    "ReleaseNotes":  "Aggiunto Report Reperti Patologici aggregato (locale, nessun dato inviato a server esterni)",
-    "DownloadUrl":  "https://github.com/zndr/FSEpub/releases/download/v2.5.9/FSE_Processor_Setup_2.5.9_QT6.exe",
-    "ReleaseDate":  "2026-03-24",
-    "Sha256Hash":  "2a7a95afc177b550358af9217b6eabf81d57e2b70c06e63a92a8b27889d92098",
-    "FileSize":  77208957
+    "Version": "2.5.10",
+    "ReleaseNotes": "Integrazione DB Millewin per anonimizzazione dizionario, scrubbing PII inline potenziato, impostazione PRIAMO_ENABLED",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.10/FSE_Processor_Setup_2.5.10_QT6.exe",
+    "ReleaseDate": "2026-03-25",
+    "Sha256Hash": "d50945def30485a1a4ff76c201828429bc9e97077a56cf7712b1c73e843bb88d",
+    "FileSize": 77219022
 }
