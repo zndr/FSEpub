@@ -1,8 +1,8 @@
 {
-    "Version": "2.5.11",
-    "ReleaseNotes": "Integrazione DB Millewin per anonimizzazione dizionario, scrubbing PII inline potenziato, impostazione PRIAMO_ENABLED",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.11/FSE_Processor_Setup_2.5.11_QT6.exe",
-    "ReleaseDate": "2026-03-26",
-    "Sha256Hash": "10559beb9457d9eb70dc2fcb6b0a4edfcb0c307c10643b7c7f35372ece6c39f6",
-    "FileSize": 77216645
+    "Version": "2.5.14",
+    "ReleaseNotes": "",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.14/FSE_Processor_Setup_2.5.14_QT6.exe",
+    "ReleaseDate": "2026-03-28",
+    "Sha256Hash": "7b305500a744dae00726117b84a19e11b963818b04bb88930fcf0e32d5c11631",
+    "FileSize": 80656872
 }
