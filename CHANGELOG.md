@@ -1,5 +1,46 @@
 # Changelog
 
+## [2.5.16] - 2026-03-30
+
+### Corretto
+
+- Fix download PDF in modalita' CDP con Chrome 146: sostituito `time.sleep()` con `page.wait_for_timeout()` nel polling loop — `time.sleep()` bloccava l'event loop di Playwright impedendo la consegna degli eventi download
+- I download manuali da altri siti durante il processamento vengono ora salvati automaticamente nella cartella Downloads dell'utente
+
+### Aggiunto
+
+- Handler globale per i download manuali: i file scaricati dall'utente durante il processamento CDP vengono salvati in ~/Downloads
+- Warning popup al primo avvio del processamento CDP con opzione "Non mostrare piu'"
+- Menu Strumenti > "Apri cartella Downloads utente" per accedere ai download manuali
+- Nota nella guida utente sul comportamento download in modalita' CDP
+- Salvataggio licenza silenzioso con aggiornamento titolo e status bar
+
+## [2.5.15] - 2026-03-29
+
+### Corretto
+
+- Fix download in modalita' CDP: Ctrl+J e pannello download di Edge ora funzionano correttamente durante l'uso dell'app. L'intercettazione download di Playwright viene attivata solo durante lo scaricamento automatico dei PDF e ripristinata immediatamente dopo.
+
+## [2.5.13] - 2026-03-27
+
+### Corretto
+
+- Connessione CDP robusta: polling salute post-cleanup al posto di sleep fisso
+- Fix propagazione cleanup_done tra Step 0 e Step 3 che impediva cleanup fresco sui retry
+- Verifica salute porta CDP tra i tentativi di connessione con backoff adattivo
+- Tentativo finale senza cleanup come ultima risorsa prima di richiedere riavvio browser
+- Riavvio automatico istanza Playwright dopo errori persistenti del driver
+
+
+## [2.5.11] - 2026-03-26
+
+### Corretto
+
+- Analisi AI con Claude CLI: aggiunto flag --model e sostituito pipe shell fragile
+- Integrazione DB Millewin per anonimizzazione basata su dizionario paziente
+- Scrubbing PII inline potenziato con fallback basato su nome file
+- Impostazione PRIAMO_ENABLED con dialogo riavvio CDP rinviato a on-demand
+
 ## [2.5.10] - 2026-03-25
 
 ### Aggiunto
