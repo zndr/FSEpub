@@ -1,9 +1,9 @@
 # Scansione VirusTotal - FSE Processor v2.5.16
 
-**Data scansione:** 2026-03-30 05:20 UTC
+**Data scansione:** 2026-05-16 14:07 UTC
 **File:** `FSE_Processor_Setup_2.5.16_QT6.exe`
-**SHA256:** `07e4215e969dd64ebfaf2353276b49e87ef124f834b0ccbb0e11f2fbfba9e380`
-**Link VirusTotal:** [07e4215e969dd64e...](https://www.virustotal.com/gui/file/07e4215e969dd64ebfaf2353276b49e87ef124f834b0ccbb0e11f2fbfba9e380)
+**SHA256:** `78c70a3a6b8d1eebd963219f32ca63805c7decf434aa5e74081539138a0eea1b`
+**Link VirusTotal:** [78c70a3a6b8d1eeb...](https://www.virustotal.com/gui/file/78c70a3a6b8d1eebd963219f32ca63805c7decf434aa5e74081539138a0eea1b)
 
 ## Risultati
 
