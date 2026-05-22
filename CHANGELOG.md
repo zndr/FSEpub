@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.5.17] - 2026-05-22
+
+### Aggiunto
+
+- Tab "Diff terapia": confronto di terapie, problemi ed esami del paziente prima e dopo un ricovero, con export PDF.
+- Generatore di licenze: scheda Impostazioni per l'account email mittente e pulsante "Copia chiave".
+
+### Corretto
+
+- Crash all'avvio su sistemi con Millewin appena installati (variabile di log non definita nella gestione di un errore previsto).
+- Riconoscimento della sessione SISS gia' attiva (tab aperta da Millewin): l'app la eredita senza piu' richiedere un login manuale superfluo.
+- Connessione CDP con Microsoft Edge v148 e successivi (riconoscimento del prefisso "Edg/").
+- Chiusura delle schede del browser piu' rispettosa: le schede pre-esistenti di Millewin o dell'utente non vengono piu' chiuse.
+- Conteggio delle email nella barra di stato: lettura corretta delle cartelle IMAP configurate.
+- Referti gia' scaricati non vengono piu' ri-scaricati: le email vengono ora correttamente contrassegnate come lette.
+- Nome e cognome non piu' invertiti nel report patologico aggregato.
+
+### Migliorato
+
+- Al termine dei download la sessione SISS resta sempre attiva nel browser (rimossa la richiesta di conferma).
+- Maggiore stabilita' della connessione CDP, dello scoping dei download e della validazione di sessione.
+
 ## [2.5.16] - 2026-03-30
 
 ### Corretto
