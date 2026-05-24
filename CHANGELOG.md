@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.5.18] - 2026-05-24
+
+### Corretto
+
+- Estrazione del codice fiscale dalla finestra Millewin non funzionante in alcuni scenari.
+
 ## [2.5.17] - 2026-05-22
 
 ### Aggiunto
