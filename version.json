@@ -1,8 +1,8 @@
 {
-    "Version": "2.5.18",
-    "ReleaseNotes": "",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.18/FSE_Processor_Setup_2.5.18_QT6.exe",
-    "ReleaseDate": "2026-05-24",
-    "Sha256Hash": "2a246ad45290cc76b210821c4660c2ed0bebad487c8a317694e2134e81af7255",
-    "FileSize": 95623111
+    "Version": "2.5.19",
+    "ReleaseNotes": "Browser piu' robusto: chiusura completa dell'albero dei processi Edge/Chrome e prevenzione dei processi orfani che impedivano la riapertura del browser. Ripristinata la chiusura forzata d'emergenza come ultima risorsa. Chiusura ordinata del browser all'uscita dell'app.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.19/FSE_Processor_Setup_2.5.19_QT6.exe",
+    "ReleaseDate": "2026-05-29",
+    "Sha256Hash": "2e96cf5db8abe0c9615c0d80e9672c2a7a52b30768775c60e7c58488f448791f",
+    "FileSize": 90508392
 }

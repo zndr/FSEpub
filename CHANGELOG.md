@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.5.19] - 2026-05-29
+
+### Migliorato
+
+- Terminazione e riavvio del browser piu' robusti: viene chiuso l'intero albero dei processi Edge/Chrome (incluse le finestre figlie), riducendo i casi in cui restano processi "orfani" che impediscono al browser di riaprirsi correttamente.
+- Se la chiusura del browser non riesce, l'app non avvia piu' una seconda istanza sopra quella bloccata, evitando i conflitti che potevano impedire l'apertura di Edge dall'icona.
+- Chiusura piu' pulita dell'applicazione: il browser viene terminato in modo ordinato anche all'uscita.
+- Migliorata la diagnostica nei log per l'analisi dei processi del browser.
+
+### Corretto
+
+- Ripristinata la chiusura forzata di emergenza del browser come ultima risorsa quando la terminazione ordinata viene negata dal sistema (processi protetti o elevati).
+
 ## [2.5.18] - 2026-05-24
 
 ### Corretto
