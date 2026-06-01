@@ -1,8 +1,8 @@
 {
-    "Version": "2.5.19",
-    "ReleaseNotes": "Browser piu' robusto: chiusura completa dell'albero dei processi Edge/Chrome e prevenzione dei processi orfani che impedivano la riapertura del browser. Ripristinata la chiusura forzata d'emergenza come ultima risorsa. Chiusura ordinata del browser all'uscita dell'app.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.19/FSE_Processor_Setup_2.5.19_QT6.exe",
-    "ReleaseDate": "2026-05-29",
-    "Sha256Hash": "2e96cf5db8abe0c9615c0d80e9672c2a7a52b30768775c60e7c58488f448791f",
-    "FileSize": 90508392
+    "Version": "2.5.22",
+    "ReleaseNotes": "Anonimizzazione dei referti piu' accurata e meno aggressiva: ora vengono mantenute le date del referto e il nome del medico firmatario in calce, mentre la data di nascita del paziente viene riconosciuta dal codice fiscale e oscurata ovunque compaia. Le altre date, utili alla lettura clinica, restano visibili. Migliorata l'affidabilita' della verifica TLS nei pacchetti installati.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.22/FSE_Processor_Setup_2.5.22_QT6.exe",
+    "ReleaseDate": "2026-06-01",
+    "Sha256Hash": "61e08db2c1a7bf5a59634326c99b87c59a5687b57818299fcef5a5243601dec6",
+    "FileSize": 98963499
 }

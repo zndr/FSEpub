@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.5.22] - 2026-06-01
+
+### Migliorato
+
+- L'anonimizzazione dei referti e' meno aggressiva e ora conserva i dati clinicamente rilevanti che non identificano il paziente: le date del referto (esecuzione, prelievo, refertazione, ricovero e dimissione) e il nome del medico firmatario in calce non vengono piu' rimossi.
+- La data di nascita del paziente viene riconosciuta in modo mirato a partire dal codice fiscale e oscurata ovunque compaia, mantenendo intatte tutte le altre date utili alla lettura del referto.
+
+### Corretto
+
+- Il nome del medico firmatario non viene piu' oscurato quando e' scritto tutto in maiuscolo con il titolo nel mezzo (es. "BARTONE DOTT.SSA LAURA").
+- Migliorata l'affidabilita' della verifica TLS nei pacchetti installati: il bundle dell'installer include ora i certificati di certifi (cacert.pem).
+
+## [2.5.21] - 2026-05-31
+
+### Sicurezza
+
+- Le connessioni a GitHub per il controllo aggiornamenti e la verifica delle licenze ora validano sempre il certificato TLS, proteggendo da intercettazioni in rete.
+- L'oscuramento dei dati personali nelle informazioni di debug inviate al supporto e' piu' ampio: copre codici fiscali (anche nelle varianti omocodiche), indirizzi email, numeri di telefono, tessera sanitaria e date. L'invio richiede una conferma esplicita quando sono presenti allegati.
+- La password recuperata non viene piu' copiata automaticamente negli appunti al momento della visualizzazione.
+
+### Migliorato
+
+- L'avviso "SISS non raggiungibile" compare ora una sola volta finche' la connessione non viene ripristinata, invece di ripetersi ad ogni controllo periodico.
+- Etichette dell'interfaccia uniformate in italiano (Informazioni, Azzera console, Informazioni di debug e altre).
+
+### Corretto
+
+- Risolto un possibile arresto anomalo della diagnostica del browser (modalita' CDP).
+- Risolto un possibile arresto anomalo all'avvio in presenza dell'integrazione Millewin.
+- Corretta la visualizzazione del simbolo "meno" nell'elenco delle terapie rimosse.
+
+## [2.5.20] - 2026-05-31
+
+### Aggiunto
+
+- Report dei reperti patologici per **giorno di download**: un riepilogo dei referti scaricati in una giornata, con i reperti evidenziati per gravita' (+, ++, +++) ed eventuale commento clinico. Il giorno si sceglie liberamente da un calendario oppure dall'elenco dei giorni in cui risultano download.
+- Pulsante **"Report patologici"** e opzione **"Visualizza report dei reperti patologici"** al termine del download, nella scheda Referti SISS. Sono disponibili quando e' attiva la modalita' "Estrazione e analisi con A.I.".
+- **Archivio cumulativo** dei reperti patologici in un database locale (opzionale), con un visualizzatore interno che permette di filtrare per data, gravita' e nome del paziente.
+- **Esportazione in Excel** dell'archivio dei reperti patologici (opzionale), filtrabile per intervallo di date.
+
+### Migliorato
+
+- Il report del giorno include tutti i referti scaricati in quella giornata, riconoscendoli anche dalla data del file: cosi' non viene tralasciato nulla anche se l'elenco interno dei download e' incompleto.
+- La marcatura "Segna come visionati" richiede ora una conferma esplicita e agisce solo sul giorno effettivamente generato; il report distingue chiaramente l'assenza di referti da un eventuale errore di generazione.
+
 ## [2.5.19] - 2026-05-29
 
 ### Migliorato
