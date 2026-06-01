@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.23] - 2026-06-01
+
+### Corretto
+
+- Risolto un problema per cui, dopo un aggiornamento, l'app poteva non scaricare piu' i referti: la connessione al browser falliva con l'errore "Connection closed while reading from the driver". La causa era un file interno di Playwright rimasto da una versione precedente che mandava in crash il componente di automazione. L'installer ora ripulisce sempre i componenti interni prima di copiare quelli nuovi, evitando residui incompatibili tra versioni (upgrade e downgrade).
+- Corretto un falso avviso "Playwright driver non trovato" al termine della compilazione (lo script di build cercava il driver nel percorso sbagliato per i bundle PyInstaller 6.x).
+
 ## [2.5.22] - 2026-06-01
 
 ### Migliorato
