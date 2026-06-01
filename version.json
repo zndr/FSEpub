@@ -1,8 +1,8 @@
 {
-    "Version": "2.5.22",
-    "ReleaseNotes": "Anonimizzazione dei referti piu' accurata e meno aggressiva: ora vengono mantenute le date del referto e il nome del medico firmatario in calce, mentre la data di nascita del paziente viene riconosciuta dal codice fiscale e oscurata ovunque compaia. Le altre date, utili alla lettura clinica, restano visibili. Migliorata l'affidabilita' della verifica TLS nei pacchetti installati.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.22/FSE_Processor_Setup_2.5.22_QT6.exe",
+    "Version": "2.5.23",
+    "ReleaseNotes": "Risolto un problema che, dopo un aggiornamento, poteva impedire all'app di scaricare i referti: la connessione al browser falliva a causa di componenti interni residui di versioni precedenti. Ora l'installazione ripulisce sempre i file interni, evitando questi conflitti tra versioni.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.23/FSE_Processor_Setup_2.5.23_QT6.exe",
     "ReleaseDate": "2026-06-01",
-    "Sha256Hash": "61e08db2c1a7bf5a59634326c99b87c59a5687b57818299fcef5a5243601dec6",
-    "FileSize": 98963499
+    "Sha256Hash": "c05b6314d958828d398c6859ddb0c5ef081e482006ec4beb54226a0ba807d39e",
+    "FileSize": 98964385
 }
