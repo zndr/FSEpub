@@ -1,8 +1,8 @@
 {
-    "Version": "2.5.23",
-    "ReleaseNotes": "Risolto un problema che, dopo un aggiornamento, poteva impedire all'app di scaricare i referti: la connessione al browser falliva a causa di componenti interni residui di versioni precedenti. Ora l'installazione ripulisce sempre i file interni, evitando questi conflitti tra versioni.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.23/FSE_Processor_Setup_2.5.23_QT6.exe",
-    "ReleaseDate": "2026-06-01",
-    "Sha256Hash": "c05b6314d958828d398c6859ddb0c5ef081e482006ec4beb54226a0ba807d39e",
-    "FileSize": 98964385
+    "Version": "2.5.24",
+    "ReleaseNotes": "Ricerca paziente e avvio piu' reattivi: l'app riusa la pagina del fascicolo e la scheda del portale gia' aperte invece di ricaricarle ogni volta. L'errore del servizio di consenso e' ora gestito come accesso da autorizzare (il referto viene saltato e registrato). Corretta la voce di menu Aiuto che non apriva la Guida. Guida utente aggiornata.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.24/FSE_Processor_Setup_2.5.24_QT6.exe",
+    "ReleaseDate": "2026-06-03",
+    "Sha256Hash": "f09d585ff566444bc06197398331312e41561b21e880fd6325a2e6cd13595596",
+    "FileSize": 99466325
 }
