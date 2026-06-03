@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.5.24] - 2026-06-03
+
+### Migliorato
+
+- Ricerca paziente piu' reattiva: se il fascicolo e' gia' aperto, l'app riusa la pagina esistente invece di ricaricarla a ogni filtro o cambio paziente.
+- All'avvio l'app riusa la scheda del portale gia' aperta (OpeFseIE) invece di aprirne una nuova ogni volta.
+- Guida utente aggiornata con nuove sezioni e schermate.
+
+### Corretto
+
+- L'"Errore nel servizio di consenso" e' ora gestito come accesso da autorizzare: il referto viene saltato e registrato, senza interrompere l'elaborazione degli altri.
+- Corretta la voce di menu Aiuto che non apriva la Guida.
+
+### Modificato
+
+- Nella versione gratuita il limite di referti elaborabili passa da 5 a 2 (esteso anche al download da ricerca paziente).
+
 ## [2.5.23] - 2026-06-01
 
 ### Corretto
