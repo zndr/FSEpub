@@ -1,8 +1,8 @@
 {
-    "Version": "2.5.24",
-    "ReleaseNotes": "Ricerca paziente e avvio piu' reattivi: l'app riusa la pagina del fascicolo e la scheda del portale gia' aperte invece di ricaricarle ogni volta. L'errore del servizio di consenso e' ora gestito come accesso da autorizzare (il referto viene saltato e registrato). Corretta la voce di menu Aiuto che non apriva la Guida. Guida utente aggiornata.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v2.5.24/FSE_Processor_Setup_2.5.24_QT6.exe",
-    "ReleaseDate": "2026-06-03",
-    "Sha256Hash": "f09d585ff566444bc06197398331312e41561b21e880fd6325a2e6cd13595596",
-    "FileSize": 99466325
+    "Version": "3.2.3",
+    "ReleaseNotes": "Download pi\u00f9 affidabile: risolti i casi in cui la pagina del fascicolo restava bloccata e il referto risultava 'fallito' anche se un nuovo tentativo manuale funzionava. Se la pagina del portale resta vuota, FSE ora la ricarica da solo (il vecchio F5 manuale); la scheda del portale gi\u00e0 aperta viene riusata invece di aprirne un duplicato; i click su 'Accedi' e 'Referti' che cadevano nel vuoto (la pagina cambia proprio mentre il click \u00e8 in corso) vengono ora verificati e ripetuti automaticamente.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v3.2.3/FSE_Processor_Setup_3.2.3_QT6.exe",
+    "ReleaseDate": "2026-07-24",
+    "Sha256Hash": "8199b779d684544edef9c44bb307afd4753007785af5084f140244cb66a6d19d",
+    "FileSize": 94369302
 }
