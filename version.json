@@ -1,8 +1,8 @@
 {
-    "Version": "3.2.3",
-    "ReleaseNotes": "Download pi\u00f9 affidabile: risolti i casi in cui la pagina del fascicolo restava bloccata e il referto risultava 'fallito' anche se un nuovo tentativo manuale funzionava. Se la pagina del portale resta vuota, FSE ora la ricarica da solo (il vecchio F5 manuale); la scheda del portale gi\u00e0 aperta viene riusata invece di aprirne un duplicato; i click su 'Accedi' e 'Referti' che cadevano nel vuoto (la pagina cambia proprio mentre il click \u00e8 in corso) vengono ora verificati e ripetuti automaticamente.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v3.2.3/FSE_Processor_Setup_3.2.3_QT6.exe",
-    "ReleaseDate": "2026-07-24",
-    "Sha256Hash": "8199b779d684544edef9c44bb307afd4753007785af5084f140244cb66a6d19d",
-    "FileSize": 94369302
+    "Version": "3.2.4",
+    "ReleaseNotes": "Aggiornamento IMPORTANTE, consigliato a tutti. Corretto un errore grave: dopo un 'Errore nel servizio di consenso', il referto del paziente successivo poteva essere scaricato dal fascicolo sbagliato e attribuito alla persona sbagliata. Ora l'identit\u00e0 del paziente (codice fiscale) viene verificata prima di entrare nel fascicolo e di nuovo prima di scaricare: in caso di dubbio il download si ferma e il paziente risulta 'fallito', da riprovare. Nessun documento viene mai pi\u00f9 scaricato o intestato senza questa verifica.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v3.2.4/FSE_Processor_Setup_3.2.4_QT6.exe",
+    "ReleaseDate": "2026-08-09",
+    "Sha256Hash": "ccd378d8462bb2074e6fcc9b7b6f7b29b6029455ddc90cfe627ee8175b09860c",
+    "FileSize": 94371654
 }
