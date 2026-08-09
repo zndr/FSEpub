@@ -1,8 +1,8 @@
 {
-    "Version": "3.2.4",
-    "ReleaseNotes": "Aggiornamento IMPORTANTE, consigliato a tutti. Corretto un errore grave: dopo un 'Errore nel servizio di consenso', il referto del paziente successivo poteva essere scaricato dal fascicolo sbagliato e attribuito alla persona sbagliata. Ora l'identit\u00e0 del paziente (codice fiscale) viene verificata prima di entrare nel fascicolo e di nuovo prima di scaricare: in caso di dubbio il download si ferma e il paziente risulta 'fallito', da riprovare. Nessun documento viene mai pi\u00f9 scaricato o intestato senza questa verifica.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v3.2.4/FSE_Processor_Setup_3.2.4_QT6.exe",
+    "Version": "3.2.5",
+    "ReleaseNotes": "Aggiornamento IMPORTANTE, consigliato a tutti. Corretti due problemi: 1) dopo l'uso di FSE, i download di Edge (anche quelli manuali) potevano finire in una cartella temporanea nascosta con nomi illeggibili, fino al riavvio del browser; ora il problema viene disinnescato a ogni collegamento e all'avvio i PDF gi\u00e0 dirottati vengono recuperati automaticamente nella sottocartella 'Recupero' dei referti. 2) Su Edge con pi\u00f9 profili la sessione SISS poteva aprirsi nel profilo sbagliato (es. quello personale), separandola da Millewin e causando doppi login; ora FSE avvia Edge sul profilo che usa abitualmente il portale operatori.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v3.2.5/FSE_Processor_Setup_3.2.5_QT6.exe",
     "ReleaseDate": "2026-08-09",
-    "Sha256Hash": "ccd378d8462bb2074e6fcc9b7b6f7b29b6029455ddc90cfe627ee8175b09860c",
-    "FileSize": 94371654
+    "Sha256Hash": "b98feb0a685556cc8f2707f2776775d7cb1b8a86cd4af186d3f564ace6302829",
+    "FileSize": 95937840
 }
