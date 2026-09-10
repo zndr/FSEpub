@@ -1,5 +1,110 @@
 # Changelog
 
+## [3.2.6] - 2026-09-10
+
+### Aggiunto
+
+- **Allegazione dei referti in Millewin, direttamente da FSE Processor (integrazione col progetto autoallega).** Dopo l'estrazione del testo e l'eventuale analisi A.I., FSE può ora proporre e guidare l'allegazione dei PDF agli accertamenti di Millewin: il nuovo menu Strumenti > "Allega referti a Millewin" elenca le proposte del proponitore di autoallega (paziente, accertamento, data di prescrizione, punteggio, stato), e — con l'opzione dedicata — l'elenco si apre da solo al termine di ogni download se ci sono referti allegabili (sia dal flusso email sia dal Download Paziente, in quel caso filtrato sul paziente). L'allegazione vera e propria passa per il canale già collaudato dell'app AutoAllega (attività pianificata elevata + coda su file, stesso lucchetto: i due client convivono); a operazione riuscita la tripletta pdf+txt+meta.json viene archiviata in `allegati_ok`. Prima di allegare, lo stato dell'accertamento viene ricontrollato sull'archivio (allegati già presenti, referto già scritto → conferma esplicita); i referti che richiedono un accertamento nuovo restano guidati ma manuali. Tutto opzionale e disattivato per default (Impostazioni > Processazione testo > "Allegazione referti in Millewin"); richiede il progetto autoallega installato. Nessuna scrittura sul database di Millewin: FSE legge soltanto e l'allegazione avviene nell'interfaccia di Millewin, sotto gli occhi dell'utente. Dettagli e checklist di collaudo in `docs/allegazione-millewin.md`.
+- **Il nome dell'esame viene ora estratto insieme al referto: i referti smettono di finire tra i "non proponibili".** L'analisi A.I. riporta d'ora in poi anche il **nome dell'esame** (`Esame: RX Spalla`, accanto a data e medico in fondo al testo) e lo salva nel file di accompagnamento `.meta.json`. Serviva: senza, l'allegazione riusciva a riconoscere l'esame solo quando il radiologo l'aveva scritto per esteso come prima riga del referto — quando mancava, il referto veniva elencato fra quelli non proponibili anche se in Millewin la prescrizione corrispondente c'era. Il nome viene ripreso dall'intestazione del referto (che resta comunque esclusa dal testo, come prima) oppure, se l'intestazione tace, dalla descrizione dell'esame effettivamente eseguito; comprende sempre il distretto anatomico e la lateralità quando indicati ("RX Ginocchio destro"). Se il referto non permette di stabilirlo il campo resta **vuoto**: mai un nome inventato, perché a valle verrebbe confrontato con i nomi degli accertamenti prescritti. I referti già scaricati non vanno rifatti — per quelli l'allegazione continua a leggere il nome dal testo come prima.
+
+### Corretto
+
+- **Niente piu' notifiche di Windows a ogni referto analizzato (analisi A.I. "Claude CLI (locale)").** Con il provider "Claude CLI (locale)" ogni referto analizzato faceva comparire una notifica di Windows con suono - intestata col nome della cartella in cui e' installato il programma e col testo che iniziava per "Sei un assistente medico specializzato..." -: durante l'elaborazione di un gruppo di referti significava una notifica ogni pochi secondi. Il motivo: il comando `claude` non e' un semplice servizio a cui inviare il testo, e' una sessione completa di Claude Code, e come tale esegue anche le automazioni personali che l'utente ha configurato sulla propria postazione (fra cui i notificatori). Ora le sessioni avviate da FSE nascono con quelle automazioni disattivate; le sessioni che l'utente apre di persona restano intatte.
+
+## [3.2.5] - 2026-08-09
+
+### Corretto
+
+- **CRITICO — I download di Edge non finiscono più "spariti" nella cartella temporanea con nomi illeggibili.** Collegandosi a Edge, il componente di automazione dirottava — a livello dell'intero browser e in modo permanente fino al riavvio di Edge — **tutti** i download verso una cartella temporanea nascosta, salvandoli con un nome in codice senza estensione (il "limbo"): potevano sparire così sia i referti sia i **download manuali dell'utente** in qualunque scheda di Edge, anche a FSE già chiuso (bastava ad esempio un "Esporta diagnostica" per innescarlo). Ora il dirottamento viene disattivato **immediatamente** a ogni collegamento, in ogni punto dell'app che si collega a Edge, e la disattivazione viene verificata con conferma del browser anche quando la pagina è già chiusa o bloccata.
+- **Recupero automatico dei file già finiti nel "limbo".** A ogni avvio FSE ispeziona le cartelle temporanee lasciate dalle sessioni precedenti: i PDF ritrovati vengono spostati nella nuova sottocartella **`Recupero`** della cartella dei referti (nomi `recupero_DATA_ORA_N.pdf`, segnalati nel log); gli altri file — probabili download manuali dell'utente — vengono segnalati nel log con il percorso esatto, senza toccarli; le cartelle rimaste vuote vengono eliminate. I download eventualmente ancora in corso non vengono mai toccati.
+- **Un salvataggio fallito non fa più perdere il referto.** Nella modalità di download di riserva, se il salvataggio del file falliva il referto restava abbandonato nella cartella temporanea e il paziente veniva marcato fallito: ora il salvataggio viene ritentato e, in extremis, il file viene recuperato direttamente dalla cartella temporanea; solo se ogni via fallisce si passa al fallback successivo.
+- **Edge multi-profilo: la sessione SISS non finisce più nel profilo sbagliato.** Quando Edge era chiuso e FSE lo avviava, Edge apriva l'**ultimo profilo usato** — che su installazioni con più profili (es. lavoro + personale) poteva essere quello personale: la sessione SISS di FSE finiva così in un profilo con cookie separati da quello dove Edge apre i link di Millewin, con doppio login SISS e possibile disconnessione della sessione buona (il SISS ammette una sola sessione per operatore). Ora FSE avvia Edge indicando esplicitamente il profilo che usa abitualmente il portale operatori (riconosciuto dalla cronologia), che diventa anche l'"ultimo usato": i link di Millewin vengono instradati lì e la sessione resta condivisa.
+
+## [3.2.4] - 2026-08-09
+
+### Corretto
+
+- **CRITICO — Eliminato lo scambio di persona dopo un "Errore nel servizio di consenso".** Quando un paziente veniva saltato per l'errore del servizio di consenso, il portale poteva restare fermo sulla sua scheda cittadino (pulsante 'Accedi' visibile); la navigazione verso il paziente successivo cambiava solo l'indirizzo della pagina senza farla ripartire, e FSE — trovando la pagina "già nel fascicolo" — entrava nel fascicolo del paziente **precedente** e ne scaricava il referto più recente **intestandolo al paziente successivo**. Ora l'identità del paziente è verificata in tre punti: il click su 'Accedi' viene evitato se la scheda mostra un codice fiscale diverso da quello atteso (evita anche l'accesso indebito al fascicolo altrui, tracciato dal portale); se la pagina risulta di un altro paziente viene ricaricata automaticamente per far ripartire la ricerca corretta; e prima di leggere la tabella dei referti (download da email, download completo, apertura da Millewin) il codice fiscale atteso **deve** comparire nella pagina, altrimenti il paziente viene marcato come fallito (riprovabile) e nulla viene mai scaricato o attribuito. Nel resoconto un eventuale blocco compare tra i "Download falliti" con il messaggio "La pagina FSE mostra un paziente diverso da quello atteso".
+
+## [3.2.3] - 2026-07-24
+
+### Corretto
+
+- **Download più affidabile: la pagina del fascicolo bloccata non fa più fallire il paziente.** Tre problemi transitori del portale (SPA Angular) potevano marcare un referto come "fallito" anche se un nuovo tentativo manuale funzionava quasi sempre:
+  - se dopo la navigazione la pagina del portale restava **vuota** (bootstrap bloccato), FSE ora la **ricarica da solo** — l'equivalente dell'F5 manuale che sbloccava la situazione — invece di attendere invano il form di ricerca;
+  - il click su **'Referti'** poteva cadere nel vuoto quando il tab era visibile ma non ancora attivo: ora FSE verifica che la tabella dei referti compaia davvero e, in caso contrario, riprova;
+  - il click su **'Accedi'** poteva bloccarsi per 60 secondi quando il portale entrava nel fascicolo da solo proprio mentre il click era in corso (pulsante rimosso dalla pagina a metà azione): ora il caso viene riconosciuto come successo e si prosegue subito.
+- **Niente più schede duplicate del portale.** Quando una scheda del portale FSE era già aperta (ad es. accanto a una scheda SISS generica di Millewin), FSE ne apriva una nuova invece di riusarla: ora la scheda esistente viene sempre preferita.
+
+## [3.2.0] - 2026-07-07
+
+### Cambiato
+
+- **Sessione SISS senza più opzioni: FSE lavora nella finestra di Edge di tutti i giorni.** Le tre strategie del gruppo "Sessione SISS" (avvio automatico, riavvio su conferma, browser dedicato) sono state eliminate: erano tutte soluzioni di ripiego al blocco del collegamento remoto introdotto dalle versioni recenti di Edge, che ora viene superato con la funzione ufficiale di Microsoft. Dopo un'**attivazione una-tantum** (in Edge: `edge://inspect` → *Remote debugging* → spunta su *Allow remote debugging for this browser instance* → riavvio di Edge; la spunta resta memorizzata), FSE si collega da solo alla **stessa sessione SISS di Millewin**: un solo login al giorno, Millewin mai scollegato, nessuna finestra in più, nessuna scrittura nel registro di Windows. Se l'attivazione manca, FSE si ferma con un messaggio che elenca i passaggi. Il passo "Sessione SISS" della Configurazione guidata è stato rimosso; la guida dedicata è stata riscritta. Chrome continua a usare il collegamento classico con riavvio su conferma.
+- All'avvio FSE rimuove automaticamente i resti delle vecchie strategie (attività pianificata "FSE Processor - Sessione SISS", collegamento in Esecuzione automatica), oltre alle bonifiche già esistenti.
+
+### Corretto
+
+- **Referti "invisibili": riconosciuto il nuovo dominio delle notifiche di Regione Lombardia.** Da inizio luglio 2026 alcune email "Nuovo documento per..." contengono il link al fascicolo sull'host `dcss.cgi.crs.lombardia.it` invece dello storico `operatorisiss.servizirl.it`: FSE le scartava con "nessun link FSE trovato nel corpo" e i referti non venivano né contati né scaricati (sintomo: 6 non letti in posta, FSE ne trovava 2). Ora entrambi i domini sono riconosciuti (lista esplicita, per sicurezza) e la navigazione avviene sempre sul portale storico collaudato; un eventuale futuro cambio di dominio viene segnalato chiaramente nel log.
+- **Il limite della versione non registrata non degrada più le impostazioni.** Se l'app si considerava non registrata anche una sola volta, il limite di 2 email per esecuzione veniva **scritto permanentemente** in "Max email da processare" e non veniva mai ripristinato dopo la registrazione. Ora il limite free si applica solo durante l'esecuzione, senza toccare l'impostazione dell'utente.
+- **Referti estratti di nuovo leggibili.** Il testo estratto dai referti (specialistici, pronto soccorso, dimissioni ospedaliere) torna al comportamento della 2.5.24: righe correttamente a capo e solo i medici pertinenti. Un cambiamento introdotto nelle versioni 3.0.x aveva reso il testo di alcuni referti meno leggibile (testo continuo senza a capo, nominativi non pertinenti) e poteva far sì che l'analisi IA non evidenziasse i rilievi clinici.
+- **Analisi IA con "Claude CLI (locale)" non più bloccata quando non è impostata una API key.** Usando il provider "Claude CLI (locale)" con il solo login all'abbonamento (senza inserire alcuna API key nelle impostazioni — la configurazione prevista per questa modalità), l'analisi veniva rifiutata con "API key mancante". Ora la modalità locale funziona con il solo login della CLI `claude`, come previsto. Chi vuole autenticarsi con una API key continua a usare il provider "Claude (Anthropic)".
+- **Avviso esplicito quando l'analisi IA non è disponibile.** Se l'analisi IA fallisce in modo sistematico (login all'abbonamento assente o scaduto, credito API esaurito, chiave non valida, CLI `claude` non installata), l'app ora **avvisa l'utente** invece di salvare in silenzio il testo grezzo del referto — che, senza analisi, poteva sembrare un referto elaborato ma privo dell'interpretazione clinica.
+
+### Note / limiti noti
+
+- In alcuni referti specialistici con impaginazione a colonna laterale (es. Medicina Nucleare) l'intestazione/roster dello studio può ricomparire nel testo estratto. Non si tratta di dati personali del paziente (che restano correttamente mascherati). Una rimozione mirata è pianificata per una versione successiva (issue #48).
+
+## [3.1.1] - 2026-07-04
+
+### Corretto
+
+- **Collegamento a Edge ripristinato dopo gli aggiornamenti recenti del browser.** Le versioni recenti di Microsoft Edge (basate su Chromium 136 e successive, es. Edge 150) impediscono per sicurezza il collegamento remoto quando il browser usa il profilo predefinito: dopo un aggiornamento di Edge, l'avvio della sessione SISS poteva restare bloccato con "Impossibile connettersi al browser". FSE ora riconosce automaticamente queste versioni di Edge e apre una propria finestra dedicata (profilo separato, sempre con collegamento remoto), che convive con l'Edge di tutti i giorni e con Millewin senza chiuderli. Al primo utilizzo va effettuato una volta il login al SISS nella finestra dedicata.
+- La diagnostica del collegamento remoto ora distingue il blocco dovuto ai criteri aziendali (group policy `RemoteDebuggingAllowed` / `DeveloperToolsAvailability`, che richiede l'amministratore di sistema) dal blocco sul profilo predefinito, risolvibile automaticamente dall'app.
+
+## [3.1.0] - 2026-06-29
+
+### Aggiunto
+
+- **Sessione SISS — collegamento remoto garantito (fine delle interruzioni "browser senza CDP").** Poiche' il collegamento remoto non puo' essere aggiunto a un browser gia' aperto, FSE ora offre tre strategie selezionabili nelle Impostazioni (gruppo *Sessione SISS*), ognuna con tooltip dedicato e spiegata nella guida utente:
+  - **Avvio automatico all'accensione**: un'attivita' pianificata di Windows apre il browser con il collegamento remoto e il portale SISS a ogni accesso, prima di Millewin — cosi' la sessione e' sempre pronta e nessuna app deve riavviare il browser. L'attivazione richiede una conferma una-tantum (nessuna modifica al sistema senza consenso). Ideale con Millewin per non riavviare mai il browser.
+  - **Chiudi e riavvia su conferma** *(predefinita)*: quando un download trova il browser senza collegamento remoto, FSE propone (su consenso esplicito) di chiuderlo e riaprirlo con il collegamento attivo. Funziona subito senza configurare nulla.
+  - **Browser dedicato a FSE**: FSE usa una propria finestra di Edge con profilo separato, sempre con collegamento remoto, indipendente dal browser quotidiano e da Millewin.
+- Nuovo pulsante **Avvia sessione SISS ora** e launcher dedicato (eseguibile anche come `--launch-siss`) per aprire all'istante il browser con il collegamento remoto + portale SISS. Nessuna modifica al registro di Windows: il flag e' garantito solo lanciando il browser con l'argomento esplicito.
+
+### Corretto
+
+- Provider "Claude CLI (locale)": la verifica della connessione non fallisce piu' con "Connessione a Claude CLI (locale) fallita. Verifica API key e connessione internet." quando e' presente un abbonamento Claude valido. La modalita' locale ora usa sempre il login locale della CLI `claude`: la API key salvata nelle impostazioni non viene piu' iniettata in `ANTHROPIC_API_KEY` (la CLI le dava la precedenza sul login, e una key con credito esaurito o revocata faceva fallire la connessione anche con un abbonamento funzionante). Per autenticarsi con una API key usare il provider "Claude (Anthropic)".
+
+## [3.0.0] - 2026-06-11
+
+Versione maggiore: include la revisione completa di sicurezza, privacy e stabilita' (46 correzioni in 5 ondate) e il nuovo modello CDP "process-local" che elimina ogni modifica al registro di Windows.
+
+### Sicurezza e privacy
+
+- Anonimizzazione piu' robusta prima dell'invio ai servizi di analisi: nomi composti con particelle (DE, LA, DEL...), campo Sesso, comune di nascita e numeri di telefono vengono riconosciuti correttamente; nei log dell'app il codice fiscale e il nome del paziente sono sempre mascherati, anche nei nomi file.
+- Le password salvate usano ora una chiave di cifratura legata alla singola installazione (le credenziali esistenti continuano a funzionare).
+- La verifica della licenza non puo' piu' essere aggirata da risposte memorizzate nella cache.
+- Rimossa ogni modifica automatica del registro di Windows per CDP: Edge/Chrome vengono avviati o riavviati con il flag `--remote-debugging-port` solo dall'app, su una porta dedicata alla sessione. All'avvio l'app ripulisce gli override legacy lasciati nel registro da versioni precedenti, che potevano impedire l'apertura del browser da icona, rompere i link esterni e bloccare i download manuali e l'interazione SISS.
+- All'avvio il comportamento nativo dei download del browser viene ripristinato ("default") tramite CDP, senza intercettare i download dell'utente o di Millewin.
+
+### Integrita' dei referti
+
+- Un download che non restituisce un PDF valido viene ora segnalato come errore invece di essere salvato come referto riuscito.
+- La rinomina dei file e' atomica: due referti non possono piu' sovrascriversi a vicenda, nemmeno con nomi identici.
+- Il filtro mittente delle notifiche email funziona anche con intestazioni spezzate su piu' righe; il registro delle email gia' elaborate non puo' piu' corrompersi se due istanze scrivono insieme.
+- Prima di riprovare un download fallito l'app ri-verifica di essere sul fascicolo del paziente giusto.
+
+### Stabilita'
+
+- Accesso con Firma Remota piu' rapido: il pulsante viene cliccato appena compare, senza l'attesa fissa di 10 secondi.
+- Interfaccia piu' reattiva durante le operazioni lunghe: il visualizzatore dell'archivio patologico e i controlli di stato non bloccano piu' la finestra.
+- Corretti errori che potevano lasciare la procedura guidata o i timer di aggiornamento in uno stato incoerente alla chiusura.
+
+### Modificato
+
+- Rimosse le caselle "Abilita CDP nel registro" dal wizard e dalle Impostazioni: con il CDP process-local non hanno piu' effetto.
+
 ## [2.5.24] - 2026-06-03
 
 ### Migliorato
