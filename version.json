@@ -1,8 +1,8 @@
 {
-    "Version": "3.2.6",
-    "ReleaseNotes": "Aggiornamento consigliato. Novita': 1) nuova funzione \"Allega referti a Millewin\" (menu Strumenti), che propone e guida l'allegazione dei referti scaricati agli accertamenti di Millewin - opzionale, disattivata per default, richiede il progetto autoallega installato; 2) l'analisi A.I. riconosce ora anche il nome dell'esame, che viene riportato nel referto e nel file di accompagnamento. Corretto: con l'analisi \"Claude CLI (locale)\" ogni referto analizzato faceva comparire una notifica di Windows con suono, che iniziava per \"Sei un assistente medico specializzato...\" - durante un gruppo di referti, una notifica ogni pochi secondi. Ora non compare piu'.",
-    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v3.2.6/FSE_Processor_Setup_3.2.6_QT6.exe",
-    "ReleaseDate": "2026-09-10",
-    "Sha256Hash": "79eea04398d43c4d6c3c3a0a55b6561eb1816e35e3fe25cd9cd58bbccfc59740",
-    "FileSize": 96221484
+    "Version": "3.2.7",
+    "ReleaseNotes": "Aggiornamento consigliato, di sola installazione: l'applicazione non cambia, l'eseguibile e' identico a quello della 3.2.6. Cambia il programma di installazione. 1) FSE Processor aveva lo stesso codice identificativo di un'altra applicazione, perche' il programma di installazione dichiarava un GUID segnaposto che un secondo installer si era portato dietro: per Windows le due applicazioni erano la stessa, con la stessa voce in \"App installate\" e lo stesso registro dei file installati. Su una postazione questo ha portato FSE a installarsi dentro la cartella dell'altro programma, e la disinstallazione di FSE a cancellare 34 file di quell'altro programma. Ora FSE ha un'identita' propria e univoca; dopo l'aggiornamento la voce in \"App installate\" viene ricreata, ed e' normale: ne resta una sola. 2) Se l'installazione si trova in una cartella che non e' la sua, l'aggiornamento la riporta in C:\\Program Files\\FSE Processor e ripulisce la vecchia posizione rimuovendo soltanto i propri file, senza toccare quelli di altri programmi. Chi ha scelto apposta un'altra cartella o un'altra unita' non viene spostato. 3) Il programma di installazione non chiude piu' gli altri programmi aperti, ma solo FSE Processor. Impostazioni, credenziali e referti non vengono toccati.",
+    "DownloadUrl": "https://github.com/zndr/FSEpub/releases/download/v3.2.7/FSE_Processor_Setup_3.2.7_QT6.exe",
+    "ReleaseDate": "2026-09-12",
+    "Sha256Hash": "15ce7c426c29dec81699a10aa97789854622af6b0dc7182f311f3806a35409b1",
+    "FileSize": 96336359
 }
